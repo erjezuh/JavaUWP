@@ -458,6 +458,10 @@ static bool g_controller_lb_down = false;
 static unsigned char g_controller_mouse_state[8] = {};
 static bool g_controller_rb_down = false;
 static bool g_cursorDisabled = true;
+// Queue cursor moves requested while disabled until menu mode is restored.
+static bool g_pending_cursor_valid = false;
+static double g_pending_cursor_x = 0.0;
+static double g_pending_cursor_y = 0.0;
 static int g_cursorMode = GLFW_CURSOR_DISABLED;
 static bool g_cursor_inside = false;
 static double g_cursor_x = 960.0;
@@ -3281,8 +3285,14 @@ extern "C" __declspec(dllexport) void glfwSetInputMode(GLFWwindow*, int mode, in
     g_cursorDisabled = (value == GLFW_CURSOR_DISABLED);
     PushMouseHostState();
     if (!g_cursorDisabled) {
-        g_menu_abs_x = ClampDouble(g_cursor_x, 0.0, CursorMaxX());
-        g_menu_abs_y = ClampDouble(g_cursor_y, 0.0, CursorMaxY());
+        if (g_pending_cursor_valid) {
+            g_pending_cursor_valid = false;
+            g_menu_abs_x = ClampDouble(MenuInputToWindowX(g_pending_cursor_x), 0.0, CursorMaxX());
+            g_menu_abs_y = ClampDouble(MenuInputToWindowY(g_pending_cursor_y), 0.0, CursorMaxY());
+        } else {
+            g_menu_abs_x = ClampDouble(g_cursor_x, 0.0, CursorMaxX());
+            g_menu_abs_y = ClampDouble(g_cursor_y, 0.0, CursorMaxY());
+        }
         DispatchCursorPos(g_menu_abs_x, g_menu_abs_y);
     }
     if (value == GLFW_CURSOR_NORMAL) {
@@ -3423,9 +3433,14 @@ extern "C" __declspec(dllexport) void glfwGetCursorPos(GLFWwindow*, double*x, do
 }
 extern "C" __declspec(dllexport) void glfwSetCursorPos(GLFWwindow*, double x, double y) {
     if (g_cursorDisabled) {
+        // Apply the requested position when the cursor is released.
+        g_pending_cursor_valid = true;
+        g_pending_cursor_x = x;
+        g_pending_cursor_y = y;
         return;
     }
 
+    g_pending_cursor_valid = false;
     if (CurrentCursorInputOwner() == CursorInputOwnerRelay) {
         g_menu_abs_x = ClampDouble(MenuInputToWindowX(x), 0.0, CursorMaxX());
         g_menu_abs_y = ClampDouble(MenuInputToWindowY(y), 0.0, CursorMaxY());
