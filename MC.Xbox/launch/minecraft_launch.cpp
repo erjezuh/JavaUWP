@@ -1113,17 +1113,21 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
         vmOptionStorage.push_back("--add-opens=jdk.zipfs/jdk.nio.zipfs=ALL-UNNAMED");
     }
     const std::wstring selectedJavaBasePatchName = javaBasePatchName;
-    const std::wstring localJavaBasePatch = exeDir + L"\\" + selectedJavaBasePatchName;
-    const std::wstring packagedJavaBasePatch = packageDir + L"\\" + selectedJavaBasePatchName;
-    const std::wstring javaBasePatch =
-        GetFileAttributesW(localJavaBasePatch.c_str()) != INVALID_FILE_ATTRIBUTES
-            ? localJavaBasePatch
-            : packagedJavaBasePatch;
-    if (GetFileAttributesW(javaBasePatch.c_str()) != INVALID_FILE_ATTRIBUTES) {
-        vmOptionStorage.push_back("--patch-module=java.base=" + w2a(fwd(javaBasePatch)));
-        WriteLogF(L"Java base UWP filesystem patch enabled: %s", javaBasePatch.c_str());
+    if (!selectedJavaBasePatchName.empty()) {
+        const std::wstring localJavaBasePatch = exeDir + L"\\" + selectedJavaBasePatchName;
+        const std::wstring packagedJavaBasePatch = packageDir + L"\\" + selectedJavaBasePatchName;
+        const std::wstring javaBasePatch =
+            GetFileAttributesW(localJavaBasePatch.c_str()) != INVALID_FILE_ATTRIBUTES
+                ? localJavaBasePatch
+                : packagedJavaBasePatch;
+        if (GetFileAttributesW(javaBasePatch.c_str()) != INVALID_FILE_ATTRIBUTES) {
+            vmOptionStorage.push_back("--patch-module=java.base=" + w2a(fwd(javaBasePatch)));
+            WriteLogF(L"Java base UWP filesystem patch enabled: %s", javaBasePatch.c_str());
+        } else {
+            WriteLogF(L"Java base UWP filesystem patch missing: %s", javaBasePatch.c_str());
+        }
     } else {
-        WriteLogF(L"Java base UWP filesystem patch missing: %s", javaBasePatch.c_str());
+        WriteLog(L"Java base UWP filesystem patch disabled for legacy Java 8 runtime");
     }
     const std::wstring selectedJavaZipfsPatchName = javaZipfsPatchName;
     const std::wstring localJavaZipfsPatch = exeDir + L"\\" + selectedJavaZipfsPatchName;
