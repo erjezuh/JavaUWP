@@ -24,7 +24,7 @@ $root = Resolve-RepoRoot
 $gameDir = Get-ConfigPath "GameDir"
 $assetsDir = Get-ConfigPath "AssetsDir"
 $version = if ($MinecraftVersion) { $MinecraftVersion } else { $ProjectConfig.MinecraftVersion }
-$loaderVersion = if ($FabricLoaderVersion) { $FabricLoaderVersion } else { $ProjectConfig.FabricLoaderVersion }
+$loaderVersion = if ($Loader -eq "forge") { $LoaderVersion } elseif ($FabricLoaderVersion) { $FabricLoaderVersion } else { $ProjectConfig.FabricLoaderVersion }
 $nativesDir = if ($MinecraftVersion -and $MinecraftVersion -ne $ProjectConfig.MinecraftVersion) {
     Join-Path (Get-ConfigPath "CacheDir") ("natives-" + ($MinecraftVersion -replace '[^A-Za-z0-9_.-]', '_'))
 } else {
