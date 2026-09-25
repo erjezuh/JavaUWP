@@ -1,7 +1,9 @@
 param(
     [string]$MinecraftVersion,
     [string]$FabricLoaderVersion,
-    [string]$AssetIndex
+    [string]$AssetIndex,
+    [string]$Loader = "fabric",
+    [string]$LoaderVersion
 )
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
@@ -9,6 +11,12 @@ $ProgressPreference = "SilentlyContinue"
 if ($MinecraftVersion) { $env:MC_VERSION = $MinecraftVersion }
 if ($FabricLoaderVersion) { $env:FABRIC_LOADER_VERSION = $FabricLoaderVersion }
 if ($AssetIndex) { $env:MC_ASSET_INDEX = $AssetIndex }
+if ($LoaderVersion) { $env:LOADER_VERSION = $LoaderVersion }
+
+$Loader = if ($Loader) { $Loader.ToLowerInvariant() } else { "fabric" }
+if (-not $LoaderVersion -and $Loader -eq "forge") {
+    $LoaderVersion = "14.23.5.2864"
+}
 
 . (Join-Path $PSScriptRoot "common.ps1")
 
@@ -262,6 +270,31 @@ foreach ($library in $versionJson.libraries) {
 $nativeDlls = @(Get-ChildItem -LiteralPath $nativesDir -Filter "*.dll" -ErrorAction SilentlyContinue)
 if (-not $nativeDlls) {
     throw "No native DLLs were prepared under $nativesDir."
+}
+
+Write-Host "=== Preparing non-Fabric target: $version + $Loader $LoaderVersion ==="
+if ($Loader -eq "forge" -and $version -eq "1.12.2") {
+    $forgeVersion = if ($LoaderVersion.StartsWith("$version-")) { $LoaderVersion } else { "$version-$LoaderVersion" }
+    $forgeJar = Join-Path (Get-ConfigPath "GameDir") "libraries\net\minecraftforge\forge\$forgeVersion\forge-$forgeVersion-universal.jar"
+    $forgeUrl = "https://maven.minecraftforge.net/net/minecraftforge/forge/$forgeVersion/forge-$forgeVersion-universal.jar"
+    Save-RemoteFile -Uri $forgeUrl -Path $forgeJar
+
+    Write-Host "=== Downloading asset index ==="
+    $indexDir = Join-Path $assetsDir "indexes"
+    Ensure-Dir $indexDir
+    $assetIndexId = $versionJson.assetIndex.id
+    $assetIndexPath = Join-Path $indexDir "$assetIndexId.json"
+    Save-RemoteFile -Uri $versionJson.assetIndex.url -Path $assetIndexPath
+    if ($assetIndexId -ne $assetIndex) {
+        Write-Warning "Configured asset index is $assetIndex, but Mojang metadata for $version reports $assetIndexId."
+    }
+
+    Write-Host "Forge 1.12.2 cache is ready."
+    return
+}
+
+if ($Loader -ne "fabric") {
+    throw "Setup currently supports Fabric plus the legacy Forge 1.12.2 target. Unsupported loader: $Loader"
 }
 
 Write-Host "=== Downloading Fabric installer ==="
