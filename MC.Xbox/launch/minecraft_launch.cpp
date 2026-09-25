@@ -1143,22 +1143,29 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
     } else {
         WriteLogF(L"Java ZipFS realpath patch missing: %s", javaZipfsPatch.c_str());
     }
-    const bool useJava21DesktopPatch = selectedJavaBasePatchName.find(L"-21.jar") != std::wstring::npos;
-    const std::wstring javaDesktopPatchName = useJava21DesktopPatch ? L"java-desktop-uwp-awt-21.jar" : L"java-desktop-uwp-awt.jar";
-    const std::wstring localJavaDesktopPatch = exeDir + L"\\" + javaDesktopPatchName;
-    const std::wstring packagedJavaDesktopPatch = packageDir + L"\\" + javaDesktopPatchName;
-    const std::wstring javaDesktopPatch =
-        GetFileAttributesW(localJavaDesktopPatch.c_str()) != INVALID_FILE_ATTRIBUTES
-            ? localJavaDesktopPatch
-            : packagedJavaDesktopPatch;
-    if (GetFileAttributesW(javaDesktopPatch.c_str()) != INVALID_FILE_ATTRIBUTES) {
-        vmOptionStorage.push_back("--patch-module=java.desktop=" + w2a(fwd(javaDesktopPatch)));
-        WriteLogF(L"Java desktop UWP AWT patch enabled: %s", javaDesktopPatch.c_str());
+    if (!legacyJava8) {
+        const bool useJava21DesktopPatch = selectedJavaBasePatchName.find(L"-21.jar") != std::wstring::npos;
+        const std::wstring javaDesktopPatchName = useJava21DesktopPatch ? L"java-desktop-uwp-awt-21.jar" : L"java-desktop-uwp-awt.jar";
+        const std::wstring localJavaDesktopPatch = exeDir + L"\\" + javaDesktopPatchName;
+        const std::wstring packagedJavaDesktopPatch = packageDir + L"\\" + javaDesktopPatchName;
+        const std::wstring javaDesktopPatch =
+            GetFileAttributesW(localJavaDesktopPatch.c_str()) != INVALID_FILE_ATTRIBUTES
+                ? localJavaDesktopPatch
+                : packagedJavaDesktopPatch;
+        if (GetFileAttributesW(javaDesktopPatch.c_str()) != INVALID_FILE_ATTRIBUTES) {
+            vmOptionStorage.push_back("--patch-module=java.desktop=" + w2a(fwd(javaDesktopPatch)));
+            WriteLogF(L"Java desktop UWP AWT patch enabled: %s", javaDesktopPatch.c_str());
+        } else {
+            WriteLogF(L"Java desktop UWP AWT patch missing: %s", javaDesktopPatch.c_str());
+        }
     } else {
-        WriteLogF(L"Java desktop UWP AWT patch missing: %s", javaDesktopPatch.c_str());
+        WriteLog(L"Java desktop UWP AWT module patch disabled for legacy Java 8 runtime");
     }
     vmOptionStorage.push_back("-Djava.home=" + w2a(fwd(jreDir)));
-    vmOptionStorage.push_back("-Djava.security.properties==" + w2a(fwd(jreDir + L"\\conf\\security\\xbox.properties")));
+    const std::wstring javaSecurityDir = legacyJava8
+        ? jreDir + L"\\lib\\security"
+        : jreDir + L"\\conf\\security";
+    vmOptionStorage.push_back("-Djava.security.properties==" + w2a(fwd(javaSecurityDir + L"\\xbox.properties")));
     vmOptionStorage.push_back("-Djava.security.egd=file:/dev/urandom");
     vmOptionStorage.push_back("-Djava.awt.headless=true");
     vmOptionStorage.push_back("-Dbanditvault.awt.skipDesktopProperties=true");
