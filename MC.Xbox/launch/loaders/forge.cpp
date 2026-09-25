@@ -108,6 +108,10 @@ std::wstring ForgeMavenVersion(const std::wstring& launchVersion) {
     return launchVersion;
 }
 
+static bool IsLegacyForge122(const std::wstring& minecraftVersion) {
+    return minecraftVersion == L"1.12.2";
+}
+
 static std::wstring ForgeMcpVersion(
     const std::wstring& manifestMcpVersion,
     const std::vector<std::wstring>& extraGameArgs) {
@@ -591,6 +595,10 @@ void ForgeBeforeLaunch(const LoaderPreLaunchContext& ctx) {
     DeleteDirectoryTree(ctx.sharedGameDir + L"\\.cache");
     DeleteDirectoryTree(ctx.gameDir + L"\\config\\.cache");
     DeleteDirectoryTree(ctx.gameDir + L"\\mods\\.index");
+    if (IsLegacyForge122(ctx.minecraftVersion)) {
+        WriteLog(L"Forge 1.12.2 legacy path: skipping modern FML TOML configuration");
+        return;
+    }
     EnsureForgeFmlConfig(ctx.gameDir);
 }
 
@@ -604,6 +612,15 @@ void ForgeAdjustClasspath(const LoaderJvmContext& ctx, std::wstring& classPath, 
     WriteTextFile(ctx.launcherOverrideDir + L"\\oshi.properties", oshiProperties);
     classPath = ctx.launcherOverrideDir + L";" + classPath;
     WriteLogF(L"Forge launcher override classpath directory: %s", ctx.launcherOverrideDir.c_str());
+
+    if (IsLegacyForge122(ctx.minecraftVersion)) {
+        result.effectiveClassPath = classPath;
+        result.neoForgeStartedWithGameClassPath = true;
+        WriteTextFile(ctx.launcherLogDir + L"\\java_classpath_final.txt", classPath);
+        WriteLogF(L"Forge 1.12.2 legacy path: skipping modern Forge artifact preparation; classpath=%s",
+            classPath.c_str());
+        return;
+    }
 
     if (ForgeClientArtifactsReady(
             ctx.exeDir,
@@ -629,6 +646,11 @@ void ForgeAdjustClasspath(const LoaderJvmContext& ctx, std::wstring& classPath, 
 }
 
 void ForgeAddJvmOptions(const LoaderJvmContext& ctx, std::vector<std::string>& vmOptions) {
+    if (IsLegacyForge122(ctx.minecraftVersion)) {
+        WriteLog(L"Forge 1.12.2 legacy path: using baseline Forge JVM options");
+        return;
+    }
+
     // Forge 1.20.1 ships securejarhandler 2.1.10; the packaged UWP patch targets NeoForge 3.0.8
     // and breaks BootstrapLaunchConsumer with NoSuchMethodError on ProtectionDomainHelper.
     WriteLog(L"Forge skipping securejarhandler UWP patch (2.1.10 is incompatible with NeoForge 3.0.8 patch)");
@@ -652,6 +674,11 @@ bool ForgePrepareArtifactsAfterJvm(
     bool forgeStartedWithGameClassPath) {
     if (forgeStartedWithGameClassPath) {
         WriteLog(L"Forge client artifact prep skipped; artifacts were complete before JVM startup");
+        return true;
+    }
+
+    if (IsLegacyForge122(ctx.minecraftVersion)) {
+        WriteLog(L"Forge 1.12.2 legacy path: no post-JVM modern artifact preparation");
         return true;
     }
 
