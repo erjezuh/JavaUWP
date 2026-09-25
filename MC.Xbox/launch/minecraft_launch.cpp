@@ -1107,10 +1107,12 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
     // hsperfdata is mmapped and rewritten every collection, on console storage that is a frame hitch
     vmOptionStorage.push_back("-XX:+PerfDisableSharedMem");
     WriteLog(L"JVM heap: -Xmx3G -Xms3G -XX:MaxDirectMemorySize=512M, G1 at 50ms pause target");
-    vmOptionStorage.push_back("--enable-native-access=ALL-UNNAMED");
-    vmOptionStorage.push_back("--add-opens=jdk.zipfs/jdk.nio.zipfs=ALL-UNNAMED");
-    const std::wstring selectedJavaBasePatchName =
-        javaBasePatchName.empty() ? L"java-base-uwp-filesystem.jar" : javaBasePatchName;
+    const bool legacyJava8 = packagedJreRelativeDir == L"jre8";
+    if (!legacyJava8) {
+        vmOptionStorage.push_back("--enable-native-access=ALL-UNNAMED");
+        vmOptionStorage.push_back("--add-opens=jdk.zipfs/jdk.nio.zipfs=ALL-UNNAMED");
+    }
+    const std::wstring selectedJavaBasePatchName = javaBasePatchName;
     const std::wstring localJavaBasePatch = exeDir + L"\\" + selectedJavaBasePatchName;
     const std::wstring packagedJavaBasePatch = packageDir + L"\\" + selectedJavaBasePatchName;
     const std::wstring javaBasePatch =
@@ -1123,15 +1125,15 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
     } else {
         WriteLogF(L"Java base UWP filesystem patch missing: %s", javaBasePatch.c_str());
     }
-    const std::wstring selectedJavaZipfsPatchName =
-        javaZipfsPatchName.empty() ? L"java-zipfs-realpath.jar" : javaZipfsPatchName;
+    const std::wstring selectedJavaZipfsPatchName = javaZipfsPatchName;
     const std::wstring localJavaZipfsPatch = exeDir + L"\\" + selectedJavaZipfsPatchName;
     const std::wstring packagedJavaZipfsPatch = packageDir + L"\\" + selectedJavaZipfsPatchName;
-    const std::wstring javaZipfsPatch =
-        GetFileAttributesW(localJavaZipfsPatch.c_str()) != INVALID_FILE_ATTRIBUTES
+    const std::wstring javaZipfsPatch = selectedJavaZipfsPatchName.empty()
+        ? L""
+        : (GetFileAttributesW(localJavaZipfsPatch.c_str()) != INVALID_FILE_ATTRIBUTES
             ? localJavaZipfsPatch
-            : packagedJavaZipfsPatch;
-    if (GetFileAttributesW(javaZipfsPatch.c_str()) != INVALID_FILE_ATTRIBUTES) {
+            : packagedJavaZipfsPatch);
+    if (!javaZipfsPatch.empty() && GetFileAttributesW(javaZipfsPatch.c_str()) != INVALID_FILE_ATTRIBUTES) {
         vmOptionStorage.push_back("--patch-module=jdk.zipfs=" + w2a(fwd(javaZipfsPatch)));
         WriteLogF(L"Java ZipFS realpath patch enabled: %s", javaZipfsPatch.c_str());
     } else {
