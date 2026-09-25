@@ -68,6 +68,11 @@ bool IsLocalRuntimeSeedCurrent(const std::wstring& packageDir, const std::wstrin
     const bool hasJre =
         GetFileAttributesW((localDir + L"\\jre\\bin\\server\\jvm.dll").c_str()) != INVALID_FILE_ATTRIBUTES &&
         GetFileAttributesW((localDir + L"\\jre\\conf\\security\\java.security").c_str()) != INVALID_FILE_ATTRIBUTES;
+    const bool packageHasJre8 =
+        GetFileAttributesW((packageDir + L"\\jre8\\bin\\server\\jvm.dll").c_str()) != INVALID_FILE_ATTRIBUTES;
+    const bool hasJre8 = !packageHasJre8 ||
+        (GetFileAttributesW((localDir + L"\\jre8\\bin\\server\\jvm.dll").c_str()) != INVALID_FILE_ATTRIBUTES &&
+            GetFileAttributesW((localDir + L"\\jre8\\lib\\security\\java.security").c_str()) != INVALID_FILE_ATTRIBUTES);
     const bool hasJavaBasePatch =
         GetFileAttributesW((localDir + L"\\java-base-uwp-filesystem.jar").c_str()) != INVALID_FILE_ATTRIBUTES;
     const bool hasJavaZipfsPatch =
@@ -274,13 +279,15 @@ bool SeedLocalRuntime(
         progress(L"Copying Java runtime", L"Preparing JVM files", 0.52f);
     }
     CopyDirectoryContentsIfNeeded(packageDir + L"\\jre", localDir + L"\\jre");
+    CopyDirectoryContentsIfNeeded(packageDir + L"\\jre8", localDir + L"\\jre8");
     CopyDirectoryContentsIfNeeded(packageDir + L"\\jre21", localDir + L"\\jre21");
     CopyDirectoryContentsIfNeeded(packageDir + L"\\jre17", localDir + L"\\jre17");
     std::wstring xboxSecurityProperties;
     if (ReadTextFile(packageDir + L"\\xbox_security.properties", xboxSecurityProperties)) {
         const std::wstring runtimeDirs[] = { L"jre", L"jre8", L"jre21", L"jre17" };
         for (const std::wstring& runtimeDir : runtimeDirs) {
-            const std::wstring localSecurityDir = localDir + L"\\" + runtimeDir + L"\\conf\\security";
+            const std::wstring localSecurityDir = localDir + L"\\" + runtimeDir +
+                (runtimeDir == L"jre8" ? L"\\lib\\security" : L"\\conf\\security");
             if (GetFileAttributesW(localSecurityDir.c_str()) == INVALID_FILE_ATTRIBUTES) continue;
             if (!WriteTextFile(localSecurityDir + L"\\java.security", xboxSecurityProperties)) {
                 WriteLogF(L"Failed to rewrite LocalState %s java.security err=%u", runtimeDir.c_str(), GetLastError());
@@ -1079,8 +1086,10 @@ JavaRuntimeInfo ResolveJavaRuntimeInfo(
     } else if (id == L"legacy" || id == L"java8" || id == L"jdk8" || id == L"8") {
         info.runtimeId = L"legacy";
         info.packageRelativeDir = L"jre8";
-        info.javaBasePatchName = L"java-base-uwp-filesystem-8.jar";
-        info.zipfsPatchName = L"java-zipfs-realpath-8.jar";
+        // Java 8 predates the module system; the Java 17/21 UWP module patches
+        // are intentionally not applied to the legacy Forge runtime.
+        info.javaBasePatchName.clear();
+        info.zipfsPatchName.clear();
     } else {
         info.runtimeId = L"current";
         info.packageRelativeDir = L"jre";
