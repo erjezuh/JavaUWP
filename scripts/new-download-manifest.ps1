@@ -442,7 +442,17 @@ function Add-LoaderInstallerJarEntry(
     [System.Collections.Generic.List[object]]$Entries) {
     if ($Loader -eq "forge") {
         $forgeVersion = Get-ForgeInstallerVersion $MinecraftVersion $LoaderVersion
-        $path = "net/minecraftforge/forge/$forgeVersion/forge-$forgeVersion-installer.jar"
+
+        # Forge 1.12.2 publishes the runtime Forge jar as the "universal" artifact.
+        # The bare Maven coordinate is not a jar (and therefore has no .jar.sha1).
+        # Keep the installer itself in the cache for metadata extraction, but put the
+        # universal runtime jar in the download manifest so the launcher can use it.
+        if ($MinecraftVersion -eq "1.12.2") {
+            $path = "net/minecraftforge/forge/$forgeVersion/forge-$forgeVersion-universal.jar"
+        } else {
+            $path = "net/minecraftforge/forge/$forgeVersion/forge-$forgeVersion-installer.jar"
+        }
+
         $url = "https://maven.minecraftforge.net/$path"
         $sha1 = Get-RemoteTextOrThrow "$url.sha1"
         $size = Get-RemoteSizeOrZero $url
