@@ -53,5 +53,5 @@ minecraftVersion	displayName	loader	loaderVersion	javaRuntime	supportLevel	contr
 1.19.2	1.19.2 Fabric	fabric	0.14.25	java21	testing	fabric	Legacy target retained
 1.18.2	1.18.2 Forge	forge	40.2.27	java17	experimental	none	Legacy target retained
 1.16.5	1.16.5 Fabric	fabric	0.14.25	java21	testing	fabric	Legacy target retained
-1.12.2	1.12.2 Forge	forge	selected	legacy	experimental	none	Legacy provider not implemented yet
-1.12.2	1.12.2 Vanilla	vanilla	none	legacy	experimental	none	Legacy provider not implemented yet
+1.12.2	1.12.2 Forge	forge	14.23.5.2864	legacy	experimental	none	Legacy Forge 1.12.2 provider
+1.12.2	1.12.2 Vanilla	vanilla	none	legacy	experimental	none	Legacy Java 8 runtime target
