@@ -356,6 +356,16 @@ function Convert-ArgumentArrayToList($Arguments) {
     return $out
 }
 
+function Convert-LegacyMinecraftArguments([string]$Arguments) {
+    if (-not $Arguments) {
+        return @()
+    }
+
+    # Legacy 1.12.x metadata stores the game arguments as one whitespace-delimited
+    # string instead of the modern arguments.game array.
+    return @($Arguments -split '\s+' | Where-Object { $_ })
+}
+
 function Convert-JvmArgsForEmbeddedJvm($Values) {
     $out = @()
     for ($i = 0; $i -lt $Values.Count; $i++) {
@@ -634,6 +644,29 @@ $argumentsProperty = if ($loaderProfile -and $loaderProfile.PSObject.Properties[
 if ($argumentsProperty -and $Loader -ne "fabric") {
     $jvmArgs = Convert-JvmArgsForEmbeddedJvm (Convert-ArgumentArrayToList $argumentsProperty.jvm)
     $gameArgs = Convert-ArgumentArrayToList $argumentsProperty.game
+}
+
+# Forge 1.12.x uses the legacy single-string minecraftArguments field.
+# Prefer the loader profile when it provides one, then fall back to vanilla
+# metadata; Forge's FMLTweaker is supplied by the installer profile/runtime.
+if ($Loader -eq "forge" -and $MinecraftVersion -eq "1.12.2" -and $gameArgs.Count -eq 0) {
+    $legacyArguments = ""
+    if ($loaderProfile -and $loaderProfile.PSObject.Properties["minecraftArguments"]) {
+        $legacyArguments = [string]$loaderProfile.PSObject.Properties["minecraftArguments"].Value
+    }
+    if (-not $legacyArguments -and $versionJson.PSObject.Properties["minecraftArguments"]) {
+        $legacyArguments = [string]$versionJson.PSObject.Properties["minecraftArguments"].Value
+    }
+
+    $gameArgs = [System.Collections.Generic.List[string]]::new()
+    foreach ($arg in (Convert-LegacyMinecraftArguments $legacyArguments)) {
+        $gameArgs.Add($arg)
+    }
+
+    if ($gameArgs -notcontains "--tweakClass") {
+        $gameArgs.Add("--tweakClass")
+        $gameArgs.Add("net.minecraftforge.fml.common.launcher.FMLTweaker")
+    }
 }
 $lines.Add("# launchVersion`t$launchVersion")
 $lines.Add("# mainClass`t$mainClass")
