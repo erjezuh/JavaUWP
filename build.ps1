@@ -850,8 +850,11 @@ function Copy-PackagedJre {
     # jmods is jlink input, nothing at runtime opens it, and it is about 80 MB of every packaged jre
     $jmods = Join-Path $dest "jmods"
     if (Test-Path $jmods) { Remove-Item -Recurse -Force $jmods }
-    Copy-Item $SecurityPropertiesPath (Join-Path $dest "conf\security\xbox.properties") -Force
-    Copy-Item $SecurityPropertiesPath (Join-Path $dest "conf\security\java.security") -Force
+    $securityDir = Join-Path $dest "conf\security"
+    if (-not (Test-Path $securityDir)) { $securityDir = Join-Path $dest "lib\security" }
+    if (-not (Test-Path $securityDir)) { throw "Java security directory not found under $dest" }
+    Copy-Item $SecurityPropertiesPath (Join-Path $securityDir "xbox.properties") -Force
+    Copy-Item $SecurityPropertiesPath (Join-Path $securityDir "java.security") -Force
 }
 
 function Build-JavaBaseUwpFilesystemPatch {
@@ -1221,6 +1224,13 @@ Write-Host "Copying JRE..."
 $xboxSecurityProperties = Join-Path $root "xbox_security.properties"
 Copy-Item $xboxSecurityProperties (Join-Path $pkg "xbox_security.properties") -Force
 Copy-PackagedJre -JavaHome $jreSrc -PackageRelativeDir "jre" -SecurityPropertiesPath $xboxSecurityProperties
+try {
+    $jre8Src = Resolve-JavaHomeExact -MajorVersion 8
+    Copy-PackagedJre -JavaHome $jre8Src -PackageRelativeDir "jre8" -SecurityPropertiesPath $xboxSecurityProperties
+    Write-Host "Packaged Java 8 runtime for Forge 1.12.2"
+} catch {
+    Write-Warning "Java 8 runtime not packaged: $($_.Exception.Message). A build containing Forge 1.12.2 requires JDK 8."
+}
 Copy-PackagedJre -JavaHome $jre21Src -PackageRelativeDir "jre21" -SecurityPropertiesPath $xboxSecurityProperties
 try {
     $jre17Src = Resolve-JavaHomeExact -MajorVersion 17
