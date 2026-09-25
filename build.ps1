@@ -659,7 +659,10 @@ if ($fabricLoaderVersions -contains "0.14.25") {
 }
 # Bundled mods (compat mod, optionally diagnostics) live under runtime\bundled-mods.
 # App.cpp copies them into LocalState\game\mods on launch.
-Copy-Item -Recurse (Join-Path $gameDir "mods\*") (Join-Path $pkg "runtime\bundled-mods\") -Force
+Ensure-Dir (Join-Path $gameDir "mods"), (Join-Path $pkg "runtime\bundled-mods")
+if (Test-Path (Join-Path $gameDir "mods")) {
+    Copy-Item -Recurse (Join-Path $gameDir "mods\*") (Join-Path $pkg "runtime\bundled-mods\") -Force -ErrorAction SilentlyContinue
+}
 
 Write-Host "Copying natives..."
 Copy-Item (Join-Path $nativesSourceDir "*.dll") (Join-Path $pkg "natives\")
