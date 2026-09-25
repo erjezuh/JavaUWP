@@ -192,7 +192,7 @@ function Add-FabricLibraries($FabricProfile, [System.Collections.Generic.List[ob
     }
 }
 
-function Add-LoaderLibraries($LoaderProfile, [System.Collections.Generic.List[object]]$Entries, [string]$DefaultBaseUrl) {
+function Add-LoaderLibraries($LoaderProfile, [System.Collections.Generic.List[object]]$Entries, [string]$DefaultBaseUrl, [bool]$SkipLegacyForgeArtifact = $false) {
     foreach ($library in $LoaderProfile.libraries) {
         if (-not (Test-LibraryAllowed $library)) {
             continue
@@ -201,7 +201,7 @@ function Add-LoaderLibraries($LoaderProfile, [System.Collections.Generic.List[ob
         # Forge 1.12.2's version.json advertises the Forge runtime using the
         # bare Maven coordinate, but that artifact does not exist on MavenForge.
         # We add the real -universal.jar separately below.
-        if ($MinecraftVersion -eq "1.12.2" -and [string]$library.name -like "net.minecraftforge:forge:*") {
+        if ($SkipLegacyForgeArtifact -and [string]$library.name -like "net.minecraftforge:forge:*") {
             continue
         }
 
@@ -304,7 +304,8 @@ function Save-ZipEntry([string]$JarPath, [string]$EntryName, [string]$OutputPath
 function Add-InstallerMavenEntries(
     [string]$JarPath,
     [string]$BaseUrl,
-    [System.Collections.Generic.List[object]]$Entries) {
+    [System.Collections.Generic.List[object]]$Entries,
+    [bool]$SkipLegacyForgeArtifact = $false) {
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     if (-not $BaseUrl.EndsWith("/")) {
         $BaseUrl += "/"
@@ -318,6 +319,9 @@ function Add-InstallerMavenEntries(
             }
 
             $path = $entry.FullName.Substring("maven/".Length)
+            if ($SkipLegacyForgeArtifact -and $path -like "net/minecraftforge/forge/1.12.2-*/forge-1.12.2-*.jar") {
+                continue
+            }
             $url = "$BaseUrl$path"
             $sha1 = Get-RemoteTextOrThrow "$url.sha1"
             Add-Entry $Entries "game/libraries/$path" $sha1 ([UInt64]$entry.Length) $url
@@ -584,14 +588,14 @@ if ($Loader -eq "fabric") {
     # fabric only, forge and neoforge add their installer's older dupes last and would win here
     $entries = Resolve-LibraryVersionConflicts $entries
 } elseif ($Loader -eq "forge") {
-    Add-LoaderLibraries $loaderProfile $entries "https://maven.minecraftforge.net/"
+    Add-LoaderLibraries $loaderProfile $entries "https://maven.minecraftforge.net/" ($MinecraftVersion -eq "1.12.2")
     if ($installProfile) {
-        Add-LoaderLibraries $installProfile $entries "https://maven.minecraftforge.net/"
+        Add-LoaderLibraries $installProfile $entries "https://maven.minecraftforge.net/" ($MinecraftVersion -eq "1.12.2")
     }
     Add-LoaderInstallerJarEntry $Loader $MinecraftVersion $LoaderVersion $entries
     $installerJar = Get-LoaderInstallerJarPath $Loader $MinecraftVersion $LoaderVersion
     if ($installerJar -and (Test-Path $installerJar)) {
-        Add-InstallerMavenEntries $installerJar "https://maven.minecraftforge.net/" $entries
+        Add-InstallerMavenEntries $installerJar "https://maven.minecraftforge.net/" $entries ($MinecraftVersion -eq "1.12.2")
     }
 } elseif ($Loader -eq "neoforge") {
     Add-LoaderLibraries $loaderProfile $entries "https://maven.neoforged.net/releases/"
