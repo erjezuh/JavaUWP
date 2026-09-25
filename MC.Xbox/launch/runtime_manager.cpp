@@ -21,7 +21,7 @@
 #include "third_party/miniz/miniz.h"
 
 static std::wstring RuntimeSeedStamp(const std::wstring& packageDir) {
-    return std::wstring(L"seedVersion=5\n") +
+    return std::wstring(L"seedVersion=6\n") +
         L"packageDir=" + packageDir + L"\n" +
         L"exe=" + FileStamp(packageDir + L"\\MC.Xbox.exe") + L"\n" +
         L"manifest=" + FileStamp(packageDir + L"\\AppxManifest.xml") + L"\n" +
@@ -29,6 +29,8 @@ static std::wstring RuntimeSeedStamp(const std::wstring& packageDir) {
         L"versionCatalog=" + FileStamp(packageDir + L"\\runtime\\version_catalog.tsv") + L"\n" +
         L"minecraft=" + std::wstring(kMinecraftVersionW) + L"\n" +
         L"jreRelease=" + FileStamp(packageDir + L"\\jre\\release") + L"\n" +
+        L"jre8Release=" + FileStamp(packageDir + L"\\jre8\\release") + L"\n" +
+        L"jvm8=" + FileStamp(packageDir + L"\\jre8\\bin\\server\\jvm.dll") + L"\n" +
         L"jvm=" + FileStamp(packageDir + L"\\jre\\bin\\server\\jvm.dll") + L"\n" +
         L"javaBasePatch=" + FileStamp(packageDir + L"\\java-base-uwp-filesystem.jar") + L"\n" +
         L"zipfsPatch=" + FileStamp(packageDir + L"\\java-zipfs-realpath.jar") + L"\n" +
@@ -87,7 +89,7 @@ bool IsLocalRuntimeSeedCurrent(const std::wstring& packageDir, const std::wstrin
         GetFileAttributesW((packageDir + L"\\securejarhandler-uwp-patch.jar").c_str()) != INVALID_FILE_ATTRIBUTES;
     const bool hasSecureJarHandlerPatch = !packageHasSecureJarHandlerPatch ||
         GetFileAttributesW((localDir + L"\\securejarhandler-uwp-patch.jar").c_str()) != INVALID_FILE_ATTRIBUTES;
-    return hasGameSupport && hasNatives && hasGraphics && hasJre && hasJavaBasePatch && hasJavaZipfsPatch && hasJavaDesktopPatch && hasJre21 && hasJavaBasePatch21 && hasJavaZipfsPatch21 && hasJavaDesktopPatch21 && hasSecureJarHandlerPatch;
+    return hasGameSupport && hasNatives && hasGraphics && hasJre && hasJre8 && hasJavaBasePatch && hasJavaZipfsPatch && hasJavaDesktopPatch && hasJre21 && hasJavaBasePatch21 && hasJavaZipfsPatch21 && hasJavaDesktopPatch21 && hasSecureJarHandlerPatch;
 }
 
 static void MarkLocalRuntimeSeedCurrent(const std::wstring& packageDir, const std::wstring& localDir) {
@@ -276,7 +278,7 @@ bool SeedLocalRuntime(
     CopyDirectoryContentsIfNeeded(packageDir + L"\\jre17", localDir + L"\\jre17");
     std::wstring xboxSecurityProperties;
     if (ReadTextFile(packageDir + L"\\xbox_security.properties", xboxSecurityProperties)) {
-        const std::wstring runtimeDirs[] = { L"jre", L"jre21", L"jre17" };
+        const std::wstring runtimeDirs[] = { L"jre", L"jre8", L"jre21", L"jre17" };
         for (const std::wstring& runtimeDir : runtimeDirs) {
             const std::wstring localSecurityDir = localDir + L"\\" + runtimeDir + L"\\conf\\security";
             if (GetFileAttributesW(localSecurityDir.c_str()) == INVALID_FILE_ATTRIBUTES) continue;
