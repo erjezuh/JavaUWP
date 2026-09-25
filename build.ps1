@@ -56,8 +56,10 @@ $inheritedAssetIndex    = $env:MC_ASSET_INDEX
 # patch-fabric, etc.) sees the same chosen version.
 if ($McVersion)    { $env:MC_VERSION = $McVersion }
 if ($FabricLoader) { $env:FABRIC_LOADER_VERSION = $FabricLoader }
-if ($Loader) { $env:LOADER = $Loader }
+if ($Loader) { $env:LOADER = $Loader; $env:DEFAULT_MC_LOADER = $Loader }
+elseif ($inheritedLoader) { $env:LOADER = $inheritedLoader; $env:DEFAULT_MC_LOADER = $inheritedLoader }
 if ($LoaderVersion) { $env:LOADER_VERSION = $LoaderVersion }
+elseif ($inheritedLoaderVersion) { $env:LOADER_VERSION = $inheritedLoaderVersion }
 if ($AssetIndex)   { $env:MC_ASSET_INDEX = $AssetIndex }
 
 . (Join-Path $PSScriptRoot "scripts\common.ps1")
