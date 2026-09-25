@@ -198,6 +198,13 @@ function Add-LoaderLibraries($LoaderProfile, [System.Collections.Generic.List[ob
             continue
         }
 
+        # Forge 1.12.2's version.json advertises the Forge runtime using the
+        # bare Maven coordinate, but that artifact does not exist on MavenForge.
+        # We add the real -universal.jar separately below.
+        if ($MinecraftVersion -eq "1.12.2" -and [string]$library.name -like "net.minecraftforge:forge:*") {
+            continue
+        }
+
         if ($library.downloads.artifact) {
             $artifact = $library.downloads.artifact
             Add-Entry $Entries "game/libraries/$($artifact.path)" $artifact.sha1 ([UInt64]$artifact.size) $artifact.url
