@@ -11,6 +11,7 @@ param(
     [switch]$SkipVersionManifests,
     [switch]$SkipVersionCompat,
     [switch]$IncludePrebuiltNeoForgeArtifacts,
+    [switch]$BuildNeoForgeControllers,
     [switch]$StrictTargets
 )
 
@@ -803,6 +804,9 @@ if (-not $SkipVersionCompat) {
             if (Test-Path $outDir) { Remove-Item -Recurse -Force $outDir }
         }
     }
+    if (-not $BuildNeoForgeControllers) {
+        Write-Host "Skipping per-version NeoForge controller mods. Use -BuildNeoForgeControllers to opt in to NeoForge controller compilation."
+    } else {
     foreach ($row in $neoForgeTargets) {
         $lv = $row.loaderVersion
         $targetId = "$($row.minecraftVersion)-neoforge-$lv"
@@ -821,6 +825,7 @@ if (-not $SkipVersionCompat) {
             Add-BuildFailure -Stage "NeoForge controller mod" -Target $targetId -Reason $_.Exception.Message
             if (Test-Path $outDir) { Remove-Item -Recurse -Force $outDir }
         }
+    }
     }
 } else {
     Write-Host "Skipping per-version compat mods (-SkipVersionCompat)"
