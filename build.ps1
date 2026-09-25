@@ -3,6 +3,8 @@ param(
     [string]$MesaRuntimeDir = $env:MESA_UWP_DIR,
     [string]$McVersion,
     [string]$FabricLoader,
+    [string]$Loader = $env:LOADER,
+    [string]$LoaderVersion = $env:LOADER_VERSION,
     [string]$AssetIndex,
     [string]$AppxVersion = $env:APPX_VERSION,
     [switch]$KeepStaging,
@@ -45,6 +47,8 @@ function Add-BuildFailure {
 # capture inherited overrides before applying command line values
 $inheritedMcVersion     = $env:MC_VERSION
 $inheritedFabricLoader  = $env:FABRIC_LOADER_VERSION
+$inheritedLoader        = $env:LOADER
+$inheritedLoaderVersion = $env:LOADER_VERSION
 $inheritedAssetIndex    = $env:MC_ASSET_INDEX
 
 # Push command-line overrides into the environment before sourcing config.
@@ -52,6 +56,8 @@ $inheritedAssetIndex    = $env:MC_ASSET_INDEX
 # patch-fabric, etc.) sees the same chosen version.
 if ($McVersion)    { $env:MC_VERSION = $McVersion }
 if ($FabricLoader) { $env:FABRIC_LOADER_VERSION = $FabricLoader }
+if ($Loader) { $env:LOADER = $Loader }
+if ($LoaderVersion) { $env:LOADER_VERSION = $LoaderVersion }
 if ($AssetIndex)   { $env:MC_ASSET_INDEX = $AssetIndex }
 
 . (Join-Path $PSScriptRoot "scripts\common.ps1")
@@ -134,6 +140,8 @@ $mcVersionSource = if ($McVersion) {
 } else {
     "config.ps1 default"
 }
+$loaderSource = if ($Loader) { "-Loader" } elseif ($inheritedLoader) { "LOADER inherited from this shell" } else { "config.ps1 default" }
+$loaderVersionSource = if ($LoaderVersion) { "-LoaderVersion" } elseif ($inheritedLoaderVersion) { "LOADER_VERSION inherited from this shell" } else { "loader default" }
 $fabricLoaderSource = if ($FabricLoader) {
     "-FabricLoader"
 } elseif ($inheritedFabricLoader) {
@@ -152,6 +160,8 @@ $appVersionSource = if ($AppxVersion) {
 Write-Host ""
 Write-Host "Resolved build target:"
 Write-Host ("  MC version      {0}  ({1})" -f $ProjectConfig.MinecraftVersion, $mcVersionSource)
+Write-Host ("  Loader          {0}  ({1})" -f $ProjectConfig.DefaultLoader, $loaderSource)
+Write-Host ("  Loader version  {0}  ({1})" -f $(if ($ProjectConfig.DefaultLoader -eq "forge") { if ($LoaderVersion) { $LoaderVersion } elseif ($inheritedLoaderVersion) { $inheritedLoaderVersion } else { "14.23.5.2864" } } else { $ProjectConfig.FabricLoaderVersion }), $loaderVersionSource)
 Write-Host ("  Fabric loader   {0}  ({1})" -f $ProjectConfig.FabricLoaderVersion, $fabricLoaderSource)
 Write-Host ("  Asset index     {0}" -f $ProjectConfig.MinecraftAssetIndex)
 Write-Host ("  Appx version    {0}  ({1})" -f $appVersion, $appVersionSource)
@@ -160,6 +170,8 @@ Write-Host ""
 foreach ($inherited in @(
     @{ Name = "MC_VERSION";            Value = $inheritedMcVersion;    Param = $McVersion },
     @{ Name = "FABRIC_LOADER_VERSION"; Value = $inheritedFabricLoader; Param = $FabricLoader },
+    @{ Name = "LOADER";              Value = $inheritedLoader;        Param = $Loader },
+    @{ Name = "LOADER_VERSION";      Value = $inheritedLoaderVersion; Param = $LoaderVersion },
     @{ Name = "MC_ASSET_INDEX";        Value = $inheritedAssetIndex;   Param = $AssetIndex })) {
     if ($inherited.Value -and -not $inherited.Param) {
         Write-Warning ("{0}={1} was already set in this shell and is retargeting this build. Clear it with `$env:{0} = `$null, or open a new terminal." -f $inherited.Name, $inherited.Value)
@@ -427,17 +439,21 @@ Write-Host "=== Building GLFW CoreWindow shim ==="
 & (Join-Path $root "glfw_shim\build_glfw.ps1") -OutputDir $glfwBuildDir -MouseSupportLib $mouseSupportLib -MouseSupportInclude (Join-Path $root "mouse_support")
 if (-not (Test-Path $shimDll)) { throw "GLFW shim DLL missing after build: $shimDll" }
 
-Write-Host "=== Building Xbox compatibility mod ==="
-& (Join-Path $root "compat_mod\build_compat_mod.ps1")
+if ($ProjectConfig.DefaultLoader -eq "fabric") {
+    Write-Host "=== Building Xbox compatibility mod ==="
+    & (Join-Path $root "compat_mod\build_compat_mod.ps1")
 
-Write-Host "=== Building default Fabric controller mod ==="
-& (Join-Path $root "controller_mod\fabric\build_fabric_controller_mod.ps1") `
-    -MinecraftVersion $ProjectConfig.MinecraftVersion `
-    -LoaderVersion $ProjectConfig.FabricLoaderVersion `
-    -OutputDir (Join-Path $gameDir "mods")
+    Write-Host "=== Building default Fabric controller mod ==="
+    & (Join-Path $root "controller_mod\fabric\build_fabric_controller_mod.ps1") `
+        -MinecraftVersion $ProjectConfig.MinecraftVersion `
+        -LoaderVersion $ProjectConfig.FabricLoaderVersion `
+        -OutputDir (Join-Path $gameDir "mods")
 
-Write-Host "=== Patching Fabric Loader for Xbox filesystem ==="
-& (Join-Path $root "scripts\patch-fabric.ps1")
+    Write-Host "=== Patching Fabric Loader for Xbox filesystem ==="
+    & (Join-Path $root "scripts\patch-fabric.ps1")
+} elseif ($ProjectConfig.DefaultLoader -eq "forge") {
+    Write-Host "=== Skipping Fabric-only mods and patching for Forge target ==="
+}
 
 Write-Host "=== Assembling PackageContent ==="
 Remove-Item -Recurse -Force $pkg -ErrorAction SilentlyContinue
