@@ -1172,6 +1172,13 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
     vmOptionStorage.push_back("-Dswing.defaultlaf=javax.swing.plaf.metal.MetalLookAndFeel");
     vmOptionStorage.push_back("-Dfml.readTimeout=300");
     vmOptionStorage.push_back("-Dfml.loginTimeout=300");
+    if (legacyJava8 && loaderId == LoaderId::Forge) {
+        // Forge 1.12.2 performs a certificate/code-source sanity check that is
+        // incompatible with our repackaged UWP Minecraft jar location. The jar
+        // itself is the clean launcher artifact; allow Forge to launch it here.
+        vmOptionStorage.push_back("-Dfml.ignoreInvalidMinecraftCertificates=true");
+        WriteLog(L"Forge 1.12.2 legacy path: ignoring Minecraft certificate sanity check for UWP jar");
+    }
     LoaderAddJvmOptions(loaderCtx, vmOptionStorage);
     for (const std::wstring& arg : extraJvmArgs) {
         const std::wstring expanded = expandLaunchArg(arg);
