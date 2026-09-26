@@ -680,6 +680,25 @@ if (Test-Path (Join-Path $gameDir "mods")) {
 Write-Host "Copying natives..."
 Copy-Item (Join-Path $nativesSourceDir "*.dll") (Join-Path $pkg "natives\")
 
+# LWJGL 2.9.4 (used by Forge 1.12.2) was built against the legacy
+# Visual C++ 2010 runtime. Java 8u261+ no longer bundles msvcr100.dll,
+# and UWP does not reliably provide that old CRT beside the app. Put the
+# x64 CRT next to the legacy LWJGL natives so Windows can resolve its
+# transitive DLL imports when lwjgl64.dll is loaded.
+if ($ProjectConfig.MinecraftVersion -eq "1.12.2" -and $ProjectConfig.DefaultLoader -eq "forge") {
+    $systemDir = Join-Path $env:WINDIR "System32"
+    foreach ($crtName in @("msvcr100.dll", "msvcp100.dll")) {
+        $crtSource = Join-Path $systemDir $crtName
+        $crtDest = Join-Path $pkg "natives\$crtName"
+        if (Test-Path $crtSource) {
+            Copy-Item -LiteralPath $crtSource -Destination $crtDest -Force
+            Write-Host "Legacy LWJGL CRT: $crtName"
+        } else {
+            Write-Warning "Legacy LWJGL CRT missing from $crtSource. lwjgl64.dll may fail to load."
+        }
+    }
+}
+
 Write-Host "Extracting JNA native..."
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $jnaVersion = $ProjectConfig.JnaVersion
