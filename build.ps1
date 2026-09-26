@@ -1334,17 +1334,30 @@ if (-not (Test-Path $cert)) {
     Write-Host "Generated cert"
 }
 
-$allSigningCertCandidates = Get-ChildItem Cert:\CurrentUser\My |
-    Where-Object {
-        if (-not $_.HasPrivateKey) { return $false }
-        $eku = @($_.EnhancedKeyUsageList)
-        if ($eku.Count -eq 0) { return $false }
-        # EnhancedKeyUsageList.FriendlyName is localized/occasionally empty.
-        # Match the stable Code Signing EKU OID instead.
-        @($eku | Where-Object { $_.ObjectId.Value -eq '1.3.6.1.5.5.7.3.3' }).Count -gt 0
-    }
-$exactSigningCertCandidates = $allSigningCertCandidates | Where-Object { $_.Subject -eq $certName } | Sort-Object NotBefore -Descending
-$banditVaultSigningCertCandidates = $allSigningCertCandidates | Where-Object { $_.Subject -like '*BanditVault*' -and $_.Subject -ne $certName } | Sort-Object NotBefore -Descending
+$allUserCertificates = @(Get-ChildItem Cert:\CurrentUser\My | Where-Object { $_.HasPrivateKey })
+
+# Prefer the exact configured certificate subject. This preserves the existing
+# package identity and avoids depending on localized/empty EKU FriendlyName
+# or EnhancedKeyUsageList representations.
+$exactSigningCertCandidates = @(
+    $allUserCertificates |
+        Where-Object { $_.Subject -eq $certName } |
+        Sort-Object NotBefore -Descending
+)
+
+# For fallback certificates, require the stable Code Signing EKU OID.
+$codeSigningCertCandidates = @(
+    $allUserCertificates |
+        Where-Object {
+            $eku = @($_.EnhancedKeyUsageList)
+            @($eku | Where-Object { $_.ObjectId.Value -eq '1.3.6.1.5.5.7.3.3' }).Count -gt 0
+        } |
+        Sort-Object NotBefore -Descending
+)
+$banditVaultSigningCertCandidates = @(
+    $codeSigningCertCandidates |
+        Where-Object { $_.Subject -like '*BanditVault*' -and $_.Subject -ne $certName }
+)
 $signingCertCandidates = @($exactSigningCertCandidates) + @($banditVaultSigningCertCandidates)
 if (-not $signingCertCandidates) {
     throw "No signing certificate for '$certName' in Cert:\CurrentUser\My. Restore the BanditVault certificate, or set APPX_CERT_SUBJECT to the subject you want to sign with. Signing with an unrelated certificate changes the package family name and loses LocalState."
