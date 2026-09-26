@@ -980,12 +980,18 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
     const std::wstring lwjglTmpDir = exeDir + L"\\tmp";
     const std::wstring launcherOverrideDir = gameDir + L"\\launcher-overrides";
     const std::wstring packagedNativesDir = packageDir + L"\\natives";
+    const bool legacyForge122Natives =
+        minecraftVersion == L"1.12.2" && loaderId == LoaderId::Forge;
     const bool suppliedNativesReady =
         GetFileAttributesW((nativesDir + L"\\lwjgl.dll").c_str()) != INVALID_FILE_ATTRIBUTES &&
-        GetFileAttributesW((nativesDir + L"\\glfw.dll").c_str()) != INVALID_FILE_ATTRIBUTES;
+        (legacyForge122Natives
+            ? GetFileAttributesW((nativesDir + L"\\lwjgl64.dll").c_str()) != INVALID_FILE_ATTRIBUTES
+            : GetFileAttributesW((nativesDir + L"\\glfw.dll").c_str()) != INVALID_FILE_ATTRIBUTES);
     const bool packagedNativesReady =
         GetFileAttributesW((packagedNativesDir + L"\\lwjgl.dll").c_str()) != INVALID_FILE_ATTRIBUTES &&
-        GetFileAttributesW((packagedNativesDir + L"\\glfw.dll").c_str()) != INVALID_FILE_ATTRIBUTES;
+        (legacyForge122Natives
+            ? GetFileAttributesW((packagedNativesDir + L"\\lwjgl64.dll").c_str()) != INVALID_FILE_ATTRIBUTES
+            : GetFileAttributesW((packagedNativesDir + L"\\glfw.dll").c_str()) != INVALID_FILE_ATTRIBUTES);
     const std::wstring lwjglNativeDir =
         suppliedNativesReady ? nativesDir :
         (packagedNativesReady ? packagedNativesDir : nativesDir);
@@ -1204,9 +1210,13 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
         vmOptionStorage.push_back("-Dorg.lwjgl.util.DebugLoader=true");
     }
     vmOptionStorage.push_back("-Dorg.lwjgl.system.SharedLibraryExtractDirectory=" + w2a(fwd(lwjglTmpDir)));
-    vmOptionStorage.push_back("-Dorg.lwjgl.glfw.libname=" + w2a(fwd(lwjglGlfwDll)));
+    if (!legacyForge122Natives) {
+        vmOptionStorage.push_back("-Dorg.lwjgl.glfw.libname=" + w2a(fwd(lwjglGlfwDll)));
+        WriteLogF(L"LWJGL GLFW library forced: %s", lwjglGlfwDll.c_str());
+    } else {
+        WriteLog(L"LWJGL 2 legacy path: GLFW override disabled");
+    }
     WriteLogF(L"LWJGL native directory: %s", lwjglNativeDir.c_str());
-    WriteLogF(L"LWJGL GLFW library forced: %s", lwjglGlfwDll.c_str());
     std::wstring graphicsRuntime = GetEnvVarString(L"MC_GRAPHICS_RUNTIME");
     if (graphicsRuntime.empty()) {
         graphicsRuntime = L"mesa";
