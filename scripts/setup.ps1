@@ -25,11 +25,8 @@ $gameDir = Get-ConfigPath "GameDir"
 $assetsDir = Get-ConfigPath "AssetsDir"
 $version = if ($MinecraftVersion) { $MinecraftVersion } else { $ProjectConfig.MinecraftVersion }
 $loaderVersion = if ($Loader -eq "forge") { $LoaderVersion } elseif ($FabricLoaderVersion) { $FabricLoaderVersion } else { $ProjectConfig.FabricLoaderVersion }
-$nativesDir = if ($MinecraftVersion -and $MinecraftVersion -ne $ProjectConfig.MinecraftVersion) {
-    Join-Path (Get-ConfigPath "CacheDir") ("natives-" + ($MinecraftVersion -replace '[^A-Za-z0-9_.-]', '_'))
-} else {
-    Get-ConfigPath "NativesDir"
-}
+$nativesVersionKey = $version -replace '[^A-Za-z0-9_.-]', '_'
+$nativesDir = Join-Path (Get-ConfigPath "CacheDir") ("natives-" + $nativesVersionKey)
 $toolsDir = Get-ConfigPath "ToolsDir"
 $notesDir = Get-ConfigPath "NotesDir"
 $assetIndex = if ($AssetIndex) { $AssetIndex } else { "" }
