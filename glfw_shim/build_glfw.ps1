@@ -57,7 +57,7 @@ if (Test-BuildStampCurrent -StampPath $stampPath -Stamp $stamp -RequiredOutputs 
 
 Push-Location $PSScriptRoot
 Write-Host "Building glfw.dll (CoreWindow shim)..."
-& $tools.ClExe glfw_uwp.cpp /LD /EHsc /std:c++17 $CommonClFlags /O2 /GL /Gw /arch:AVX2 /DNDEBUG /D_UNICODE /DUNICODE /D_WIN32_WINNT=0x0A00 /D_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS /I"$MouseSupportInclude" /Fo"$objPath" `
+& $tools.ClExe glfw_uwp.cpp /LD /EHsc /std:c++17 $CommonClFlags /O2 /GL /Gw /arch:AVX2 /MT /DNDEBUG /D_UNICODE /DUNICODE /D_WIN32_WINNT=0x0A00 /D_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS /I"$MouseSupportInclude" /Fo"$objPath" `
     /DWINAPI_FAMILY=WINAPI_FAMILY_APP `
     /link /LTCG /DEF:glfw_uwp.def /OUT:"$dllPath" /IMPLIB:"$libPath" /MACHINE:X64 `
     "$MouseSupportLib" `
