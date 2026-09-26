@@ -1537,6 +1537,23 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
         return true;
     }
 
+    // Forge 1.12.2 installs FMLSecurityManager, whose normal shutdown path
+    // converts System.exit into ExitTrappedException. In an embedded JVM that
+    // exception is how Forge hands control back to the native launcher.
+    if (loaderId == LoaderId::Forge &&
+        minecraftVersion == L"1.12.2" &&
+        IsForgeLegacyExitTrappedException(env)) {
+        LogTextFileTail(javaLog, L"java_output.log");
+        LogTextFileTail(stderrLogPath, L"stderr_stream.log");
+        WriteLog(L"Forge 1.12.2 completed with trapped System.exit; returning to launcher");
+        telemetry::SendExit();
+        telemetry::EndLaunch();
+        StopLogTailers();
+        DeleteFileW(CrashLaunchMarkerPath(exeDir).c_str());
+        g_minecraftRunning.store(false);
+        return true;
+    }
+
     if (CheckAndLogJavaMainException(env, L"CallStaticVoidMethod(main)")) {
         LogTextFileTail(javaLog, L"java_output.log");
         LogTextFileTail(stderrLogPath, L"stderr_stream.log");
