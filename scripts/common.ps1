@@ -209,6 +209,42 @@ function Resolve-JavaRuntimeHomeExact {
     if ($match) { return $match.FullName }
     throw "No exact Java $MajorVersion runtime found. Set JAVA$($MajorVersion)_HOME or JDK$($MajorVersion)_HOME to a Java $MajorVersion runtime/JRE."
 }
+function Get-JavaRuntimeMajorVersion {
+    param([Parameter(Mandatory = $true)][string]$JavaHome)
+    $javaExe = Join-Path $JavaHome "bin\java.exe"
+    if (-not (Test-Path $javaExe)) { return $null }
+    $prevPref = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        $versionOutput = (& $javaExe -version 2>&1 | Select-Object -First 1).ToString()
+    } catch {
+        return $null
+    } finally {
+        $ErrorActionPreference = $prevPref
+    }
+    if ($versionOutput -match '"(?<major>\d+)(?:\.(?<minor>\d+))?') {
+        $major = [int]$Matches.major
+        if ($major -eq 1 -and $Matches.minor) { $major = [int]$Matches.minor }
+        return $major
+    }
+    return $null
+}
+
+function Resolve-JavaRuntimeHomeExact {
+    param([Parameter(Mandatory = $true)][int]$MajorVersion)
+    $candidates = @()
+    foreach ($envName in @("JAVA$($MajorVersion)_HOME", "JDK$($MajorVersion)_HOME", "JAVA_HOME_$($MajorVersion)_X64")) {
+        $value = [Environment]::GetEnvironmentVariable($envName)
+        if ($value) { $candidates += Get-Item $value -ErrorAction SilentlyContinue }
+    }
+    foreach ($root in @("$env:SystemDrive\Program Files\Java", "$env:SystemDrive\Program Files\Eclipse Adoptium", "$env:SystemDrive\Program Files\Microsoft")) {
+        if (Test-Path $root) { $candidates += Get-ChildItem $root -Directory -ErrorAction SilentlyContinue }
+    }
+    $match = $candidates | Where-Object { (Get-JavaRuntimeMajorVersion -JavaHome $_.FullName) -eq $MajorVersion } | Select-Object -First 1
+    if ($match) { return $match.FullName }
+    throw "No exact Java $MajorVersion runtime found."
+}
+
 function Resolve-JavaHomeExact {
     param(
         [Parameter(Mandatory = $true)]
