@@ -628,6 +628,10 @@ $manifestTargets = @(
 $fabricTargets = @($manifestTargets | Where-Object { $_.loader -eq "fabric" })
 $forgeTargets = @($manifestTargets | Where-Object { $_.loader -eq "forge" })
 $neoForgeTargets = @($manifestTargets | Where-Object { $_.loader -eq "neoforge" })
+# Per-version controller mods are expensive and are only useful for the target
+# being built. Do not rebuild controllers for every catalog entry on each
+# single-version build.
+
 function Test-ForgeControllerTarget {
     param([Parameter(Mandatory = $true)]$Target)
 
@@ -812,6 +816,10 @@ if (-not $SkipVersionCompat) {
             Add-BuildFailure -Stage "Compat mod" -Target $targetId -Reason $_.Exception.Message
             if (Test-Path $outDir) { Remove-Item -Recurse -Force $outDir }
         }
+        if ($targetId -ne $defaultTargetId) {
+            Write-Host "Skipping per-version Fabric controller mod for ${targetId}: not the selected build target"
+            continue
+        }
         if (Test-FabricControllerTarget -Target $row) {
             Write-Host "Building per-version Fabric controller mod: $targetId"
             try {
@@ -829,6 +837,10 @@ if (-not $SkipVersionCompat) {
     foreach ($row in $forgeTargets) {
         $lv = $row.loaderVersion
         $targetId = "$($row.minecraftVersion)-forge-$lv"
+        if ($targetId -ne $defaultTargetId) {
+            Write-Host "Skipping per-version forge controller mod for ${targetId}: not the selected build target"
+            continue
+        }
         if (-not (Test-ForgeControllerTarget -Target $row)) {
             Write-Host "Skipping per-version forge controller mod for ${targetId}: no bundled controller provider for this target"
             continue
@@ -851,6 +863,10 @@ if (-not $SkipVersionCompat) {
     foreach ($row in $neoForgeTargets) {
         $lv = $row.loaderVersion
         $targetId = "$($row.minecraftVersion)-neoforge-$lv"
+        if ($targetId -ne $defaultTargetId) {
+            Write-Host "Skipping per-version NeoForge controller mod for ${targetId}: not the selected build target"
+            continue
+        }
         if (-not (Test-NeoForgeControllerTarget -Target $row)) {
             Write-Host "Skipping per-version NeoForge controller mod for ${targetId}: no bundled controller provider for this target"
             continue
