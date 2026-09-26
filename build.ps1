@@ -678,24 +678,81 @@ if (Test-Path (Join-Path $gameDir "mods")) {
 }
 
 Write-Host "Copying natives..."
-Copy-Item (Join-Path $nativesSourceDir "*.dll") (Join-Path $pkg "natives\")
+Ensure-Dir (Join-Path $pkg "natives")
+Copy-Item (Join-Path $nativesSourceDir "*.dll") (Join-Path $pkg "natives\") -Force
 
-# LWJGL 2.9.4 (used by Forge 1.12.2) was built against the legacy
-# Visual C++ 2010 runtime. Java 8u261+ no longer bundles msvcr100.dll,
-# and UWP does not reliably provide that old CRT beside the app. Put the
-# x64 CRT next to the legacy LWJGL natives so Windows can resolve its
-# transitive DLL imports when lwjgl64.dll is loaded.
 if ($ProjectConfig.MinecraftVersion -eq "1.12.2" -and $ProjectConfig.DefaultLoader -eq "forge") {
-    $systemDir = Join-Path $env:WINDIR "System32"
-    foreach ($crtName in @("msvcr100.dll", "msvcp100.dll")) {
-        $crtSource = Join-Path $systemDir $crtName
-        $crtDest = Join-Path $pkg "natives\$crtName"
-        if (Test-Path $crtSource) {
-            Copy-Item -LiteralPath $crtSource -Destination $crtDest -Force
-            Write-Host "Legacy LWJGL CRT: $crtName"
-        } else {
-            Write-Warning "Legacy LWJGL CRT missing from $crtSource. lwjgl64.dll may fail to load."
+    # Forge 1.12.2 uses LWJGL 2.9.4. Its x64 native is a legacy Win32 DLL
+    # whose import table expects the VC++ 2010 CRT on many builds. A plain
+    # "Can't find dependent libraries" from Java does not tell us which
+    # transitive DLL is missing, so make the package self-contained and emit
+    # the actual import table during the build.
+    $legacyNativeNames = @(
+        "lwjgl64.dll",
+        "lwjgl.dll",
+        "OpenAL64.dll",
+        "OpenAL32.dll",
+        "jinput-raw_64.dll",
+        "jinput-raw.dll",
+        "jinput-dx8_64.dll",
+        "jinput-dx8.dll",
+        "jinput-wintab.dll"
+    )
+    foreach ($nativeName in $legacyNativeNames) {
+        $nativePath = Join-Path $pkg "natives\$nativeName"
+        if (-not (Test-Path $nativePath)) {
+            throw "Legacy Forge 1.12.2 native is missing from the package: $nativeName"
         }
+    }
+
+    $crtCandidates = @()
+    if ($jre8Src) {
+        $crtCandidates += Join-Path $jre8Src "bin"
+    }
+    $crtCandidates += Join-Path $env:WINDIR "System32"
+
+    # Visual C++ 2010 may be installed side-by-side in WinSxS even when the
+    # DLL is not directly exposed through System32.
+    $winsxsRoot = Join-Path $env:WINDIR "WinSxS"
+    if (Test-Path $winsxsRoot) {
+        $crtCandidates += @(Get-ChildItem -LiteralPath $winsxsRoot -Directory -Filter "amd64_microsoft.vc100.crt_*" -ErrorAction SilentlyContinue |
+            Select-Object -ExpandProperty FullName)
+    }
+
+    foreach ($crtName in @("msvcr100.dll", "msvcp100.dll")) {
+        $crtSource = $null
+        foreach ($candidateDir in $crtCandidates | Where-Object { $_ } | Select-Object -Unique) {
+            $candidate = Join-Path $candidateDir $crtName
+            if (Test-Path $candidate) {
+                $crtSource = $candidate
+                break
+            }
+        }
+
+        $crtDest = Join-Path $pkg "natives\$crtName"
+        if ($crtSource) {
+            Copy-Item -LiteralPath $crtSource -Destination $crtDest -Force
+            Write-Host "Legacy LWJGL CRT: $crtName <- $crtSource"
+        } else {
+            throw "Legacy LWJGL CRT $crtName was not found. Install the x64 Visual C++ 2010 runtime or provide it through the Java 8/Windows installation before building Forge 1.12.2."
+        }
+    }
+
+    # dumpbin ships with the MSVC toolchain. This is diagnostic only: it
+    # records exactly what lwjgl64.dll imports so a console log can identify
+    # the remaining dependency if Windows still rejects the native DLL.
+    $dumpbin = Join-Path (Split-Path $tools.ClExe -Parent) "dumpbin.exe"
+    $dependencyLog = Join-Path (Get-ConfigPath "NotesDir") "legacy-lwjgl64-dependencies.txt"
+    Ensure-Dir (Split-Path $dependencyLog -Parent)
+    if (Test-Path $dumpbin) {
+        $dependencyOutput = @(& $dumpbin /DEPENDENTS (Join-Path $pkg "natives\lwjgl64.dll") 2>&1)
+        $dependencyOutput | Set-Content -Path $dependencyLog
+        Write-Host "Legacy LWJGL dependency report: $dependencyLog"
+        $dependencyOutput | Where-Object { $_ -match "\.dll\s*$" } | ForEach-Object {
+            Write-Host "  LWJGL import: $($_.Trim())"
+        }
+    } else {
+        Write-Warning "dumpbin.exe not found beside $($tools.ClExe); skipping legacy LWJGL dependency report."
     }
 }
 
