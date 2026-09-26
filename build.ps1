@@ -1336,8 +1336,12 @@ if (-not (Test-Path $cert)) {
 
 $allSigningCertCandidates = Get-ChildItem Cert:\CurrentUser\My |
     Where-Object {
-        $_.HasPrivateKey -and
-        ($_.EnhancedKeyUsageList | Where-Object { $_.FriendlyName -eq 'Code Signing' })
+        if (-not $_.HasPrivateKey) { return $false }
+        $eku = @($_.EnhancedKeyUsageList)
+        if ($eku.Count -eq 0) { return $false }
+        # EnhancedKeyUsageList.FriendlyName is localized/occasionally empty.
+        # Match the stable Code Signing EKU OID instead.
+        @($eku | Where-Object { $_.ObjectId.Value -eq '1.3.6.1.5.5.7.3.3' }).Count -gt 0
     }
 $exactSigningCertCandidates = $allSigningCertCandidates | Where-Object { $_.Subject -eq $certName } | Sort-Object NotBefore -Descending
 $banditVaultSigningCertCandidates = $allSigningCertCandidates | Where-Object { $_.Subject -like '*BanditVault*' -and $_.Subject -ne $certName } | Sort-Object NotBefore -Descending
