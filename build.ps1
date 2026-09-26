@@ -1295,11 +1295,11 @@ $xboxSecurityProperties = Join-Path $root "xbox_security.properties"
 Copy-Item $xboxSecurityProperties (Join-Path $pkg "xbox_security.properties") -Force
 Copy-PackagedJre -JavaHome $jreSrc -PackageRelativeDir "jre" -SecurityPropertiesPath $xboxSecurityProperties
 try {
-    $jre8Src = Resolve-JavaHomeExact -MajorVersion 8
+    $jre8Src = Resolve-JavaRuntimeHomeExact -MajorVersion 8
     Copy-PackagedJre -JavaHome $jre8Src -PackageRelativeDir "jre8" -SecurityPropertiesPath $xboxSecurityProperties
-    Write-Host "Packaged Java 8 runtime for Forge 1.12.2"
+    Write-Host "Packaged Java 8 runtime for Forge 1.12.2: $jre8Src"
 } catch {
-    Write-Warning "Java 8 runtime not packaged: $($_.Exception.Message). A build containing Forge 1.12.2 requires JDK 8."
+    Write-Warning "Java 8 runtime not packaged: $($_.Exception.Message). Forge 1.12.2 requires a Java 8 runtime."
 }
 Copy-PackagedJre -JavaHome $jre21Src -PackageRelativeDir "jre21" -SecurityPropertiesPath $xboxSecurityProperties
 try {
