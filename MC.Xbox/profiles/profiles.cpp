@@ -193,6 +193,22 @@ LaunchTarget ResolveProfileTarget(const std::wstring& runtimeRoot, const Profile
             return t;
         }
     }
+
+    // Profiles created by older launcher builds can retain a stale loader
+    // (for example 1.12.2/Fabric 0.19.2). If that exact target disappeared
+    // from the catalog, migrate the legacy 1.12.2 profile to its supported
+    // Forge target instead of returning an unlaunchable stale target.
+    if (profileTarget.minecraftVersion == L"1.12.2") {
+        for (const LaunchTarget& t : targets) {
+            if (t.minecraftVersion == L"1.12.2" &&
+                _wcsicmp(t.loader.c_str(), L"forge") == 0) {
+                WriteLogF(L"Migrating stale 1.12.2 profile target %s to Forge target %s",
+                    profileTarget.targetId.c_str(), t.targetId.c_str());
+                return t;
+            }
+        }
+    }
+
     return profileTarget;
 }
 Profile MakeBuiltinVanillaProfile() {
