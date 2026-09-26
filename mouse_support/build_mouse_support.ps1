@@ -42,7 +42,7 @@ if (Test-BuildStampCurrent -StampPath $stampPath -Stamp $stamp -RequiredOutputs 
 
 Push-Location $PSScriptRoot
 Write-Host "Building mouse_support.dll (relay receiver + smoothing)..."
-& $tools.ClExe mouse_support.cpp /LD /EHsc /std:c++17 $CommonClFlags /O2 /DNDEBUG /D_UNICODE /DUNICODE /D_WIN32_WINNT=0x0A00 /Fo"$objPath" `
+& $tools.ClExe mouse_support.cpp /LD /EHsc /std:c++17 $CommonClFlags /O2 /MT /DNDEBUG /D_UNICODE /DUNICODE /D_WIN32_WINNT=0x0A00 /Fo"$objPath" `
     /DWINAPI_FAMILY=WINAPI_FAMILY_APP `
     /link /OUT:"$dllPath" /IMPLIB:"$libPath" /MACHINE:X64 `
     kernel32.lib ws2_32.lib
