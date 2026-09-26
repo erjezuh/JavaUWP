@@ -1356,7 +1356,10 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
     }
 
     JavaVMInitArgs vmArgs = {};
-    vmArgs.version = JNI_VERSION_21;
+    // Java 8 rejects newer JNI interface versions with JNI_EVERSION (-3).
+    // Keep the modern JNI version for current runtimes, but request JNI 1.8
+    // when the legacy Forge path is using the packaged Java 8 runtime.
+    vmArgs.version = legacyJava8 ? JNI_VERSION_1_8 : JNI_VERSION_21;
     vmArgs.nOptions = static_cast<jint>(vmOptions.size());
     vmArgs.options = vmOptions.data();
     vmArgs.ignoreUnrecognized = JNI_FALSE;
