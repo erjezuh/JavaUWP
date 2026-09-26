@@ -234,6 +234,49 @@ bool CheckAndLogJavaMainException(JNIEnv* env, const wchar_t* stage) {
     return CheckAndLogJavaExceptionImpl(env, stage, true);
 }
 
+bool IsForgeLegacyExitTrappedException(JNIEnv* env) {
+    if (!env || !env->ExceptionCheck()) return false;
+
+    jthrowable throwable = env->ExceptionOccurred();
+    if (!throwable) {
+        env->ExceptionClear();
+        return false;
+    }
+    env->ExceptionClear();
+
+    jclass objectClass = env->FindClass("java/lang/Object");
+    jclass classClass = env->FindClass("java/lang/Class");
+    if (!objectClass || !classClass || env->ExceptionCheck()) {
+        env->ExceptionClear();
+        env->DeleteLocalRef(throwable);
+        return false;
+    }
+
+    jmethodID getClass = env->GetMethodID(
+        objectClass, "getClass", "()Ljava/lang/Class;");
+    jmethodID getName = env->GetMethodID(
+        classClass, "getName", "()Ljava/lang/String;");
+    if (!getClass || !getName || env->ExceptionCheck()) {
+        env->ExceptionClear();
+        env->DeleteLocalRef(throwable);
+        env->DeleteLocalRef(objectClass);
+        env->DeleteLocalRef(classClass);
+        return false;
+    }
+
+    const std::string className = JavaClassName(env, throwable, getClass, getName);
+    const bool trapped = className == "net.minecraftforge.fml.relauncher.FMLSecurityManager$ExitTrappedException";
+    if (trapped) {
+        WriteLog(L"Forge 1.12.2 trapped System.exit after Minecraft shutdown; treating it as a normal legacy Forge exit");
+    }
+
+    env->ExceptionClear();
+    env->DeleteLocalRef(throwable);
+    env->DeleteLocalRef(objectClass);
+    env->DeleteLocalRef(classClass);
+    return trapped;
+}
+
 bool LaunchInvokeJavaMain(JNIEnv* env, const std::wstring& className, const std::vector<std::string>& args) {
     std::wstring classPath = className;
     std::replace(classPath.begin(), classPath.end(), L'.', L'/');
