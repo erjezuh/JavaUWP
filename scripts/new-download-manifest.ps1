@@ -362,10 +362,35 @@ function Convert-LegacyMinecraftArguments([string]$Arguments) {
     }
 
     # Legacy 1.12.x metadata stores the game arguments as one whitespace-delimited
-    # string instead of the modern arguments.game array.
-    return @($Arguments -split '\s+' | Where-Object { $_ })
-}
+    # string. The launcher already supplies these standard values from the active
+    # account/profile, so keeping the metadata placeholders would append a second
+    # copy such as "--username \${auth_player_name}" and can override the real values.
+    $tokens = @($Arguments -split '\s+' | Where-Object { $_ })
+    $standardLauncherArgs = @(
+        "--username",
+        "--version",
+        "--gameDir",
+        "--assetsDir",
+        "--assetIndex",
+        "--uuid",
+        "--accessToken",
+        "--userType"
+    )
 
+    $out = [System.Collections.Generic.List[string]]::new()
+    for ($i = 0; $i -lt $tokens.Count; $i++) {
+        $token = [string]$tokens[$i]
+        if ($standardLauncherArgs -contains $token) {
+            if (($i + 1) -lt $tokens.Count) {
+                $i++
+            }
+            continue
+        }
+        $out.Add($token)
+    }
+
+    return @($out)
+}
 function Convert-JvmArgsForEmbeddedJvm($Values) {
     $out = @()
     for ($i = 0; $i -lt $Values.Count; $i++) {
