@@ -839,6 +839,12 @@ if (-not $SkipVersionCompat) {
         $targetId = "$($row.minecraftVersion)-forge-$lv"
         $outDir = Join-Path $versionModsRoot $targetId
         Ensure-Dir $outDir
+        if ($row.controllerProvider -eq "none") {
+            # MakeAppx does not preserve empty directories. Keep a harmless marker
+            # so the launcher can distinguish an intentionally empty bundled-mods
+            # directory from a missing/unsupported target.
+            Set-Content -Path (Join-Path $outDir ".bandit-empty") -Value "" -NoNewline
+        }
 
         if ($targetId -ne $defaultTargetId) {
             Write-Host "Skipping per-version forge controller mod for ${targetId}: not the selected build target"
