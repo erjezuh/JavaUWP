@@ -837,6 +837,9 @@ if (-not $SkipVersionCompat) {
     foreach ($row in $forgeTargets) {
         $lv = $row.loaderVersion
         $targetId = "$($row.minecraftVersion)-forge-$lv"
+        $outDir = Join-Path $versionModsRoot $targetId
+        Ensure-Dir $outDir
+
         if ($targetId -ne $defaultTargetId) {
             Write-Host "Skipping per-version forge controller mod for ${targetId}: not the selected build target"
             continue
@@ -845,7 +848,6 @@ if (-not $SkipVersionCompat) {
             Write-Host "Skipping per-version forge controller mod for ${targetId}: no bundled controller provider for this target"
             continue
         }
-        $outDir = Join-Path $versionModsRoot $targetId
         Write-Host "Building per-version forge controller mod: $targetId"
         try {
             & (Join-Path $root "controller_mod\forge\build_forge_controller_mod.ps1") `
