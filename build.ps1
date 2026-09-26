@@ -749,15 +749,26 @@ function Copy-CachedVersionManifest {
 }
 
 $defaultDownloadManifest = Join-Path $pkg "download_manifest.tsv"
+# The default manifest must follow the selected build target. A Forge build
+# cannot bootstrap a Fabric profile for the same Minecraft version, especially
+# for legacy versions such as 1.12.2 where Fabric has no matching loader profile.
+$defaultLoader = $ProjectConfig.DefaultLoader.ToLowerInvariant()
+$defaultLoaderVersion = if ($defaultLoader -eq "forge") {
+    if ($LoaderVersion) { $LoaderVersion } else { "14.23.5.2864" }
+} elseif ($defaultLoader -eq "neoforge") {
+    $LoaderVersion
+} else {
+    $ProjectConfig.FabricLoaderVersion
+}
 Copy-CachedVersionManifest `
     -MinecraftVersion $ProjectConfig.MinecraftVersion `
-    -Loader "fabric" `
-    -LoaderVersion $ProjectConfig.FabricLoaderVersion `
+    -Loader $defaultLoader `
+    -LoaderVersion $defaultLoaderVersion `
     -OutputPath $defaultDownloadManifest
 
 $manifestsDir = Join-Path $pkg "runtime\manifests"
 Ensure-Dir $manifestsDir
-$defaultTargetId = "$($ProjectConfig.MinecraftVersion)-fabric-$($ProjectConfig.FabricLoaderVersion)"
+$defaultTargetId = "$($ProjectConfig.MinecraftVersion)-$defaultLoader-$defaultLoaderVersion"
 Copy-Item -Force $defaultDownloadManifest (Join-Path $manifestsDir "$defaultTargetId.tsv")
 Write-Host "Default per-version manifest: $defaultTargetId.tsv"
 
