@@ -1309,15 +1309,23 @@ bool PrepareTargetNativeDir(
     nativeDir = runtimeRoot + L"\\runtime\\natives\\" + SafePathSegment(targetId);
     const std::wstring packageNativesDir = packageDir + L"\\natives";
     const std::wstring markerPath = nativeDir + L"\\.native_manifest";
-    const std::wstring marker = L"nativeVersion=3\nmanifest=" + FileStamp(manifestPath) +
-        L"\nglfw=" + FileStamp(packageNativesDir + L"\\glfw.dll") + L"\n";
+    const bool legacyForge122 = targetId.rfind(L"1.12.2-forge-", 0) == 0;
+    const std::wstring marker = legacyForge122
+        ? (L"nativeVersion=4\nmode=legacy-lwjgl2\nmanifest=" + FileStamp(manifestPath) + L"\n")
+        : (L"nativeVersion=3\nmanifest=" + FileStamp(manifestPath) +
+            L"\nglfw=" + FileStamp(packageNativesDir + L"\\glfw.dll") + L"\n");
 
     std::wstring existingMarker;
-    if (ReadTextFile(markerPath, existingMarker) && existingMarker == marker &&
+    const bool markerReady =
         GetFileAttributesW((nativeDir + L"\\lwjgl.dll").c_str()) != INVALID_FILE_ATTRIBUTES &&
-        GetFileAttributesW((nativeDir + L"\\glfw.dll").c_str()) != INVALID_FILE_ATTRIBUTES &&
-        GetFileAttributesW((nativeDir + L"\\jemalloc.dll").c_str()) != INVALID_FILE_ATTRIBUTES &&
-        GetFileAttributesW((nativeDir + L"\\jnidispatch.dll").c_str()) != INVALID_FILE_ATTRIBUTES) {
+        GetFileAttributesW((nativeDir + L"\\lwjgl64.dll").c_str()) != INVALID_FILE_ATTRIBUTES;
+    if (ReadTextFile(markerPath, existingMarker) && existingMarker == marker &&
+        (legacyForge122
+            ? markerReady
+            : (markerReady &&
+               GetFileAttributesW((nativeDir + L"\\glfw.dll").c_str()) != INVALID_FILE_ATTRIBUTES &&
+               GetFileAttributesW((nativeDir + L"\\jemalloc.dll").c_str()) != INVALID_FILE_ATTRIBUTES &&
+               GetFileAttributesW((nativeDir + L"\\jnidispatch.dll").c_str()) != INVALID_FILE_ATTRIBUTES))) {
         return true;
     }
 
@@ -1340,15 +1348,20 @@ bool PrepareTargetNativeDir(
         extractedJna = ExtractDllsFromJar(jar, nativeDir, true) || extractedJna;
     }
 
-    CopyFileIfNeeded(packageNativesDir + L"\\glfw.dll", nativeDir + L"\\glfw.dll");
+    if (!legacyForge122) {
+        CopyFileIfNeeded(packageNativesDir + L"\\glfw.dll", nativeDir + L"\\glfw.dll");
+    }
 
-    const bool ready =
-        extractedLwjgl &&
-        extractedJna &&
-        GetFileAttributesW((nativeDir + L"\\lwjgl.dll").c_str()) != INVALID_FILE_ATTRIBUTES &&
-        GetFileAttributesW((nativeDir + L"\\glfw.dll").c_str()) != INVALID_FILE_ATTRIBUTES &&
-        GetFileAttributesW((nativeDir + L"\\jemalloc.dll").c_str()) != INVALID_FILE_ATTRIBUTES &&
-        GetFileAttributesW((nativeDir + L"\\jnidispatch.dll").c_str()) != INVALID_FILE_ATTRIBUTES;
+    const bool ready = legacyForge122
+        ? (extractedLwjgl &&
+           GetFileAttributesW((nativeDir + L"\\lwjgl64.dll").c_str()) != INVALID_FILE_ATTRIBUTES &&
+           GetFileAttributesW((nativeDir + L"\\OpenAL64.dll").c_str()) != INVALID_FILE_ATTRIBUTES)
+        : (extractedLwjgl &&
+           extractedJna &&
+           GetFileAttributesW((nativeDir + L"\\lwjgl.dll").c_str()) != INVALID_FILE_ATTRIBUTES &&
+           GetFileAttributesW((nativeDir + L"\\glfw.dll").c_str()) != INVALID_FILE_ATTRIBUTES &&
+           GetFileAttributesW((nativeDir + L"\\jemalloc.dll").c_str()) != INVALID_FILE_ATTRIBUTES &&
+           GetFileAttributesW((nativeDir + L"\\jnidispatch.dll").c_str()) != INVALID_FILE_ATTRIBUTES);
     if (ready) {
         WriteTextFile(markerPath, marker);
     } else {
