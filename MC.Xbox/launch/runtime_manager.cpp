@@ -140,6 +140,7 @@ static void CopyDirectoryContentsIfNeeded(const std::wstring& src, const std::ws
     EnsureDirectoryTree(dst);
     do {
         if (wcscmp(fd.cFileName, L".") == 0 || wcscmp(fd.cFileName, L"..") == 0) continue;
+        if (wcscmp(fd.cFileName, L".bandit-empty") == 0) continue;
         const std::wstring srcPath = src + L"\\" + fd.cFileName;
         const std::wstring dstPath = dst + L"\\" + fd.cFileName;
         if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
