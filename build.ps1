@@ -60,7 +60,12 @@ if ($Loader) { $env:LOADER = $Loader; $env:DEFAULT_MC_LOADER = $Loader }
 elseif ($inheritedLoader) { $env:LOADER = $inheritedLoader; $env:DEFAULT_MC_LOADER = $inheritedLoader }
 if ($LoaderVersion) { $env:LOADER_VERSION = $LoaderVersion }
 elseif ($inheritedLoaderVersion) { $env:LOADER_VERSION = $inheritedLoaderVersion }
-if ($AssetIndex)   { $env:MC_ASSET_INDEX = $AssetIndex }
+if ($AssetIndex) {
+    $env:MC_ASSET_INDEX = $AssetIndex
+} elseif ($McVersion -eq "1.12.2" -or $ProjectConfig.MinecraftVersion -eq "1.12.2") {
+    # Minecraft 1.12.2 uses Mojang asset index "1"; do not inherit the modern 1.21 index.
+    $env:MC_ASSET_INDEX = "1"
+}
 
 . (Join-Path $PSScriptRoot "scripts\common.ps1")
 
@@ -71,7 +76,7 @@ $pkg = Get-ConfigPath "PackageContentDir"
 $buildDir = Get-ConfigPath "BuildDir"
 $outDir = Get-ConfigPath "OutputDir"
 $gameDir = Get-ConfigPath "GameDir"
-$nativesSourceDir = Get-ConfigPath "NativesDir"
+$nativesSourceDir = Join-Path (Get-ConfigPath "CacheDir") ("natives-" + ($ProjectConfig.MinecraftVersion -replace '[^A-Za-z0-9_.-]', '_'))
 $certDir = Get-ConfigPath "CertificateDir"
 $mcBuildDir = Join-Path $buildDir "MC.Xbox"
 $glfwBuildDir = Join-Path $buildDir "glfw_shim"
@@ -641,21 +646,25 @@ function Test-NeoForgeControllerTarget {
     return $Target.loader -eq "neoforge" -and $Target.controllerProvider -eq "neoforge"
 }
 
-$fabricLoaderVersions = @($ProjectConfig.FabricLoaderVersion) + @($fabricTargets | ForEach-Object { $_.loaderVersion }) |
-    Where-Object { $_ } |
-    Select-Object -Unique
-foreach ($loaderVersion in $fabricLoaderVersions) {
-    try {
-        Ensure-FabricLoaderJar -LoaderVersion $loaderVersion
-    } catch {
-        if ($loaderVersion -eq $ProjectConfig.FabricLoaderVersion) {
-            throw
+if ($ProjectConfig.DefaultLoader -eq "fabric") {
+    $fabricLoaderVersions = @($ProjectConfig.FabricLoaderVersion) + @($fabricTargets | ForEach-Object { $_.loaderVersion }) |
+        Where-Object { $_ } |
+        Select-Object -Unique
+    foreach ($loaderVersion in $fabricLoaderVersions) {
+        try {
+            Ensure-FabricLoaderJar -LoaderVersion $loaderVersion
+        } catch {
+            if ($loaderVersion -eq $ProjectConfig.FabricLoaderVersion) {
+                throw
+            }
+            Add-BuildFailure -Stage "Patched Fabric loader" -Target $loaderVersion -Reason $_.Exception.Message
         }
-        Add-BuildFailure -Stage "Patched Fabric loader" -Target $loaderVersion -Reason $_.Exception.Message
     }
-}
-if ($fabricLoaderVersions -contains "0.14.25") {
-    Ensure-TinyRemapperJar -TinyRemapperVersion "0.8.2"
+    if ($fabricLoaderVersions -contains "0.14.25") {
+        Ensure-TinyRemapperJar -TinyRemapperVersion "0.8.2"
+    }
+} else {
+    Write-Host "Skipping Fabric loader/TinyRemapper packaging for $($ProjectConfig.DefaultLoader) target"
 }
 # Bundled mods (compat mod, optionally diagnostics) live under runtime\bundled-mods.
 # App.cpp copies them into LocalState\game\mods on launch.
