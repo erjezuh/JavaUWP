@@ -1358,23 +1358,51 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
     effectiveClassPath = loaderSetup.effectiveClassPath;
     const bool neoForgeStartedWithGameClassPath = loaderSetup.neoForgeStartedWithGameClassPath;
 
-    // The official LWJGL 2.9.4 artifact remains the download-manifest artifact,
-    // but legacy Forge 1.12.2 needs our unsealed WindowsDisplay compatibility copy.
-    // Replace only that exact legacy artifact in the effective classpath; modern
-    // Forge/Fabric/NeoForge paths are left untouched.
+    // The official LWJGL 2.9.4 artifact is still verified against the
+    // download manifest first. Once verification has completed, however, the
+    // legacy Forge path must use our patched WindowsDisplay bytecode even if a
+    // parent classloader resolves the Maven artifact before LaunchWrapper.
+    // Replace the verified local artifact with the packaged compatibility copy.
+    // Modern Forge/Fabric/NeoForge paths never enter this block.
     if (minecraftVersion == L"1.12.2" && loaderId == LoaderId::Forge) {
         const std::wstring legacyLwjglOriginal =
             libraryDir + L"\\org\\lwjgl\\lwjgl\\lwjgl\\2.9.4-nightly-20150209\\lwjgl-2.9.4-nightly-20150209.jar";
         const std::wstring legacyLwjglOverride =
             packageDir + L"\\runtime\\legacy-forge\\lwjgl-2.9.4-uwp.jar";
-        if (GetFileAttributesW(legacyLwjglOverride.c_str()) != INVALID_FILE_ATTRIBUTES) {
-            const std::wstring overrideFwd = fwd(legacyLwjglOverride);
 
-            // Do not depend on one exact path spelling. Loader adjustments may
-            // rebuild the classpath with different slash/case conventions.
-            // Remove every stock LWJGL 2.9.4 artifact and prepend our patched
-            // compatibility jar so LaunchClassLoader cannot resolve the sealed
-            // stock class first.
+        const bool originalExists =
+            GetFileAttributesW(legacyLwjglOriginal.c_str()) != INVALID_FILE_ATTRIBUTES;
+        const bool overrideExists =
+            GetFileAttributesW(legacyLwjglOverride.c_str()) != INVALID_FILE_ATTRIBUTES;
+
+        if (originalExists && overrideExists) {
+            SetLastError(ERROR_SUCCESS);
+            if (CopyFileW(
+                    legacyLwjglOverride.c_str(),
+                    legacyLwjglOriginal.c_str(),
+                    FALSE)) {
+                WriteLogF(
+                    L"Legacy Forge LWJGL compatibility artifact installed at stock path: %s",
+                    legacyLwjglOriginal.c_str());
+            } else {
+                WriteLogF(
+                    L"Legacy Forge LWJGL compatibility artifact copy FAILED: %s -> %s err=%u",
+                    legacyLwjglOverride.c_str(),
+                    legacyLwjglOriginal.c_str(),
+                    GetLastError());
+            }
+        } else {
+            WriteLogF(
+                L"Legacy Forge LWJGL compatibility artifact unavailable: override=%d original=%d",
+                overrideExists ? 1 : 0,
+                originalExists ? 1 : 0);
+        }
+
+        // Keep the classpath deterministic too: remove every stock LWJGL 2.9.4
+        // entry and prepend the compatibility copy. This is a second layer of
+        // protection for LaunchWrapper/URLClassLoader resolution.
+        if (overrideExists) {
+            const std::wstring overrideFwd = fwd(legacyLwjglOverride);
             std::wstring normalizedClassPath = fwd(effectiveClassPath);
             std::wstring rebuiltClassPath;
             size_t removedStock = 0;
@@ -1402,14 +1430,11 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
                 start = end + 1;
             }
 
-            // Put the patched copy first. This is intentionally scoped to the
-            // legacy Forge 1.12.2 target; modern loader classpaths are untouched.
             effectiveClassPath = overrideFwd + L";" + rebuiltClassPath;
-            WriteLogF(L"Legacy Forge LWJGL compatibility jar selected first: %s; removed stock entries=%zu",
+            WriteLogF(
+                L"Legacy Forge LWJGL compatibility jar selected first: %s; removed stock entries=%zu",
                 legacyLwjglOverride.c_str(),
                 removedStock);
-        } else {
-            WriteLogF(L"Legacy Forge LWJGL compatibility jar missing: %s", legacyLwjglOverride.c_str());
         }
     }
 
