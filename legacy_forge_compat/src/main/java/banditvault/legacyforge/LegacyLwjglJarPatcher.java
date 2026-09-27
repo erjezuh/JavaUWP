@@ -10,13 +10,18 @@ import java.util.Enumeration;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
 import java.util.jar.JarOutputStream;
+import org.objectweb.asm.ClassReader;
+import org.objectweb.asm.ClassVisitor;
+import org.objectweb.asm.MethodVisitor;
+import org.objectweb.asm.Opcodes;
 
 public final class LegacyLwjglJarPatcher {
     private static final String TARGET = "org/lwjgl/opengl/WindowsDisplay.class";
 
     public static void main(String[] args) throws Exception {
-        if (args.length != 1) {
-            throw new IllegalArgumentException("Usage: LegacyLwjglJarPatcher <lwjgl-2.9.4.jar>");
+        if (args.length < 1 || args.length > 2) {
+            throw new IllegalArgumentException(
+                "Usage: LegacyLwjglJarPatcher <lwjgl-2.9.4.jar> [patched-WindowsDisplay.class]");
         }
 
         File jarFile = new File(args[0]);
@@ -24,8 +29,13 @@ public final class LegacyLwjglJarPatcher {
             throw new IOException("LWJGL jar missing: " + jarFile);
         }
 
+        File classOutput = args.length == 2 ? new File(args[1]) : null;
+        if (classOutput != null && classOutput.getParentFile() != null) {
+            Files.createDirectories(classOutput.getParentFile().toPath());
+        }
+
         File tempFile = new File(jarFile.getAbsolutePath() + ".uwp-patched.tmp");
-        boolean changed = false;
+        boolean rewriteJar = false;
 
         try (JarFile input = new JarFile(jarFile)) {
             JarEntry targetEntry = input.getJarEntry(TARGET);
@@ -40,17 +50,35 @@ public final class LegacyLwjglJarPatcher {
                 "org.lwjgl.opengl.WindowsDisplay",
                 original);
 
-            // A previously patched jar may still carry the stock sealing manifest.
-            // Rebuild it once more so the compatibility copy is actually unsealed.
-            if (transformed == null || transformed == original) {
-                if (!hadManifest) {
-                    System.out.println("[BanditVault] LWJGL 2 WindowsDisplay already UWP-patched: " + jarFile);
-                    return;
-                }
+            if (transformed == null) {
                 transformed = original;
             }
 
-            changed = true;
+            if (!isPatched(transformed)) {
+                throw new IOException(
+                    "WindowsDisplay patch did not remove native getCurrentDisplayMode().");
+            }
+
+            if (classOutput != null) {
+                Files.write(classOutput.toPath(), transformed);
+                System.out.println(
+                    "[BanditVault] Exported patched WindowsDisplay class: " + classOutput);
+            }
+
+            /*
+             * Rebuild the jar whenever it still has the stock signed/sealing
+             * manifest, or whenever the bytecode actually changed. This also
+             * makes repeated builds deterministic after a previous patch.
+             */
+            rewriteJar = hadManifest || transformed != original;
+
+            if (!rewriteJar) {
+                System.out.println(
+                    "[BanditVault] LWJGL 2 WindowsDisplay already UWP-patched and unsealed: "
+                        + jarFile);
+                return;
+            }
+
             try (JarOutputStream output = new JarOutputStream(new FileOutputStream(tempFile))) {
                 Enumeration<JarEntry> entries = input.entries();
                 while (entries.hasMoreElements()) {
@@ -66,7 +94,6 @@ public final class LegacyLwjglJarPatcher {
                     }
 
                     JarEntry copy = new JarEntry(entryName);
-
                     if (entry.getTime() != -1L) {
                         copy.setTime(entry.getTime());
                     }
@@ -88,7 +115,7 @@ public final class LegacyLwjglJarPatcher {
             }
         }
 
-        if (!changed) {
+        if (!rewriteJar) {
             Files.deleteIfExists(tempFile.toPath());
             return;
         }
@@ -97,7 +124,27 @@ public final class LegacyLwjglJarPatcher {
             tempFile.toPath(),
             jarFile.toPath(),
             StandardCopyOption.REPLACE_EXISTING);
-        System.out.println("[BanditVault] Patched LWJGL 2.9.4 WindowsDisplay for UWP: " + jarFile);
+        System.out.println(
+            "[BanditVault] Patched LWJGL 2.9.4 WindowsDisplay for UWP: " + jarFile);
+    }
+
+    private static boolean isPatched(byte[] bytes) {
+        final boolean[] nativeMethod = new boolean[] {false};
+        ClassReader reader = new ClassReader(bytes);
+        reader.accept(new ClassVisitor(Opcodes.ASM5) {
+            @Override
+            public MethodVisitor visitMethod(
+                int access, String name, String descriptor,
+                String signature, String[] exceptions) {
+                if ("getCurrentDisplayMode".equals(name)
+                    && "()Lorg/lwjgl/opengl/DisplayMode;".equals(descriptor)
+                    && (access & Opcodes.ACC_NATIVE) != 0) {
+                    nativeMethod[0] = true;
+                }
+                return null;
+            }
+        }, ClassReader.SKIP_CODE | ClassReader.SKIP_DEBUG | ClassReader.SKIP_FRAMES);
+        return !nativeMethod[0];
     }
 
     private static byte[] readAll(InputStream input) throws IOException {
