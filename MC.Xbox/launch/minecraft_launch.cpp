@@ -39,6 +39,7 @@
 #include <windows.foundation.h>
 #include <windows.foundation.collections.h>
 #include <windows.ui.core.h>
+#include <appmodel.h>
 
 #include "third_party/miniz/miniz.h"
 
@@ -88,6 +89,59 @@ static HANDLE g_logTailerThreads[8] = {};
 static int g_logTailerThreadCount = 0;
 static HANDLE g_redirectedStdoutHandle = INVALID_HANDLE_VALUE;
 static HANDLE g_redirectedStderrHandle = INVALID_HANDLE_VALUE;
+
+static void LogCurrentPackageGraph() {
+    UINT32 bufferLength = 0;
+    UINT32 count = 0;
+    LONG rc = GetCurrentPackageInfo(
+        PACKAGE_FILTER_HEAD | PACKAGE_FILTER_DIRECT,
+        &bufferLength,
+        nullptr,
+        &count);
+    if (rc != ERROR_INSUFFICIENT_BUFFER || bufferLength == 0) {
+        WriteLogF(L"Package graph query failed rc=%ld bytes=%u count=%u", rc, bufferLength, count);
+        return;
+    }
+
+    std::vector<BYTE> buffer(bufferLength);
+    rc = GetCurrentPackageInfo(
+        PACKAGE_FILTER_HEAD | PACKAGE_FILTER_DIRECT,
+        &bufferLength,
+        buffer.data(),
+        &count);
+    if (rc != ERROR_SUCCESS) {
+        WriteLogF(L"Package graph read failed rc=%ld bytes=%u count=%u", rc, bufferLength, count);
+        return;
+    }
+
+    WriteLogF(L"Package graph entries=%u", count);
+    const PACKAGE_INFO* packages = reinterpret_cast<const PACKAGE_INFO*>(buffer.data());
+    for (UINT32 i = 0; i < count; ++i) {
+        WriteLogF(
+            L"Package graph[%u]: fullName=%s family=%s path=%s flags=0x%08x",
+            i,
+            packages[i].packageFullName ? packages[i].packageFullName : L"<null>",
+            packages[i].packageFamilyName ? packages[i].packageFamilyName : L"<null>",
+            packages[i].path ? packages[i].path : L"<null>",
+            packages[i].flags);
+    }
+
+    const wchar_t* legacyAppCrtNames[] = {
+        L"VCRUNTIME140_APP.dll",
+        L"VCRUNTIME140_1_APP.dll",
+        L"MSVCP140_APP.dll",
+        L"vccorlib140_app.dll"
+    };
+    for (const wchar_t* name : legacyAppCrtNames) {
+        SetLastError(ERROR_SUCCESS);
+        HMODULE module = LoadPackagedLibrary(name, 0);
+        if (module) {
+            WriteLogF(L"Legacy UWP CRT preload OK: %s", name);
+        } else {
+            WriteLogF(L"Legacy UWP CRT preload FAILED: %s err=%u", name, GetLastError());
+        }
+    }
+}
 
 static const ULONGLONG kLogTailerFastWindowMs = 120000;
 static const DWORD kLogTailerFastPollMs = 250;
@@ -1015,6 +1069,8 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
     HMODULE legacyLwjglModule = nullptr;
     HMODULE legacyOpenGlModule = nullptr;
     if (legacyForge122Natives) {
+        LogCurrentPackageGraph();
+
         // LWJGL 2.9.4 statically imports OPENGL32.dll. The Java-side
         // org.lwjgl.opengl.libname override is too late for Windows to use
         // when resolving lwjgl64.dll. Copy the complete Mesa runtime beside
@@ -1053,6 +1109,25 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
             // for that copy so Windows resolves its package-local dependency graph
             // (libgallium_wgl.dll, dxil.dll, z-1.dll, etc.) as packaged DLLs.
             if (GetFileAttributesW((lwjglNativeDir + L"\\opengl32.dll").c_str()) != INVALID_FILE_ATTRIBUTES) {
+                const std::wstring localMesaDir = lwjglNativeDir;
+                const wchar_t* localMesaChain[] = {
+                    L"z-1.dll",
+                    L"libgallium_wgl.dll",
+                    L"opengl32.dll"
+                };
+                for (const wchar_t* mesaName : localMesaChain) {
+                    const std::wstring mesaPath = localMesaDir + L"\\" + mesaName;
+                    SetLastError(ERROR_SUCCESS);
+                    HMODULE mesaModule = LoadLibraryExW(
+                        mesaPath.c_str(), nullptr,
+                        LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+                    if (mesaModule) {
+                        WriteLogF(L"Legacy Mesa local preload OK: %s", mesaName);
+                    } else {
+                        WriteLogF(L"Legacy Mesa local preload FAILED: %s err=%u", mesaName, GetLastError());
+                        break;
+                    }
+                }
                 legacyOpenGlModule = LoadLibraryExW(
                     (lwjglNativeDir + L"\\opengl32.dll").c_str(), nullptr,
                     LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
