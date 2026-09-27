@@ -32,6 +32,9 @@ $javac = Join-Path $javaHome "bin\javac.exe"
 $jarExe = Join-Path $javaHome "bin\jar.exe"
 if (-not (Test-Path $javac)) { throw "javac missing from Java home: $javaHome" }
 if (-not (Test-Path $jarExe)) { throw "jar.exe missing from Java home: $javaHome" }
+$javaExe = Join-Path $javaHome "bin\java.exe"
+if (-not (Test-Path $javaExe)) { throw "java.exe missing from Java home: $javaHome" }
+
 
 $buildRoot = Join-Path (Get-ConfigPath "BuildDir") "legacy_forge_compat\$MinecraftVersion-$ForgeVersion"
 $classesDir = Join-Path $buildRoot "classes"
@@ -52,8 +55,6 @@ if (-not (Test-BuildStampCurrent -StampPath $stampPath -Stamp $stamp -RequiredOu
 
     $cp = @($forgeJar, $launchwrapperJar, $asmJar) -join ";"
     & $javac --release 8 -cp $cp -d $classesDir $sources
-    $javaExe = Join-Path $javaHome "bin\java.exe"
-    if (-not (Test-Path $javaExe)) { throw "java.exe missing from Java home: $javaHome" }
     if ($LASTEXITCODE -ne 0) { throw "Legacy Forge compat coremod compile failed." }
 
     Copy-Item -Recurse "$resourceDir\*" $classesDir -Force
