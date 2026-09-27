@@ -21,6 +21,7 @@ public final class LegacyUwpGlfwBridge {
         void glfwSwapBuffers(Pointer window);
         void glfwSwapInterval(int interval);
         int glfwWindowShouldClose(Pointer window);
+        Pointer glfwGetCurrentContext();
         void glfwSetWindowShouldClose(Pointer window, int value);
         void glfwSetWindowTitle(Pointer window, String title);
         void glfwPollEvents();
@@ -51,7 +52,7 @@ public final class LegacyUwpGlfwBridge {
                 title != null ? title : "Minecraft",
                 null,
                 null);
-            if (window == null || Pointer.NULL.equals(window)) {
+            if (window == null) {
                 throw new LWJGLException("UWP GLFW shim glfwCreateWindow() failed");
             }
         }
@@ -63,7 +64,7 @@ public final class LegacyUwpGlfwBridge {
     }
 
     public static synchronized void destroyWindow() {
-        if (library != null && window != null && !Pointer.NULL.equals(window)) {
+        if (library != null && window != null) {
             library.glfwDestroyWindow(window);
         }
         window = null;
@@ -71,7 +72,7 @@ public final class LegacyUwpGlfwBridge {
 
     public static synchronized void makeCurrent() throws LWJGLException {
         load();
-        if (window == null || Pointer.NULL.equals(window)) {
+        if (window == null) {
             throw new LWJGLException("UWP GLFW window has not been created");
         }
         library.glfwMakeContextCurrent(window);
@@ -86,11 +87,11 @@ public final class LegacyUwpGlfwBridge {
     public static synchronized boolean isCurrent() {
         // The shim itself tracks the owning thread. Calling glfwMakeContextCurrent
         // is deliberately avoided here because querying it must not change state.
-        return window != null && !Pointer.NULL.equals(window);
+        return library != null && window != null && library.glfwGetCurrentContext() != null;
     }
 
     public static synchronized void swapBuffers() throws LWJGLException {
-        if (library == null || window == null || Pointer.NULL.equals(window)) {
+        if (library == null || window == null) {
             throw new LWJGLException("UWP GLFW window is unavailable");
         }
         library.glfwSwapBuffers(window);
@@ -116,13 +117,13 @@ public final class LegacyUwpGlfwBridge {
     }
 
     public static synchronized void setShouldClose(boolean close) {
-        if (library != null && window != null && !Pointer.NULL.equals(window)) {
+        if (library != null && window != null) {
             library.glfwSetWindowShouldClose(window, close ? 1 : 0);
         }
     }
 
     public static synchronized void setTitle(String title) {
-        if (library != null && window != null && !Pointer.NULL.equals(window)) {
+        if (library != null && window != null) {
             library.glfwSetWindowTitle(window, title != null ? title : "Minecraft");
         }
     }
