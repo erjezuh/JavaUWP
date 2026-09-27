@@ -69,7 +69,7 @@ public final class LegacyZipFsTransformer implements net.minecraft.launchwrapper
                         "(II)V",
                         false);
                     mv.visitInsn(Opcodes.ARETURN);
-                    mv.visitMaxs(3, 0);
+                    mv.visitMaxs(4, 0);
                     mv.visitEnd();
                     return null;
                 }
