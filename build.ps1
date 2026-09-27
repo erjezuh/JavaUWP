@@ -1589,12 +1589,8 @@ try {
     Copy-PackagedJre -JavaHome $jre8Src -PackageRelativeDir "jre8" -SecurityPropertiesPath $xboxSecurityProperties
     Write-Host "Packaged Java 8 runtime for Forge 1.12.2: $jre8Src"
     if ($isLegacyForge122Build) {
-        $jdk8Src = $jre8Src
-        if (-not (Test-Path (Join-Path $jdk8Src "bin\javac.exe"))) {
-            $jdk8Src = Resolve-JavaHomeExact -MajorVersion 8
-        }
         $legacyZipfsPatchOutput = Join-Path $pkg "java-zipfs-realpath-8.jar"
-        Build-Java8ZipfsRealpathPatch -JavaHome $jdk8Src -OutputJar $legacyZipfsPatchOutput -WorkName "java8_zipfs_realpath_patch"
+        Build-Java8ZipfsRealpathPatch -JavaHome $jre8Src -OutputJar $legacyZipfsPatchOutput -WorkName "java8_zipfs_realpath_patch"
         if (-not (Test-Path $legacyZipfsPatchOutput)) {
             throw "Java 8 ZipFS realpath patch was not produced: $legacyZipfsPatchOutput"
         }
