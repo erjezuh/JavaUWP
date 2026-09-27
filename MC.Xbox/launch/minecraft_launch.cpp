@@ -1574,6 +1574,14 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
         WriteLog(L"Java desktop UWP AWT module patch disabled for legacy Java 8 runtime");
     }
     vmOptionStorage.push_back("-Djava.home=" + w2a(fwd(jreDir)));
+    if (legacyJava8 && loaderId == LoaderId::Forge && minecraftVersion == L"1.12.2") {
+        // Java 8's Windows TimeZone native lookup consults legacy Win32/registry
+        // APIs. In an AppContainer this path can crash in ntdll with
+        // EXCEPTION_INVALID_HANDLE before Minecraft startup. Supplying a valid
+        // Java timezone ID bypasses getSystemTimeZoneID() entirely.
+        vmOptionStorage.push_back("-Duser.timezone=Europe/Madrid");
+        WriteLog(L"Forge 1.12.2 legacy path: forcing Java timezone to Europe/Madrid to bypass native Windows timezone lookup");
+    }
     const std::wstring javaSecurityDir = legacyJava8
         ? jreDir + L"\\lib\\security"
         : jreDir + L"\\conf\\security";
