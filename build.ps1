@@ -1306,11 +1306,36 @@ public final class Java8ZipFsBytecodePatcher {
 
         if (!patched[0]) throw new IOException("ZipFileSystemProvider had no Path.toRealPath call to patch.");
 
-        try (JarOutputStream out = new JarOutputStream(new FileOutputStream(outputJar))) {
-            JarEntry provider = new JarEntry(TARGET);
-            out.putNextEntry(provider);
-            out.write(writer.toByteArray());
-            out.closeEntry();
+        /*
+         * The output jar is injected with -Xbootclasspath/p:, so it must contain the
+         * COMPLETE com.sun.nio.zipfs package. A provider-only jar splits the package
+         * across loaders: the patched provider loads from the bootstrap loader while
+         * ZipFileSystem & co. stay in jre/lib/ext/zipfs.jar (ext loader), and the
+         * bootstrap loader cannot resolve child-loader classes. That produced
+         * NoClassDefFoundError: com/sun/nio/zipfs/ZipFileSystem at runtime.
+         */
+        try (JarOutputStream out = new JarOutputStream(new FileOutputStream(outputJar));
+             JarFile jar = new JarFile(inputJar)) {
+            java.util.Enumeration<JarEntry> entries = jar.entries();
+            while (entries.hasMoreElements()) {
+                JarEntry entry = entries.nextElement();
+                final String name = entry.getName();
+                if (name.equals(HELPER)) continue;
+                if (name.startsWith("META-INF/") && (name.endsWith(".SF") || name.endsWith(".RSA") ||
+                        name.endsWith(".DSA") || name.startsWith("META-INF/SIG-"))) {
+                    // stale jar signatures would fail verification after patching
+                    continue;
+                }
+                out.putNextEntry(new JarEntry(name));
+                if (!entry.isDirectory()) {
+                    if (name.equals(TARGET)) {
+                        out.write(writer.toByteArray());
+                    } else {
+                        out.write(readAll(jar.getInputStream(entry)));
+                    }
+                }
+                out.closeEntry();
+            }
 
             JarEntry helper = new JarEntry(HELPER);
             out.putNextEntry(helper);
