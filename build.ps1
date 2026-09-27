@@ -60,6 +60,21 @@ if ($Loader) { $env:LOADER = $Loader; $env:DEFAULT_MC_LOADER = $Loader }
 elseif ($inheritedLoader) { $env:LOADER = $inheritedLoader; $env:DEFAULT_MC_LOADER = $inheritedLoader }
 if ($LoaderVersion) { $env:LOADER_VERSION = $LoaderVersion }
 elseif ($inheritedLoaderVersion) { $env:LOADER_VERSION = $inheritedLoaderVersion }
+
+# Forge 1.12.2 uses a numeric Maven loader version. Strip an accidental
+# trailing "git" marker before config is loaded so every downstream step sees
+# the same canonical version.
+$effectiveMcForLoader = if ($McVersion) { $McVersion } elseif ($inheritedMcVersion) { $inheritedMcVersion } else { "" }
+$effectiveLoaderForLoader = if ($Loader) { $Loader } elseif ($inheritedLoader) { $inheritedLoader } else { "" }
+if ($effectiveMcForLoader -eq "1.12.2" -and $effectiveLoaderForLoader.ToLowerInvariant() -eq "forge") {
+    $canonicalForgeLoaderVersion = ([string]$env:LOADER_VERSION).Trim() -replace "(?i)git$", ""
+    if ($canonicalForgeLoaderVersion -ne $env:LOADER_VERSION) {
+        Write-Warning "Normalizing legacy Forge loader version '$env:LOADER_VERSION' to '$canonicalForgeLoaderVersion'."
+        $env:LOADER_VERSION = $canonicalForgeLoaderVersion
+        $LoaderVersion = $canonicalForgeLoaderVersion
+    }
+}
+
 if ($AssetIndex) {
     $env:MC_ASSET_INDEX = $AssetIndex
 } elseif ($McVersion -eq "1.12.2" -or $ProjectConfig.MinecraftVersion -eq "1.12.2") {
