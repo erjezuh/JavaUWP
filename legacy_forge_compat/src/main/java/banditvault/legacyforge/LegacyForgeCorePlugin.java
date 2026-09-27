@@ -57,8 +57,10 @@ public final class LegacyForgeCorePlugin implements IFMLLoadingPlugin {
                 @SuppressWarnings("rawtypes")
                 Set exclusions = (Set) value;
                 exclusions.remove("org.lwjgl.");
+                System.err.println("[BanditVault] Removed LaunchWrapper org.lwjgl class-loader exclusion for legacy UWP.");
             }
         } catch (Throwable ignored) {
+            System.err.println("[BanditVault] Could not remove LaunchWrapper org.lwjgl exclusion: " + ignored);
             /*
              * If the field layout differs, leave LaunchWrapper untouched rather
              * than breaking the entire legacy launch. The transformer remains
