@@ -1434,7 +1434,7 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
                 if (CopyFileW(
                         legacyLaunchClassLoaderClass.c_str(),
                         launcherLaunchClassLoaderClass.c_str(),
-                        FALSE)) {
+                        TRUE)) {
                     WriteLogF(
                         L"Legacy patched LaunchClassLoader installed in launcher-overrides: %s",
                         launcherLaunchClassLoaderClass.c_str());
@@ -1456,7 +1456,7 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
                 if (CopyFileW(
                         legacyWindowsDisplayClass.c_str(),
                         launcherWindowsDisplayClass.c_str(),
-                        FALSE)) {
+                        TRUE)) {
                     WriteLogF(
                         L"Legacy Forge patched WindowsDisplay class installed in launcher-overrides: %s",
                         launcherWindowsDisplayClass.c_str());
