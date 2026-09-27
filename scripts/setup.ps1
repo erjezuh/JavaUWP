@@ -287,13 +287,14 @@ function Ensure-LegacyVc2010Runtime {
 
     $extractDir = Join-Path (Get-ConfigPath "CacheDir") "legacy-vc2010-extracted"
     Ensure-Dir $extractDir
-    $minimumMsi = Join-Path $extractDir "vc_runtimeMinimum_x64.msi"
+    # VC++ 2010 uses vc_red.msi (the newer vc_runtimeMinimum_x64.msi name
+    # belongs to later redistributable generations).
+    $runtimeMsi = Join-Path $extractDir "vc_red.msi"
     $adminDir = Join-Path $extractDir "admin"
 
-    # /x extracts the redistributable wrapper and MSI, but the runtime DLLs are
-    # normally embedded in the MSI/CAB payload. Extract the MSI administratively
-    # so the actual DLL files are available without installing VC++ on the host.
-    $needExtract = -not (Test-Path $minimumMsi)
+    # /x extracts the redistributable wrapper and MSI. Extract the MSI
+    # administratively so the runtime DLLs are available without installing VC++.
+    $needExtract = -not (Test-Path $runtimeMsi)
     if ($needExtract) {
         Remove-Item -LiteralPath $extractDir -Recurse -Force -ErrorAction SilentlyContinue
         Ensure-Dir $extractDir
@@ -303,14 +304,13 @@ function Ensure-LegacyVc2010Runtime {
         }
     }
 
-    if (-not (Test-Path $minimumMsi)) {
-        $minimumMsi = Get-ChildItem -LiteralPath $extractDir -Recurse -Filter "*.msi" -File -ErrorAction SilentlyContinue |
-            Where-Object { $_.Name -match "Minimum|Runtime" -and $_.Name -match "x64|64" } |
+    if (-not (Test-Path $runtimeMsi)) {
+        $runtimeMsi = Get-ChildItem -LiteralPath $extractDir -Recurse -Filter "vc_red.msi" -File -ErrorAction SilentlyContinue |
             Select-Object -First 1 -ExpandProperty FullName
     }
 
-    if (-not $minimumMsi -or -not (Test-Path $minimumMsi)) {
-        throw "VC++ 2010 redistributable was extracted, but its x64 runtime MSI could not be found."
+    if (-not $runtimeMsi -or -not (Test-Path $runtimeMsi)) {
+        throw "VC++ 2010 redistributable was extracted, but vc_red.msi could not be found."
     }
 
     $dlls = @(Get-ChildItem -LiteralPath $extractDir -Recurse -File -ErrorAction SilentlyContinue |
@@ -319,7 +319,7 @@ function Ensure-LegacyVc2010Runtime {
         Remove-Item -LiteralPath $adminDir -Recurse -Force -ErrorAction SilentlyContinue
         Ensure-Dir $adminDir
 
-        $proc = Start-Process -FilePath (Join-Path $env:WINDIR "System32\msiexec.exe") -ArgumentList @("/a", $minimumMsi, "TARGETDIR=$adminDir", "/qn", "/norestart") -Wait -PassThru -WindowStyle Hidden
+        $proc = Start-Process -FilePath (Join-Path $env:WINDIR "System32\msiexec.exe") -ArgumentList @("/a", $runtimeMsi, "TARGETDIR=$adminDir", "/qn", "/norestart") -Wait -PassThru -WindowStyle Hidden
         if ($proc.ExitCode -ne 0) {
             throw "VC++ 2010 x64 MSI administrative extraction failed with exit code $($proc.ExitCode)."
         }
