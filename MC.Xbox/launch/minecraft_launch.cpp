@@ -1019,9 +1019,23 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
         // org.lwjgl.opengl.libname override is too late for Windows to use
         // when resolving lwjgl64.dll, so preload the selected Mesa OpenGL DLL.
         if (GetFileAttributesW(selectedOpenGl.c_str()) != INVALID_FILE_ATTRIBUTES) {
-            legacyOpenGlModule = LoadLibraryExW(
-                selectedOpenGl.c_str(), nullptr,
-                LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+            // The Mesa DLL is inside the MSIX package. Prefer the packaged loader
+            // for that copy so Windows resolves its package-local dependency graph
+            // (libgallium_wgl.dll, dxil.dll, z-1.dll, etc.) as packaged DLLs.
+            if (selectedOpenGl.size() > packageDir.size() &&
+                selectedOpenGl.compare(0, packageDir.size(), packageDir) == 0) {
+                std::wstring packageRelativeOpenGl = selectedOpenGl.substr(packageDir.size());
+                while (!packageRelativeOpenGl.empty() &&
+                       (packageRelativeOpenGl.front() == L'\\' || packageRelativeOpenGl.front() == L'/')) {
+                    packageRelativeOpenGl.erase(packageRelativeOpenGl.begin());
+                }
+                legacyOpenGlModule = LoadPackagedLibrary(packageRelativeOpenGl.c_str(), 0);
+            }
+            if (!legacyOpenGlModule) {
+                legacyOpenGlModule = LoadLibraryExW(
+                    selectedOpenGl.c_str(), nullptr,
+                    LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+            }
             if (legacyOpenGlModule) {
                 WriteLogF(L"Legacy LWJGL OpenGL preload OK: %s", selectedOpenGl.c_str());
             } else {
