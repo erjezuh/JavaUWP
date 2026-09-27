@@ -287,14 +287,13 @@ function Ensure-LegacyVc2010Runtime {
 
     $extractDir = Join-Path (Get-ConfigPath "CacheDir") "legacy-vc2010-extracted"
     Ensure-Dir $extractDir
-    # VC++ 2010 uses vc_red.msi (the newer vc_runtimeMinimum_x64.msi name
-    # belongs to later redistributable generations).
-    $runtimeMsi = Join-Path $extractDir "vc_red.msi"
-    $adminDir = Join-Path $extractDir "admin"
 
-    # /x extracts the redistributable wrapper and MSI. Extract the MSI
-    # administratively so the runtime DLLs are available without installing VC++.
-    $needExtract = -not (Test-Path $runtimeMsi)
+    # VC++ 2010 uses vc_red.msi + vc_red.cab. Do not install the MSI:
+    # the CAB contains the runtime payload and can be extracted with expand.exe.
+    $runtimeMsi = Join-Path $extractDir "vc_red.msi"
+    $runtimeCab = Join-Path $extractDir "vc_red.cab"
+
+    $needExtract = -not ((Test-Path $runtimeMsi) -and (Test-Path $runtimeCab))
     if ($needExtract) {
         Remove-Item -LiteralPath $extractDir -Recurse -Force -ErrorAction SilentlyContinue
         Ensure-Dir $extractDir
@@ -304,44 +303,51 @@ function Ensure-LegacyVc2010Runtime {
         }
     }
 
-    if (-not (Test-Path $runtimeMsi)) {
-        $runtimeMsi = Get-ChildItem -LiteralPath $extractDir -Recurse -Filter "vc_red.msi" -File -ErrorAction SilentlyContinue |
+    if (-not (Test-Path $runtimeCab)) {
+        $runtimeCab = Get-ChildItem -LiteralPath $extractDir -Recurse -Filter "vc_red.cab" -File -ErrorAction SilentlyContinue |
             Select-Object -First 1 -ExpandProperty FullName
     }
 
-    if (-not $runtimeMsi -or -not (Test-Path $runtimeMsi)) {
-        throw "VC++ 2010 redistributable was extracted, but vc_red.msi could not be found."
+    if (-not $runtimeCab -or -not (Test-Path $runtimeCab)) {
+        throw "VC++ 2010 redistributable was extracted, but vc_red.cab could not be found."
     }
 
-    $dlls = @(Get-ChildItem -LiteralPath $extractDir -Recurse -File -ErrorAction SilentlyContinue |
-        Where-Object { $_.Name -in @("msvcr100.dll", "msvcp100.dll") })
-    if ($dlls.Count -lt 2) {
-        Remove-Item -LiteralPath $adminDir -Recurse -Force -ErrorAction SilentlyContinue
-        Ensure-Dir $adminDir
+    $cabDir = Join-Path (Get-ConfigPath "CacheDir") "legacy-vc2010-cab"
+    Remove-Item -LiteralPath $cabDir -Recurse -Force -ErrorAction SilentlyContinue
+    Ensure-Dir $cabDir
 
-        $proc = Start-Process -FilePath (Join-Path $env:WINDIR "System32\msiexec.exe") -ArgumentList @("/a", $runtimeMsi, "TARGETDIR=$adminDir", "/qn", "/norestart") -Wait -PassThru -WindowStyle Hidden
-        if ($proc.ExitCode -ne 0) {
-            throw "VC++ 2010 x64 MSI administrative extraction failed with exit code $($proc.ExitCode)."
+    $expandExe = Join-Path $env:WINDIR "System32\expand.exe"
+    $proc = Start-Process -FilePath $expandExe -ArgumentList @("-F:*", $runtimeCab, $cabDir) -Wait -PassThru -WindowStyle Hidden
+    if ($proc.ExitCode -ne 0) {
+        throw "VC++ 2010 CAB extraction failed with exit code $($proc.ExitCode)."
+    }
+
+    # MSI/CAB internal names are F_CENTRAL_msvcr100_x64 and
+    # F_CENTRAL_msvcp100_x64. They are PE DLL payloads without .dll.
+    $runtimeFiles = @{
+        "msvcr100.dll" = Join-Path $cabDir "F_CENTRAL_msvcr100_x64"
+        "msvcp100.dll" = Join-Path $cabDir "F_CENTRAL_msvcp100_x64"
+    }
+
+    foreach ($dllName in $runtimeFiles.Keys) {
+        if (-not (Test-Path $runtimeFiles[$dllName])) {
+            throw "VC++ 2010 CAB payload is missing $dllName."
         }
 
-        $dlls = @(Get-ChildItem -LiteralPath $adminDir -Recurse -File -ErrorAction SilentlyContinue |
-            Where-Object { $_.Name -in @("msvcr100.dll", "msvcp100.dll") })
-    }
-
-    if ($dlls.Count -lt 2) {
-        throw "VC++ 2010 x64 runtime extraction completed but msvcr100.dll/msvcp100.dll were not found in the MSI payload."
+        $bytes = [System.IO.File]::ReadAllBytes($runtimeFiles[$dllName])
+        if ($bytes.Length -lt 2 -or $bytes[0] -ne 0x4D -or $bytes[1] -ne 0x5A) {
+            throw "VC++ 2010 CAB payload for $dllName is not a valid PE file."
+        }
     }
 
     Remove-Item -LiteralPath $vcDir -Recurse -Force -ErrorAction SilentlyContinue
     Ensure-Dir $vcDir
-    foreach ($dllName in @("msvcr100.dll", "msvcp100.dll")) {
-        $source = $dlls | Where-Object { $_.Name -eq $dllName } | Select-Object -First 1
-        Copy-Item -LiteralPath $source.FullName -Destination (Join-Path $vcDir $dllName) -Force
+    foreach ($dllName in $runtimeFiles.Keys) {
+        Copy-Item -LiteralPath $runtimeFiles[$dllName] -Destination (Join-Path $vcDir $dllName) -Force
     }
     Set-Content -LiteralPath $marker -Value "Microsoft VC++ 2010 x64" -NoNewline
     Write-Host "Legacy VC++ 2010 x64 runtime cache ready: $vcDir"
 }
-
 Write-Host "=== Preparing non-Fabric target: $version + $Loader $LoaderVersion ==="
 if ($Loader -eq "forge" -and $version -eq "1.12.2") {
     $forgeVersion = if ($LoaderVersion.StartsWith("$version-")) { $LoaderVersion } else { "$version-$LoaderVersion" }
