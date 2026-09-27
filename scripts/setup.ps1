@@ -355,6 +355,24 @@ if ($Loader -eq "forge" -and $version -eq "1.12.2") {
     $forgeUrl = "https://maven.minecraftforge.net/net/minecraftforge/forge/$forgeVersion/forge-$forgeVersion-universal.jar"
     Save-RemoteFile -Uri $forgeUrl -Path $forgeJar
 
+    # Forge 1.12.2 expects these legacy runtime libraries, and the Xbox
+    # compatibility coremod also compiles against the same artifacts.
+    $legacyLaunchwrapperJar = Join-Path $gameDir ("libraries\net\minecraft\launchwrapper\1.12\launchwrapper-1.12.jar")
+    $legacyLaunchwrapperUrl = "https://libraries.minecraft.net/net/minecraft/launchwrapper/1.12/launchwrapper-1.12.jar"
+    Save-RemoteFile -Uri $legacyLaunchwrapperUrl -Path $legacyLaunchwrapperJar
+
+    $legacyAsmJar = Join-Path $gameDir ("libraries\org\ow2\asm\asm-debug-all\5.2\asm-debug-all-5.2.jar")
+    $legacyAsmUrl = "https://repo1.maven.org/maven2/org/ow2/asm/asm-debug-all/5.2/asm-debug-all-5.2.jar"
+    Save-RemoteFile -Uri $legacyAsmUrl -Path $legacyAsmJar
+
+    if (-not (Test-Path $legacyLaunchwrapperJar)) {
+        throw "LaunchWrapper 1.12 could not be prepared: $legacyLaunchwrapperJar"
+    }
+    if (-not (Test-Path $legacyAsmJar)) {
+        throw "ASM 5.2 could not be prepared: $legacyAsmJar"
+    }
+    Write-Host "Legacy Forge libraries ready: LaunchWrapper 1.12 + ASM 5.2"
+
     Ensure-LegacyVc2010Runtime
 
     Write-Host "=== Downloading asset index ==="
