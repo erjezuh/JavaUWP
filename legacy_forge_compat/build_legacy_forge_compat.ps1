@@ -84,12 +84,6 @@ if (-not (Test-BuildStampCurrent -StampPath $stampPath -Stamp $stamp -RequiredOu
     Set-BuildStamp -StampPath $stampPath -Stamp $stamp
 }
 
-# Patch LaunchClassLoader itself so the org.lwjgl. class-loader exclusion is gone
-# from the moment the loader is constructed. This runs before Forge coremod
-# injection and avoids racing any early LWJGL reference.
-& $javaExe -cp "$classesDir;$asmJar;$launchwrapperJar" banditvault.legacyforge.LegacyLaunchClassLoaderPatcher $launchwrapperJar $legacyLaunchClassLoaderClass
-if ($LASTEXITCODE -ne 0) { throw "Legacy LaunchClassLoader patch failed." }
-
 # The legacy UWP implementation replaces LWJGL's Win32 display/context classes
 # from launcher-overrides. Keep the stock Maven LWJGL artifact untouched.
 $overrideClasses = @(
