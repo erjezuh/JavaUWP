@@ -1214,7 +1214,7 @@ function Build-Java8ZipfsRealpathPatch {
     }
 
     Remove-Item -Recurse -Force $workDir -ErrorAction SilentlyContinue
-    Ensure-Dir $srcDir, $classesDir, $patcherClassesDir
+    Ensure-Dir $srcDir, (Join-Path $srcDir "banditvault\legacyforge"), $classesDir, $patcherClassesDir
 
     $helper = @'
 package banditvault.legacyforge;
