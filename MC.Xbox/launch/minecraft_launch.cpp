@@ -1476,6 +1476,20 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
             bridgeInnerReady ? 1 : 0,
             glfwReady ? 1 : 0,
             mouseSupportReady ? 1 : 0);
+
+        // Launch is loaded by the JVM application class loader before the
+        // Forge LaunchClassLoader instance exists. Put the patched LaunchWrapper
+        // jar itself first so both Launch and LaunchClassLoader are guaranteed to
+        // come from our UWP-compatible copy, regardless of classloader directory
+        // precedence.
+        if (!launchClassLoaderReady) {
+            WriteLog(L"Legacy patched LaunchClassLoader class is missing; aborting legacy JVM setup");
+            return false;
+        }
+        effectiveClassPath = legacyRuntimeDir + L"\\launchwrapper-1.12-uwp.jar;" + effectiveClassPath;
+        WriteLogF(L"Legacy patched LaunchWrapper jar prepended to JVM classpath: %s",
+            (legacyRuntimeDir + L"\\launchwrapper-1.12-uwp.jar").c_str());
+        WriteTextFile(launcherLogDir + L"\\java_classpath_final.txt", effectiveClassPath);
     }
 
     std::vector<std::string> vmOptionStorage;
