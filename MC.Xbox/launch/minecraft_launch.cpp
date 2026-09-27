@@ -1435,7 +1435,10 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
     const std::wstring javaSecurityDir = legacyJava8
         ? jreDir + L"\\lib\\security"
         : jreDir + L"\\conf\\security";
-    vmOptionStorage.push_back("-Djava.security.properties=" + w2a(fwd(javaSecurityDir + L"\\xbox.properties")));\n    if (legacyJava8) {\n        WriteLog(L"Java security properties loaded as an additive override for legacy Java 8");\n    }
+    vmOptionStorage.push_back("-Djava.security.properties=" + w2a(fwd(javaSecurityDir + L"\\xbox.properties")));
+    if (legacyJava8) {
+        WriteLog(L"Java security properties loaded as an additive override for legacy Java 8");
+    }
     vmOptionStorage.push_back("-Djava.security.egd=file:/dev/urandom");
     vmOptionStorage.push_back("-Djava.awt.headless=true");
     vmOptionStorage.push_back("-Dbanditvault.awt.skipDesktopProperties=true");
