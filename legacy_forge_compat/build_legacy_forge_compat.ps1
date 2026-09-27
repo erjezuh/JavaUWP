@@ -72,7 +72,7 @@ if (-not (Test-BuildStampCurrent -StampPath $stampPath -Stamp $stamp -RequiredOu
     Remove-Item -Recurse -Force $buildRoot -ErrorAction SilentlyContinue
     Ensure-Dir $classesDir
 
-    $cp = @($forgeJar, $launchwrapperJar, $asmJar, $jnaJar) -join ";"
+    $cp = @($forgeJar, $launchwrapperJar, $asmJar, $jnaJar, $lwjglJar) -join ";"
     & $javac --release 8 -cp $cp -d $classesDir $sources
     if ($LASTEXITCODE -ne 0) { throw "Legacy Forge compat coremod compile failed." }
 
