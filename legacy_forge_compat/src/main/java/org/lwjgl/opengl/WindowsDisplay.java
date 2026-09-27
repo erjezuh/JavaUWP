@@ -282,26 +282,21 @@ final class WindowsDisplay implements DisplayImplementation {
 
     @Override
     public void pollMouse(IntBuffer coordBuffer, ByteBuffer buttons) {
-        if (coordBuffer != null && coordBuffer.capacity() >= 2) {
+        if (coordBuffer != null && coordBuffer.capacity() >= 3) {
             coordBuffer.put(0, 0);
             coordBuffer.put(1, 0);
+            coordBuffer.put(2, 0);
         }
         if (buttons != null) {
-            while (buttons.hasRemaining()) {
-                buttons.put((byte)0);
+            for (int i = 0; i < buttons.capacity(); i++) {
+                buttons.put(i, (byte)0);
             }
-            buttons.rewind();
         }
     }
 
     @Override
     public void readMouse(ByteBuffer buffer) {
-        if (buffer != null) {
-            while (buffer.hasRemaining()) {
-                buffer.put((byte)0);
-            }
-            buffer.flip();
-        }
+        // No buffered events yet. Leave the event buffer empty.
     }
 
     @Override
