@@ -287,7 +287,13 @@ function Ensure-LegacyVc2010Runtime {
 
     $extractDir = Join-Path (Get-ConfigPath "CacheDir") "legacy-vc2010-extracted"
     Ensure-Dir $extractDir
-    $needExtract = -not (Test-Path (Join-Path $extractDir "vc_runtimeMinimum_x64.msi"))
+    $minimumMsi = Join-Path $extractDir "vc_runtimeMinimum_x64.msi"
+    $adminDir = Join-Path $extractDir "admin"
+
+    # /x extracts the redistributable wrapper and MSI, but the runtime DLLs are
+    # normally embedded in the MSI/CAB payload. Extract the MSI administratively
+    # so the actual DLL files are available without installing VC++ on the host.
+    $needExtract = -not (Test-Path $minimumMsi)
     if ($needExtract) {
         Remove-Item -LiteralPath $extractDir -Recurse -Force -ErrorAction SilentlyContinue
         Ensure-Dir $extractDir
@@ -297,10 +303,33 @@ function Ensure-LegacyVc2010Runtime {
         }
     }
 
+    if (-not (Test-Path $minimumMsi)) {
+        $minimumMsi = Get-ChildItem -LiteralPath $extractDir -Recurse -Filter "*.msi" -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -match "Minimum|Runtime" -and $_.Name -match "x64|64" } |
+            Select-Object -First 1 -ExpandProperty FullName
+    }
+
+    if (-not $minimumMsi -or -not (Test-Path $minimumMsi)) {
+        throw "VC++ 2010 redistributable was extracted, but its x64 runtime MSI could not be found."
+    }
+
     $dlls = @(Get-ChildItem -LiteralPath $extractDir -Recurse -File -ErrorAction SilentlyContinue |
         Where-Object { $_.Name -in @("msvcr100.dll", "msvcp100.dll") })
     if ($dlls.Count -lt 2) {
-        throw "VC++ 2010 x64 extraction completed but msvcr100.dll/msvcp100.dll were not found."
+        Remove-Item -LiteralPath $adminDir -Recurse -Force -ErrorAction SilentlyContinue
+        Ensure-Dir $adminDir
+
+        $proc = Start-Process -FilePath (Join-Path $env:WINDIR "System32\msiexec.exe") -ArgumentList @("/a", $minimumMsi, "TARGETDIR=$adminDir", "/qn", "/norestart") -Wait -PassThru -WindowStyle Hidden
+        if ($proc.ExitCode -ne 0) {
+            throw "VC++ 2010 x64 MSI administrative extraction failed with exit code $($proc.ExitCode)."
+        }
+
+        $dlls = @(Get-ChildItem -LiteralPath $adminDir -Recurse -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -in @("msvcr100.dll", "msvcp100.dll") })
+    }
+
+    if ($dlls.Count -lt 2) {
+        throw "VC++ 2010 x64 runtime extraction completed but msvcr100.dll/msvcp100.dll were not found in the MSI payload."
     }
 
     Remove-Item -LiteralPath $vcDir -Recurse -Force -ErrorAction SilentlyContinue
