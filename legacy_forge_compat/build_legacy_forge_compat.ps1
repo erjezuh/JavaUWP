@@ -24,7 +24,7 @@ if (-not (Test-Path $forgeJar)) { throw "Forge universal jar missing: $forgeJar.
 if (-not (Test-Path $launchwrapperJar)) { throw "LaunchWrapper 1.12 missing: $launchwrapperJar." }
 if (-not (Test-Path $asmJar)) { throw "ASM 5.2 missing: $asmJar." }
 
-$javaHome = Resolve-JavaHomeForMinecraft -MinecraftVersion $MinecraftVersion
+$javaHome = Resolve-JavaHome
 $javac = Join-Path $javaHome "bin\javac.exe"
 $jarExe = Join-Path $javaHome "bin\jar.exe"
 if (-not (Test-Path $javac)) { throw "javac missing from Java home: $javaHome" }
