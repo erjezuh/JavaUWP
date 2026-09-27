@@ -1532,20 +1532,27 @@ Write-Host "Copying JRE..."
 $xboxSecurityProperties = Join-Path $root "xbox_security.properties"
 Copy-Item $xboxSecurityProperties (Join-Path $pkg "xbox_security.properties") -Force
 Copy-PackagedJre -JavaHome $jreSrc -PackageRelativeDir "jre" -SecurityPropertiesPath $xboxSecurityProperties
+$isLegacyForge122Build = $McVersion -eq "1.12.2" -and $Loader.ToLowerInvariant() -eq "forge"
 try {
     $jre8Src = Resolve-JavaRuntimeHomeExact -MajorVersion 8
     Copy-PackagedJre -JavaHome $jre8Src -PackageRelativeDir "jre8" -SecurityPropertiesPath $xboxSecurityProperties
     Write-Host "Packaged Java 8 runtime for Forge 1.12.2: $jre8Src"
-    if ($McVersion -eq "1.12.2" -and $Loader.ToLowerInvariant() -eq "forge") {
-        $jdk8Src = $null
-        if (Test-Path (Join-Path $jre8Src "bin\javac.exe")) {
-            $jdk8Src = $jre8Src
-        } else {
+    if ($isLegacyForge122Build) {
+        $jdk8Src = $jre8Src
+        if (-not (Test-Path (Join-Path $jdk8Src "bin\javac.exe"))) {
             $jdk8Src = Resolve-JavaHomeExact -MajorVersion 8
         }
-        Build-Java8ZipfsRealpathPatch -JavaHome $jdk8Src -OutputJar (Join-Path $pkg "java-zipfs-realpath-8.jar") -WorkName "java8_zipfs_realpath_patch"
+        $legacyZipfsPatchOutput = Join-Path $pkg "java-zipfs-realpath-8.jar"
+        Build-Java8ZipfsRealpathPatch -JavaHome $jdk8Src -OutputJar $legacyZipfsPatchOutput -WorkName "java8_zipfs_realpath_patch"
+        if (-not (Test-Path $legacyZipfsPatchOutput)) {
+            throw "Java 8 ZipFS realpath patch was not produced: $legacyZipfsPatchOutput"
+        }
+        Write-Host "Legacy Java 8 ZipFS patch packaged: $legacyZipfsPatchOutput"
     }
 } catch {
+    if ($isLegacyForge122Build) {
+        throw "Legacy Forge 1.12.2 Java 8 runtime/ZipFS preparation failed: $($_.Exception.Message)"
+    }
     Write-Warning "Java 8 runtime not packaged: $($_.Exception.Message). Forge 1.12.2 requires a Java 8 runtime."
 }
 Copy-PackagedJre -JavaHome $jre21Src -PackageRelativeDir "jre21" -SecurityPropertiesPath $xboxSecurityProperties
