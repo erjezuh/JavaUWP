@@ -3,13 +3,14 @@ package banditvault.legacyforge;
 import java.io.IOException;
 import java.net.URI;
 import java.nio.file.FileSystem;
-import java.nio.file.FileSystemNotFoundException;
-import java.nio.file.FileSystems;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.Map;
 
 public final class LegacyZipFsBridge {
+    private static final com.sun.nio.zipfs.ZipFileSystemProvider PROVIDER =
+        new com.sun.nio.zipfs.ZipFileSystemProvider();
+
     private LegacyZipFsBridge() {
     }
 
@@ -25,15 +26,12 @@ public final class LegacyZipFsBridge {
         Path jarPath = Paths.get(jarUri).toAbsolutePath().normalize();
 
         /*
-         * Java 8's ZipFileSystemProvider has a Path overload which opens the
-         * archive directly. Its URI overload first calls Path.toRealPath(),
-         * which is denied for the Xbox/UWP LocalState path. Use the Path
-         * overload deliberately.
+         * Do not call FileSystems.newFileSystem(URI, ...).
+         * Java 8's URI overload enters ZipFileSystemProvider.newFileSystem(URI,...),
+         * which canonicalizes the archive with Path.toRealPath(). That operation is
+         * denied for Xbox/UWP LocalState paths. The provider's Path overload opens
+         * the archive directly and does not perform that canonicalization.
          */
-        try {
-            return FileSystems.newFileSystem(jarPath, env);
-        } catch (FileSystemNotFoundException e) {
-            throw e;
-        }
+        return PROVIDER.newFileSystem(jarPath, env);
     }
 }
