@@ -1429,6 +1429,20 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
             const std::wstring launcherWindowsDisplayClass =
                 overrideOpenglDir + L"\\WindowsDisplay.class";
 
+            const std::wstring overrideBridgeDir = launcherOverrideDir + L"\\banditvault";
+            const std::wstring overrideBridgeForgeDir = overrideBridgeDir + L"\\legacyforge";
+            const std::wstring launcherBridgeClass =
+                overrideBridgeForgeDir + L"\\LegacyUwpGlfwBridge.class";
+            const std::wstring launcherBridgeInnerClass =
+                overrideBridgeForgeDir + L"\\LegacyUwpGlfwBridge$GlfwLibrary.class";
+            const std::wstring launcherWindowsDisplayPeerInfoClass =
+                overrideOpenglDir + L"\\WindowsDisplayPeerInfo.class";
+            const std::wstring launcherWindowsContextImplClass =
+                overrideOpenglDir + L"\\WindowsContextImplementation.class";
+
+            CreateDirectoryW(overrideBridgeDir.c_str(), nullptr);
+            CreateDirectoryW(overrideBridgeForgeDir.c_str(), nullptr);
+
             if (GetFileAttributesW(legacyLaunchClassLoaderClass.c_str()) != INVALID_FILE_ATTRIBUTES) {
                 SetLastError(ERROR_SUCCESS);
                 if (CopyFileW(
@@ -1450,6 +1464,79 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
                     L"Legacy patched LaunchClassLoader missing from package: %s",
                     legacyLaunchClassLoaderClass.c_str());
             }
+
+            const std::wstring legacyWindowsDisplayPeerInfoClass =
+                packageDir + L"\\runtime\\legacy-forge\\org\\lwjgl\\opengl\\WindowsDisplayPeerInfo.class";
+            const std::wstring legacyWindowsContextImplClass =
+                packageDir + L"\\runtime\\legacy-forge\\org\\lwjgl\\opengl\\WindowsContextImplementation.class";
+            const std::wstring legacyBridgeClass =
+                packageDir + L"\\runtime\\legacy-forge\\banditvault\\legacyforge\\LegacyUwpGlfwBridge.class";
+            const std::wstring legacyBridgeInnerClass =
+                packageDir + L"\\runtime\\legacy-forge\\banditvault\\legacyforge\\LegacyUwpGlfwBridge$GlfwLibrary.class";
+
+            const std::wstring packagedGlfwShim =
+                packageDir + L"\\natives\\glfw.dll";
+            const std::wstring localGlfwShim =
+                lwjglNativeDir + L"\\glfw.dll";
+            const std::wstring packagedMouseSupport =
+                packageDir + L"\\natives\\mouse_support.dll";
+            const std::wstring localMouseSupport =
+                lwjglNativeDir + L"\\mouse_support.dll";
+
+            if (GetFileAttributesW(packagedGlfwShim.c_str()) != INVALID_FILE_ATTRIBUTES) {
+                SetLastError(ERROR_SUCCESS);
+                if (CopyFileW(packagedGlfwShim.c_str(), localGlfwShim.c_str(), TRUE)) {
+                    WriteLogF(L"Legacy UWP GLFW shim installed for JNA: %s", localGlfwShim.c_str());
+                } else {
+                    WriteLogF(L"Legacy UWP GLFW shim copy FAILED: %s -> %s err=%u",
+                        packagedGlfwShim.c_str(), localGlfwShim.c_str(), GetLastError());
+                }
+            } else {
+                WriteLogF(L"Legacy UWP GLFW shim missing from package: %s", packagedGlfwShim.c_str());
+            }
+
+            if (GetFileAttributesW(packagedMouseSupport.c_str()) != INVALID_FILE_ATTRIBUTES) {
+                SetLastError(ERROR_SUCCESS);
+                if (CopyFileW(packagedMouseSupport.c_str(), localMouseSupport.c_str(), TRUE)) {
+                    WriteLogF(L"Legacy mouse support installed for UWP GLFW shim: %s", localMouseSupport.c_str());
+                } else {
+                    WriteLogF(L"Legacy mouse support copy FAILED: %s -> %s err=%u",
+                        packagedMouseSupport.c_str(), localMouseSupport.c_str(), GetLastError());
+                }
+            } else {
+                WriteLogF(L"Legacy mouse support missing from package: %s", packagedMouseSupport.c_str());
+            }
+
+            auto copyLegacyOverrideClass = [&](const std::wstring& source, const std::wstring& destination, const wchar_t* label) {
+                if (GetFileAttributesW(source.c_str()) == INVALID_FILE_ATTRIBUTES) {
+                    WriteLogF(L"%s missing from package: %s", label, source.c_str());
+                    return;
+                }
+                SetLastError(ERROR_SUCCESS);
+                if (CopyFileW(source.c_str(), destination.c_str(), TRUE)) {
+                    WriteLogF(L"%s installed in launcher-overrides: %s", label, destination.c_str());
+                } else {
+                    WriteLogF(L"%s copy FAILED: %s -> %s err=%u",
+                        label, source.c_str(), destination.c_str(), GetLastError());
+                }
+            };
+
+            copyLegacyOverrideClass(
+                legacyWindowsDisplayPeerInfoClass,
+                launcherWindowsDisplayPeerInfoClass,
+                L"Legacy WindowsDisplayPeerInfo");
+            copyLegacyOverrideClass(
+                legacyWindowsContextImplClass,
+                launcherWindowsContextImplClass,
+                L"Legacy WindowsContextImplementation");
+            copyLegacyOverrideClass(
+                legacyBridgeClass,
+                launcherBridgeClass,
+                L"Legacy UWP GLFW bridge");
+            copyLegacyOverrideClass(
+                legacyBridgeInnerClass,
+                launcherBridgeInnerClass,
+                L"Legacy UWP GLFW bridge interface");
 
             if (GetFileAttributesW(legacyWindowsDisplayClass.c_str()) != INVALID_FILE_ATTRIBUTES) {
                 SetLastError(ERROR_SUCCESS);
