@@ -1408,8 +1408,16 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
             ? localJavaZipfsPatch
             : packagedJavaZipfsPatch);
     if (!javaZipfsPatch.empty() && GetFileAttributesW(javaZipfsPatch.c_str()) != INVALID_FILE_ATTRIBUTES) {
-        vmOptionStorage.push_back("--patch-module=jdk.zipfs=" + w2a(fwd(javaZipfsPatch)));
-        WriteLogF(L"Java ZipFS realpath patch enabled: %s", javaZipfsPatch.c_str());
+        if (legacyJava8) {
+            // Java 8 has no module system and its ZipFS provider lives in
+            // lib/ext/zipfs.jar. Prepend the patched provider to the bootstrap
+            // search path so the extension class loader sees our class first.
+            vmOptionStorage.push_back("-Xbootclasspath/p:" + w2a(fwd(javaZipfsPatch)));
+            WriteLogF(L"Java 8 ZipFS realpath patch enabled via -Xbootclasspath/p: %s", javaZipfsPatch.c_str());
+        } else {
+            vmOptionStorage.push_back("--patch-module=jdk.zipfs=" + w2a(fwd(javaZipfsPatch)));
+            WriteLogF(L"Java ZipFS realpath patch enabled: %s", javaZipfsPatch.c_str());
+        }
     } else {
         WriteLogF(L"Java ZipFS realpath patch missing: %s", javaZipfsPatch.c_str());
     }
