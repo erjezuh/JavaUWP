@@ -47,6 +47,7 @@ $packageDir = Get-ConfigPath "PackageContentDir"
 $legacyLwjglPackageDir = Join-Path $packageDir "runtime\legacy-forge"
 $legacyLwjglPackageJar = Join-Path $legacyLwjglPackageDir "lwjgl-2.9.4-uwp.jar"
 $legacyWindowsDisplayClass = Join-Path $legacyLwjglPackageDir "org\lwjgl\opengl\WindowsDisplay.class"
+$legacyLaunchClassLoaderClass = Join-Path $legacyLwjglPackageDir "net\minecraft\launchwrapper\LaunchClassLoader.class"
 Ensure-Dir $legacyLwjglPackageDir
 
 $buildRoot = Join-Path (Get-ConfigPath "BuildDir") "legacy_forge_compat\$MinecraftVersion-$ForgeVersion"
@@ -86,12 +87,19 @@ if (-not (Test-BuildStampCurrent -StampPath $stampPath -Stamp $stamp -RequiredOu
 & $javaExe -cp "$classesDir;$asmJar;$launchwrapperJar" banditvault.legacyforge.LegacyLwjglJarPatcher $lwjglJar $legacyWindowsDisplayClass
 if ($LASTEXITCODE -ne 0) { throw "LWJGL 2.9.4 UWP WindowsDisplay patch failed." }
 
+# Patch LaunchClassLoader itself so the org.lwjgl. class-loader exclusion is gone
+# from the moment the loader is constructed. This runs before Forge coremod
+# injection and avoids racing any early LWJGL reference.
+& $javaExe -cp "$classesDir;$asmJar;$launchwrapperJar" banditvault.legacyforge.LegacyLaunchClassLoaderPatcher $launchwrapperJar $legacyLaunchClassLoaderClass
+if ($LASTEXITCODE -ne 0) { throw "Legacy LaunchClassLoader patch failed." }
+
 # Keep the stock Maven artifact immutable for the download manifest. The patched
 # compatibility copy is packaged separately and selected only by the legacy
 # 1.12.2 Forge launcher path at runtime.
 Copy-Item -LiteralPath $lwjglJar -Destination $legacyLwjglPackageJar -Force
 Write-Host "Packaged legacy LWJGL compatibility jar: $legacyLwjglPackageJar"
 Write-Host "Packaged patched WindowsDisplay class: $legacyWindowsDisplayClass"
+Write-Host "Packaged patched LaunchClassLoader class: $legacyLaunchClassLoaderClass"
 
 Ensure-Dir $OutputDir
 $targetJar = Join-Path $OutputDir "banditvault-legacy-forge-compat.jar"
