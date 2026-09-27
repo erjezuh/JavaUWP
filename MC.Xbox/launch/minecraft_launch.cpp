@@ -1368,24 +1368,46 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
         const std::wstring legacyLwjglOverride =
             packageDir + L"\\runtime\\legacy-forge\\lwjgl-2.9.4-uwp.jar";
         if (GetFileAttributesW(legacyLwjglOverride.c_str()) != INVALID_FILE_ATTRIBUTES) {
-            const std::wstring originalFwd = fwd(legacyLwjglOriginal);
             const std::wstring overrideFwd = fwd(legacyLwjglOverride);
-            size_t replaced = 0;
-            size_t pos = 0;
-            while ((pos = effectiveClassPath.find(originalFwd, pos)) != std::wstring::npos) {
-                effectiveClassPath.replace(pos, originalFwd.size(), overrideFwd);
-                pos += overrideFwd.size();
-                ++replaced;
+
+            // Do not depend on one exact path spelling. Loader adjustments may
+            // rebuild the classpath with different slash/case conventions.
+            // Remove every stock LWJGL 2.9.4 artifact and prepend our patched
+            // compatibility jar so LaunchClassLoader cannot resolve the sealed
+            // stock class first.
+            std::wstring normalizedClassPath = fwd(effectiveClassPath);
+            std::wstring rebuiltClassPath;
+            size_t removedStock = 0;
+            size_t start = 0;
+            for (;;) {
+                size_t end = normalizedClassPath.find(L';', start);
+                if (end == std::wstring::npos) end = normalizedClassPath.size();
+                const std::wstring entry = normalizedClassPath.substr(start, end - start);
+                std::wstring lowerEntry = entry;
+                std::transform(lowerEntry.begin(), lowerEntry.end(), lowerEntry.begin(),
+                    [](wchar_t ch) { return static_cast<wchar_t>(towlower(ch)); });
+
+                const bool isStockLwjgl =
+                    lowerEntry.find(L"/org/lwjgl/lwjgl/lwjgl/2.9.4-nightly-20150209/lwjgl-2.9.4-nightly-20150209.jar") != std::wstring::npos ||
+                    lowerEntry.find(L"\\org\\lwjgl\\lwjgl\\2.9.4-nightly-20150209\\lwjgl-2.9.4-nightly-20150209.jar") != std::wstring::npos;
+
+                if (!entry.empty() && !isStockLwjgl) {
+                    if (!rebuiltClassPath.empty()) rebuiltClassPath += L";";
+                    rebuiltClassPath += entry;
+                } else if (isStockLwjgl) {
+                    ++removedStock;
+                }
+
+                if (end == normalizedClassPath.size()) break;
+                start = end + 1;
             }
-            if (replaced > 0) {
-                WriteLogF(L"Legacy Forge LWJGL compatibility jar selected: %s (replaced %zu classpath entry%s)",
-                    legacyLwjglOverride.c_str(),
-                    replaced,
-                    replaced == 1 ? L"" : L"ies");
-            } else {
-                WriteLogF(L"Legacy Forge LWJGL compatibility jar present but stock artifact was not on the effective classpath: %s",
-                    legacyLwjglOverride.c_str());
-            }
+
+            // Put the patched copy first. This is intentionally scoped to the
+            // legacy Forge 1.12.2 target; modern loader classpaths are untouched.
+            effectiveClassPath = overrideFwd + L";" + rebuiltClassPath;
+            WriteLogF(L"Legacy Forge LWJGL compatibility jar selected first: %s; removed stock entries=%zu",
+                legacyLwjglOverride.c_str(),
+                removedStock);
         } else {
             WriteLogF(L"Legacy Forge LWJGL compatibility jar missing: %s", legacyLwjglOverride.c_str());
         }
