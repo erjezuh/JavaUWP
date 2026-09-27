@@ -28,11 +28,13 @@ public final class LegacyUwpGlfwBridge {
         void glfwPollEvents();
         void glfwGetFramebufferSize(
             Pointer window, IntByReference width, IntByReference height);
+        long BanditShimPresentedFrames();
     }
 
     private static GlfwLibrary library;
     private static Pointer window;
     private static boolean initialized;
+    private static Thread fpsLogger;
 
     private LegacyUwpGlfwBridge() {
     }
@@ -65,6 +67,55 @@ public final class LegacyUwpGlfwBridge {
         System.err.println(
             "[BanditVault] Legacy LWJGL window routed through UWP GLFW/CoreWindow shim: "
                 + fb[0] + "x" + fb[1]);
+        startPresentBenchmark();
+    }
+
+    /**
+     * Logs presented-frames-per-second to stderr (mc_launch.log) so each test
+     * run doubles as a benchmark record. Samples every 60s after a 45s grace
+     * period, then stops so long sessions do not spam the log.
+     */
+    private static synchronized void startPresentBenchmark() {
+        if (fpsLogger != null) {
+            return;
+        }
+        fpsLogger = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                int samples = 0;
+                long lastFrames = 0;
+                long lastMs = System.currentTimeMillis();
+                while (samples < 20) {
+                    try {
+                        Thread.sleep(samples == 0 ? 45000L : 60000L);
+                    } catch (InterruptedException e) {
+                        return;
+                    }
+                    synchronized (LegacyUwpGlfwBridge.class) {
+                        if (library == null || window == null) {
+                            return;
+                        }
+                        long frames;
+                        try {
+                            frames = library.BanditShimPresentedFrames();
+                        } catch (Throwable error) {
+                            return;
+                        }
+                        long now = System.currentTimeMillis();
+                        long elapsed = Math.max(1L, now - lastMs);
+                        long fps = (frames - lastFrames) * 1000L / elapsed;
+                        System.err.println(
+                            "[BanditVault] Present benchmark: " + fps + " fps (frames="
+                                + frames + ", sample=" + (samples + 1) + "/20)");
+                        lastFrames = frames;
+                        lastMs = now;
+                        ++samples;
+                    }
+                }
+            }
+        }, "BanditVault PresentBenchmark");
+        fpsLogger.setDaemon(true);
+        fpsLogger.start();
     }
 
     /** Real size, in raw pixels, of the CoreWindow surface Mesa presents to. */
