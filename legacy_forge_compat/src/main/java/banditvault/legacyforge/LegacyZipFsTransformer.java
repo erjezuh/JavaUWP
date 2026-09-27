@@ -8,12 +8,21 @@ import org.objectweb.asm.Opcodes;
 
 public final class LegacyZipFsTransformer implements net.minecraft.launchwrapper.IClassTransformer {
     private static final String TARGET_CLASS = "net/minecraft/item/crafting/CraftingManager";
+    private static final String TARGET_CLASS_DOTTED = "net.minecraft.item.crafting.CraftingManager";
     private static final String FILE_SYSTEMS = "java/nio/file/FileSystems";
     private static final String URI_FS_DESC =
         "(Ljava/net/URI;Ljava/util/Map;)Ljava/nio/file/FileSystem;";
     private static final String BRIDGE = "banditvault/legacyforge/LegacyZipFsBridge";
     private static final String WINDOWS_DISPLAY = "org/lwjgl/opengl/WindowsDisplay";
+    private static final String WINDOWS_DISPLAY_DOTTED = "org.lwjgl.opengl.WindowsDisplay";
     private static final String DISPLAY_MODE = "org/lwjgl/opengl/DisplayMode";
+
+    private static boolean matchesClass(String value, String slashed, String dotted) {
+        if (value == null) {
+            return false;
+        }
+        return slashed.equals(value) || dotted.equals(value);
+    }
 
     @Override
     public byte[] transform(String name, String transformedName, byte[] basicClass) {
@@ -22,9 +31,11 @@ public final class LegacyZipFsTransformer implements net.minecraft.launchwrapper
         }
 
         final boolean patchCraftingManager =
-            TARGET_CLASS.equals(name) || TARGET_CLASS.equals(transformedName);
+            matchesClass(name, TARGET_CLASS, TARGET_CLASS_DOTTED) ||
+            matchesClass(transformedName, TARGET_CLASS, TARGET_CLASS_DOTTED);
         final boolean patchWindowsDisplay =
-            WINDOWS_DISPLAY.equals(name) || WINDOWS_DISPLAY.equals(transformedName);
+            matchesClass(name, WINDOWS_DISPLAY, WINDOWS_DISPLAY_DOTTED) ||
+            matchesClass(transformedName, WINDOWS_DISPLAY, WINDOWS_DISPLAY_DOTTED);
 
         if (!patchCraftingManager && !patchWindowsDisplay) {
             return basicClass;
