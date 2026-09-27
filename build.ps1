@@ -692,15 +692,6 @@ if (Test-Path (Join-Path $gameDir "mods")) {
     Copy-Item -Recurse (Join-Path $gameDir "mods\*") (Join-Path $pkg "runtime\bundled-mods\") -Force -ErrorAction SilentlyContinue
 }
 
-if ($ProjectConfig.MinecraftVersion -eq "1.12.2" -and $Loader.ToLowerInvariant() -eq "forge") {
-    Write-Host "=== Preparing legacy Forge 1.12.2 cache ==="
-    & (Join-Path $root "scripts\setup.ps1") `
-        -MinecraftVersion $ProjectConfig.MinecraftVersion `
-        -Loader "forge" `
-        -LoaderVersion $(if ($LoaderVersion) { $LoaderVersion } else { "14.23.5.2864" }) `
-        -AssetIndex $(if ($AssetIndex) { $AssetIndex } else { "1" })
-    if ($LASTEXITCODE -ne 0) { throw "Legacy Forge 1.12.2 setup failed" }
-}
 Write-Host "Copying natives..."
 Ensure-Dir (Join-Path $pkg "natives")
 Copy-Item (Join-Path $nativesSourceDir "*.dll") (Join-Path $pkg "natives\") -Force
@@ -905,6 +896,15 @@ if (-not $SkipVersionManifests) {
     Write-Host "Skipping extra per-version manifests (-SkipVersionManifests)"
 }
 
+if ($ProjectConfig.MinecraftVersion -eq "1.12.2" -and $Loader.ToLowerInvariant() -eq "forge") {
+    Write-Host "=== Preparing legacy Forge 1.12.2 cache ==="
+    & (Join-Path $root "scripts\setup.ps1") `
+        -MinecraftVersion $ProjectConfig.MinecraftVersion `
+        -Loader "forge" `
+        -LoaderVersion $(if ($LoaderVersion) { $LoaderVersion } else { "14.23.5.2864" }) `
+        -AssetIndex $(if ($AssetIndex) { $AssetIndex } else { "1" })
+    if ($LASTEXITCODE -ne 0) { throw "Legacy Forge 1.12.2 setup failed" }
+}
 if (-not $SkipVersionCompat) {
     $versionModsRoot = Join-Path $pkg "runtime\version-mods"
     Ensure-Dir $versionModsRoot
@@ -946,6 +946,18 @@ if (-not $SkipVersionCompat) {
         $targetId = "$($row.minecraftVersion)-forge-$lv"
         $outDir = Join-Path $versionModsRoot $targetId
         Ensure-Dir $outDir
+        if ($ProjectConfig.MinecraftVersion -eq "1.12.2" -and
+            $row.minecraftVersion -eq "1.12.2" -and
+            $lv -eq $defaultLoaderVersion) {
+            Write-Host "Building legacy Forge 1.12.2 ZipFS coremod: $targetId"
+            & (Join-Path $root "legacy_forge_compat\build_legacy_forge_compat.ps1") `
+                -MinecraftVersion "1.12.2" `
+                -ForgeVersion "1.12.2-$lv" `
+                -OutputDir $outDir
+            if ($LASTEXITCODE -ne 0) {
+                throw "Legacy Forge 1.12.2 ZipFS coremod build failed for $targetId"
+            }
+        }
         if ($row.controllerProvider -eq "none") {
             # MakeAppx does not preserve empty directories. Keep a harmless marker
             # so the launcher can distinguish an intentionally empty bundled-mods
