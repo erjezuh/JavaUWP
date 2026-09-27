@@ -107,7 +107,7 @@ foreach ($item in $overrideClasses) {
     Copy-Item -LiteralPath $item.Source -Destination $item.Destination -Force
     Write-Host "Packaged legacy override class: $($item.Destination)"
 }
-$bridgeInnerClasses = @(Get-ChildItem $classesDir -Filter "LegacyUwpGlfwBridge$*.class" -Recurse -ErrorAction SilentlyContinue)
+$bridgeInnerClasses = @(Get-ChildItem $classesDir -Filter 'LegacyUwpGlfwBridge*.class' -Recurse -ErrorAction SilentlyContinue)
 foreach ($inner in $bridgeInnerClasses) {
     $relative = $inner.FullName.Substring($classesDir.Length).TrimStart('\','/')
     $destination = Join-Path $legacyLwjglPackageDir $relative
