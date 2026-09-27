@@ -371,7 +371,17 @@ if ($Loader -eq "forge" -and $version -eq "1.12.2") {
     if (-not (Test-Path $legacyAsmJar)) {
         throw "ASM 5.2 could not be prepared: $legacyAsmJar"
     }
-    Write-Host "Legacy Forge libraries ready: LaunchWrapper 1.12 + ASM 5.2"
+
+    # Mojang's 1.12.2 metadata normally contains LWJGL 2.9.4, but keep an
+    # explicit fallback here because the legacy build patches this exact jar.
+    $legacyLwjglJar = Join-Path $gameDir "libraries\org\lwjgl\lwjgl\2.9.4\lwjgl-2.9.4.jar"
+    $legacyLwjglUrl = "https://libraries.minecraft.net/org/lwjgl/lwjgl/2.9.4/lwjgl-2.9.4.jar"
+    Save-RemoteFile -Uri $legacyLwjglUrl -Path $legacyLwjglJar
+    if (-not (Test-Path $legacyLwjglJar)) {
+        throw "LWJGL 2.9.4 could not be prepared: $legacyLwjglJar"
+    }
+
+    Write-Host "Legacy Forge libraries ready: LaunchWrapper 1.12 + ASM 5.2 + LWJGL 2.9.4"
 
     Ensure-LegacyVc2010Runtime
 
