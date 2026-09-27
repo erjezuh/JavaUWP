@@ -1030,6 +1030,7 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
         } else {
             WriteLogF(L"Legacy LWJGL OpenGL preload missing: %s", selectedOpenGl.c_str());
         }
+    }
     if (legacyForge122Natives) {
         // Packaged/UWP builds do not expose the desktop SetDllDirectoryW API.
         // The explicit LoadLibraryExW calls below already use the DLL's own
