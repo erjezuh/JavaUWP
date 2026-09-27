@@ -83,7 +83,7 @@ if ($LASTEXITCODE -ne 0) { throw "LWJGL 2.9.4 UWP WindowsDisplay patch failed." 
 # compatibility copy is packaged separately and selected only by the legacy
 # 1.12.2 Forge launcher path at runtime.
 $packageDir = Get-ConfigPath "PackageContentDir"
-$legacyLwjglPackageDir = Join-Path $packageDir "runtimelegacy-forge"
+$legacyLwjglPackageDir = Join-Path $packageDir "runtime\legacy-forge"
 $legacyLwjglPackageJar = Join-Path $legacyLwjglPackageDir "lwjgl-2.9.4-uwp.jar"
 Ensure-Dir $legacyLwjglPackageDir
 Copy-Item -LiteralPath $lwjglJar -Destination $legacyLwjglPackageJar -Force
