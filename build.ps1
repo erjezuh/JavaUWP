@@ -1179,116 +1179,167 @@ function Build-Java8ZipfsRealpathPatch {
         [Parameter(Mandatory = $true)][string]$WorkName
     )
 
-    Write-Host "Building Java 8 ZipFS realpath patch: $OutputJar"
-    $javacExe = Join-Path $JavaHome "bin\javac.exe"
-    if (-not (Test-Path $javacExe)) {
-        throw "javac.exe not found at $JavaHome; Java 8 ZipFS patch requires a JDK 8."
-    }
-
-    $runtimeJarExe = Join-Path $JavaHome "bin\jar.exe"
-    if (-not (Test-Path $runtimeJarExe)) {
-        throw "jar.exe not found at $JavaHome; Java 8 ZipFS patch requires a JDK 8."
-    }
-
-    $srcZipCandidates = @(
-        (Join-Path $JavaHome "lib\src.zip"),
-        (Join-Path $JavaHome "src.zip")
-    )
-    $srcZip = $srcZipCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
-    if (-not $srcZip) {
-        throw "Java 8 source archive not found under $JavaHome; cannot build the ZipFS patch."
-    }
+    Write-Host "Building Java 8 ZipFS realpath bytecode patch: $OutputJar"
 
     $zipfsJarCandidates = @(
-        (Join-Path $JavaHome "jre\lib\ext\zipfs.jar"),
-        (Join-Path $JavaHome "lib\ext\zipfs.jar")
+        (Join-Path $JavaHome "lib\ext\zipfs.jar"),
+        (Join-Path $JavaHome "jre\lib\ext\zipfs.jar")
     )
     $zipfsJar = $zipfsJarCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
-    if (-not $zipfsJar) {
-        throw "Java 8 zipfs.jar not found under $JavaHome."
+    if (-not $zipfsJar) { throw "Java 8 zipfs.jar not found under $JavaHome." }
+
+    $hostJavac = Join-Path $jreSrc "bin\javac.exe"
+    $hostJava = Join-Path $jreSrc "bin\java.exe"
+    if (-not (Test-Path $hostJavac) -or -not (Test-Path $hostJava)) {
+        throw "Build-host JDK is incomplete under $jreSrc."
     }
 
+    $asmJar = Join-Path $gameDir "libraries\org\ow2\asm\asm-debug-all\5.2\asm-debug-all-5.2.jar"
+    if (-not (Test-Path $asmJar)) { throw "ASM 5.2 is required to patch Java 8 ZipFS: $asmJar" }
+
+    $workDir = Join-Path $buildDir $WorkName
+    $srcDir = Join-Path $workDir "src"
+    $classesDir = Join-Path $workDir "classes"
+    $patcherSource = Join-Path $srcDir "banditvault\legacyforge\Java8ZipFsBytecodePatcher.java"
+    $helperSource = Join-Path $srcDir "banditvault\legacyforge\LegacyZipFsRealPath.java"
+    $patcherClassesDir = Join-Path $classesDir "patcher"
     $cacheJar = Join-Path $buildDir "$WorkName.jar"
     $stampPath = Join-Path $buildDir "$WorkName.stamp"
-    $stamp = New-BuildStamp `
-        -Values @("java8_zipfs_realpath_patch", $JavaHome) `
-        -ContentFiles @($PSCommandPath, (Join-Path $JavaHome "release")) `
-        -ImmutableFiles @($srcZip, $zipfsJar)
+
+    $stamp = New-BuildStamp -Values @("java8_zipfs_bytecode_patch", $JavaHome, $jreSrc) -ContentFiles @($PSCommandPath) -ImmutableFiles @($zipfsJar, $asmJar, (Join-Path $JavaHome "release"))
     if (Test-BuildStampCurrent -StampPath $stampPath -Stamp $stamp -RequiredOutputs @($cacheJar)) {
         Copy-Item $cacheJar $OutputJar -Force
-        Write-Host "Java 8 ZipFS patch up to date: $OutputJar"
+        Write-Host "Java 8 ZipFS bytecode patch up to date: $OutputJar"
         return
     }
 
-    $zipfsPatchDir = Join-Path $buildDir $WorkName
-    $zipfsPatchSrcDir = Join-Path $zipfsPatchDir "src"
-    $zipfsPatchClassesDir = Join-Path $zipfsPatchDir "classes"
-    Remove-Item -Recurse -Force $zipfsPatchDir -ErrorAction SilentlyContinue
-    Ensure-Dir (Join-Path $zipfsPatchSrcDir "com\sun\nio\zipfs"), $zipfsPatchClassesDir
+    Remove-Item -Recurse -Force $workDir -ErrorAction SilentlyContinue
+    Ensure-Dir $srcDir, $classesDir, $patcherClassesDir
 
-    Add-Type -AssemblyName System.IO.Compression.FileSystem
-    $srcArchive = [System.IO.Compression.ZipFile]::OpenRead($srcZip)
-    try {
-        $providerEntry = $srcArchive.Entries |
-            Where-Object { $_.FullName -match "(^|/)com/sun/nio/zipfs/ZipFileSystemProvider\.java$" } |
-            Select-Object -First 1
-        if (-not $providerEntry) {
-            throw "ZipFileSystemProvider.java not found inside Java 8 src.zip"
-        }
+    $helper = @'
+package banditvault.legacyforge;
 
-        $reader = [System.IO.StreamReader]::new($providerEntry.Open())
-        try {
-            $providerSource = $reader.ReadToEnd()
-        } finally {
-            $reader.Dispose()
-        }
-    } finally {
-        $srcArchive.Dispose()
+import java.io.IOException;
+import java.nio.file.LinkOption;
+import java.nio.file.Path;
+
+public final class LegacyZipFsRealPath {
+    private LegacyZipFsRealPath() {}
+    public static Path safeRealPath(Path path) throws IOException {
+        try { return path.toRealPath(); }
+        catch (IOException realPathFailure) { return path.toAbsolutePath().normalize(); }
     }
+    public static Path safeRealPath(Path path, LinkOption... options) throws IOException {
+        try { return path.toRealPath(options); }
+        catch (IOException realPathFailure) { return path.toAbsolutePath().normalize(); }
+    }
+}
+'@
+    [System.IO.File]::WriteAllText($helperSource, $helper)
 
-    # Java 8's provider keeps its registry keyed by Path.toRealPath(). Xbox/UWP
-    # can open the file and read its attributes, but toRealPath() is denied for
-    # LocalState paths. Keep the original path as the stable key when resolution
-    # is unavailable. This patch is deliberately scoped to the Java 8 runtime.
-    $providerSource = $providerSource.Replace("uriToPath(uri).toRealPath()", "safeRealPath(uriToPath(uri))")
-    $providerSource = $providerSource.Replace("zfpath.toRealPath()", "safeRealPath(zfpath)")
-    $providerSource = $providerSource.Replace("path.toRealPath()", "safeRealPath(path)")
-    $providerSource = $providerSource.Replace(
-        "        private boolean ensureFile(Path path) {",
-        "        private static Path safeRealPath(Path path) throws IOException {
-            try {
-                return path.toRealPath();
-            } catch (IOException realPathFailure) {
-                return path.toAbsolutePath().normalize();
+    $patcher = @'
+package banditvault.legacyforge;
+
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.util.jar.JarEntry;
+import java.util.jar.JarFile;
+import java.util.jar.JarOutputStream;
+import org.objectweb.asm.ClassReader;
+import org.objectweb.asm.ClassVisitor;
+import org.objectweb.asm.ClassWriter;
+import org.objectweb.asm.MethodVisitor;
+import org.objectweb.asm.Opcodes;
+
+public final class Java8ZipFsBytecodePatcher {
+    private static final String TARGET = "com/sun/nio/zipfs/ZipFileSystemProvider.class";
+    private static final String HELPER = "banditvault/legacyforge/LegacyZipFsRealPath.class";
+
+    public static void main(String[] args) throws Exception {
+        if (args.length != 2) throw new IllegalArgumentException("Usage: Java8ZipFsBytecodePatcher <zipfs.jar> <output.jar>");
+        File inputJar = new File(args[0]);
+        File outputJar = new File(args[1]);
+
+        byte[] original;
+        try (JarFile jar = new JarFile(inputJar)) {
+            JarEntry entry = jar.getJarEntry(TARGET);
+            if (entry == null) throw new IOException("ZipFileSystemProvider.class missing from " + inputJar);
+            original = readAll(jar.getInputStream(entry));
+        }
+
+        ClassReader reader = new ClassReader(original);
+        ClassWriter writer = new ClassWriter(reader, 0);
+        final boolean[] patched = new boolean[] { false };
+
+        reader.accept(new ClassVisitor(Opcodes.ASM5, writer) {
+            @Override
+            public MethodVisitor visitMethod(int access, String name, String descriptor, String signature, String[] exceptions) {
+                MethodVisitor delegate = super.visitMethod(access, name, descriptor, signature, exceptions);
+                return new MethodVisitor(Opcodes.ASM5, delegate) {
+                    @Override
+                    public void visitMethodInsn(int opcode, String owner, String methodName, String methodDescriptor, boolean isInterface) {
+                        if (opcode == Opcodes.INVOKEVIRTUAL && "java/nio/file/Path".equals(owner) && "toRealPath".equals(methodName) && "()Ljava/nio/file/Path;".equals(methodDescriptor)) {
+                            super.visitMethodInsn(Opcodes.INVOKESTATIC, "banditvault/legacyforge/LegacyZipFsRealPath", "safeRealPath", "(Ljava/nio/file/Path;)Ljava/nio/file/Path;", false);
+                            patched[0] = true;
+                            return;
+                        }
+                        if (opcode == Opcodes.INVOKEVIRTUAL && "java/nio/file/Path".equals(owner) && "toRealPath".equals(methodName) && "([Ljava/nio/file/LinkOption;)Ljava/nio/file/Path;".equals(methodDescriptor)) {
+                            super.visitMethodInsn(Opcodes.INVOKESTATIC, "banditvault/legacyforge/LegacyZipFsRealPath", "safeRealPath", "(Ljava/nio/file/Path;[Ljava/nio/file/LinkOption;)Ljava/nio/file/Path;", false);
+                            patched[0] = true;
+                            return;
+                        }
+                        super.visitMethodInsn(opcode, owner, methodName, methodDescriptor, isInterface);
+                    }
+                };
             }
+        }, 0);
+
+        if (!patched[0]) throw new IOException("ZipFileSystemProvider had no Path.toRealPath call to patch.");
+
+        try (JarOutputStream out = new JarOutputStream(new FileOutputStream(outputJar))) {
+            JarEntry provider = new JarEntry(TARGET);
+            out.putNextEntry(provider);
+            out.write(writer.toByteArray());
+            out.closeEntry();
+
+            JarEntry helper = new JarEntry(HELPER);
+            out.putNextEntry(helper);
+            try (InputStream in = Java8ZipFsBytecodePatcher.class.getClassLoader().getResourceAsStream(HELPER)) {
+                if (in == null) throw new IOException("Helper class resource missing: " + HELPER);
+                byte[] buffer = new byte[8192];
+                int read;
+                while ((read = in.read(buffer)) != -1) out.write(buffer, 0, read);
+            }
+            out.closeEntry();
         }
-
-        private boolean ensureFile(Path path) {")
-
-    if ($providerSource -notmatch "safeRealPath\(path\)" -or
-        $providerSource -match "(?<!safeRealPath\()\b(?:path|zfpath|uriToPath\(uri\))\.toRealPath\(\)") {
-        throw "Java 8 ZipFileSystemProvider realpath patch did not apply cleanly."
+        System.out.println("[BanditVault] Java 8 ZipFS provider bytecode patched: " + outputJar);
     }
 
-    $providerSourcePath = Join-Path $zipfsPatchSrcDir "com\sun\nio\zipfs\ZipFileSystemProvider.java"
-    [System.IO.File]::WriteAllText($providerSourcePath, $providerSource)
-
-    & $javacExe -source 8 -target 8 -Xlint:-options -cp $zipfsJar -d $zipfsPatchClassesDir $providerSourcePath
-    if ($LASTEXITCODE -ne 0) {
-        throw "Java 8 ZipFS patch compile failed"
+    private static byte[] readAll(InputStream input) throws IOException {
+        try (InputStream in = input) {
+            java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+            byte[] buffer = new byte[8192];
+            int read;
+            while ((read = in.read(buffer)) != -1) out.write(buffer, 0, read);
+            return out.toByteArray();
+        }
     }
+}
+'@
+    [System.IO.File]::WriteAllText($patcherSource, $patcher)
 
-    Push-Location $zipfsPatchClassesDir
-    & $runtimeJarExe cf $cacheJar .
-    $jarResult = $LASTEXITCODE
-    Pop-Location
-    if ($jarResult -ne 0) {
-        throw "Java 8 ZipFS patch jar creation failed"
-    }
+    & $hostJavac --release 8 -cp $asmJar -d $patcherClassesDir $helperSource $patcherSource
+    if ($LASTEXITCODE -ne 0) { throw "Java 8 ZipFS bytecode patcher compile failed" }
 
+    & $hostJava -cp "$patcherClassesDir;$asmJar" banditvault.legacyforge.Java8ZipFsBytecodePatcher $zipfsJar $cacheJar
+    if ($LASTEXITCODE -ne 0) { throw "Java 8 ZipFS bytecode patch generation failed" }
+
+    if (-not (Test-Path $cacheJar)) { throw "Java 8 ZipFS bytecode patch output missing: $cacheJar" }
     Set-BuildStamp -StampPath $stampPath -Stamp $stamp
     Copy-Item $cacheJar $OutputJar -Force
-    Write-Host "Java 8 ZipFS patch: $OutputJar"
+    Write-Host "Java 8 ZipFS bytecode patch: $OutputJar"
 }
 
 function Build-JavaZipfsRealpathPatch {
