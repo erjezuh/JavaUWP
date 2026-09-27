@@ -79,6 +79,16 @@ if (-not (Test-BuildStampCurrent -StampPath $stampPath -Stamp $stamp -RequiredOu
 & $javaExe -cp "$classesDir;$asmJar;$launchwrapperJar" banditvault.legacyforge.LegacyLwjglJarPatcher $lwjglJar
 if ($LASTEXITCODE -ne 0) { throw "LWJGL 2.9.4 UWP WindowsDisplay patch failed." }
 
+# Keep the stock Maven artifact immutable for the download manifest. The patched
+# compatibility copy is packaged separately and selected only by the legacy
+# 1.12.2 Forge launcher path at runtime.
+$packageDir = Get-ConfigPath "PackageContentDir"
+$legacyLwjglPackageDir = Join-Path $packageDir "runtimelegacy-forge"
+$legacyLwjglPackageJar = Join-Path $legacyLwjglPackageDir "lwjgl-2.9.4-uwp.jar"
+Ensure-Dir $legacyLwjglPackageDir
+Copy-Item -LiteralPath $lwjglJar -Destination $legacyLwjglPackageJar -Force
+Write-Host "Packaged legacy LWJGL compatibility jar: $legacyLwjglPackageJar"
+
 Ensure-Dir $OutputDir
 $targetJar = Join-Path $OutputDir "banditvault-legacy-forge-compat.jar"
 Copy-Item -LiteralPath $jarPath -Destination $targetJar -Force
