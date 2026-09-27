@@ -677,6 +677,15 @@ if (Test-Path (Join-Path $gameDir "mods")) {
     Copy-Item -Recurse (Join-Path $gameDir "mods\*") (Join-Path $pkg "runtime\bundled-mods\") -Force -ErrorAction SilentlyContinue
 }
 
+if ($ProjectConfig.MinecraftVersion -eq "1.12.2" -and $Loader.ToLowerInvariant() -eq "forge") {
+    Write-Host "=== Preparing legacy Forge 1.12.2 cache ==="
+    & (Join-Path $root "scripts\setup.ps1") `
+        -MinecraftVersion $ProjectConfig.MinecraftVersion `
+        -Loader "forge" `
+        -LoaderVersion $(if ($LoaderVersion) { $LoaderVersion } else { "14.23.5.2864" }) `
+        -AssetIndex $(if ($AssetIndex) { $AssetIndex } else { "1" })
+    if ($LASTEXITCODE -ne 0) { throw "Legacy Forge 1.12.2 setup failed" }
+}
 Write-Host "Copying natives..."
 Ensure-Dir (Join-Path $pkg "natives")
 Copy-Item (Join-Path $nativesSourceDir "*.dll") (Join-Path $pkg "natives\") -Force
