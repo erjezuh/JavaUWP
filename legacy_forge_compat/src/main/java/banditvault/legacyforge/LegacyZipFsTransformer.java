@@ -42,7 +42,8 @@ public final class LegacyZipFsTransformer implements net.minecraft.launchwrapper
 
                 if (patchWindowsDisplay &&
                     "getCurrentDisplayMode".equals(methodName)
-                    && "()Lorg/lwjgl/opengl/DisplayMode;".equals(descriptor)) {
+                    && "()Lorg/lwjgl/opengl/DisplayMode;".equals(descriptor)
+                    && (access & Opcodes.ACC_NATIVE) != 0) {
                     /*
                      * LWJGL 2.9.4 implements this method as a native Win32 display
                      * query. On Xbox/UWP the underlying call returns ERROR_CALL_NOT_IMPLEMENTED
