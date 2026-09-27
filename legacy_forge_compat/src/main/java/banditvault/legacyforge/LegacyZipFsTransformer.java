@@ -31,8 +31,30 @@ public final class LegacyZipFsTransformer implements net.minecraft.launchwrapper
         }
 
         final boolean[] patched = new boolean[] {false};
+        final boolean[] nativeWindowsDisplayBefore = new boolean[] {false};
         ClassReader reader = new ClassReader(basicClass);
         ClassWriter writer = new ClassWriter(reader, 0);
+
+        if (patchWindowsDisplay) {
+            ClassReader probe = new ClassReader(basicClass);
+            probe.accept(new ClassVisitor(Opcodes.ASM5) {
+                @Override
+                public MethodVisitor visitMethod(
+                    int access, String methodName, String descriptor,
+                    String signature, String[] exceptions) {
+                    if ("getCurrentDisplayMode".equals(methodName)
+                        && "()Lorg/lwjgl/opengl/DisplayMode;".equals(descriptor)
+                        && (access & Opcodes.ACC_NATIVE) != 0) {
+                        nativeWindowsDisplayBefore[0] = true;
+                    }
+                    return null;
+                }
+            }, ClassReader.SKIP_CODE | ClassReader.SKIP_DEBUG | ClassReader.SKIP_FRAMES);
+            System.err.println(
+                "[BanditVault] WindowsDisplay transformer input: nativeGetCurrentDisplayMode="
+                    + nativeWindowsDisplayBefore[0]
+                    + " bytes=" + basicClass.length);
+        }
 
         reader.accept(new ClassVisitor(Opcodes.ASM5, writer) {
             @Override
@@ -106,7 +128,17 @@ public final class LegacyZipFsTransformer implements net.minecraft.launchwrapper
         }, 0);
 
         if (!patched[0]) {
+            if (patchWindowsDisplay) {
+                System.err.println(
+                    "[BanditVault] WindowsDisplay transformer made no change; "
+                        + "nativeGetCurrentDisplayMode=" + nativeWindowsDisplayBefore[0]);
+            }
             return basicClass;
+        }
+
+        if (patchWindowsDisplay) {
+            System.err.println(
+                "[BanditVault] WindowsDisplay transformer output: nativeGetCurrentDisplayMode=false");
         }
 
         System.err.println("[BanditVault] Legacy UWP transformer patched " +
