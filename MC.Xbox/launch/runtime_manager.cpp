@@ -1318,7 +1318,10 @@ bool PrepareTargetNativeDir(
     std::wstring existingMarker;
     const bool markerReady =
         GetFileAttributesW((nativeDir + L"\\lwjgl.dll").c_str()) != INVALID_FILE_ATTRIBUTES &&
-        GetFileAttributesW((nativeDir + L"\\lwjgl64.dll").c_str()) != INVALID_FILE_ATTRIBUTES;
+        GetFileAttributesW((nativeDir + L"\\lwjgl64.dll").c_str()) != INVALID_FILE_ATTRIBUTES &&
+        (!legacyForge122 ||
+            (GetFileAttributesW((nativeDir + L"\\msvcr100.dll").c_str()) != INVALID_FILE_ATTRIBUTES &&
+             GetFileAttributesW((nativeDir + L"\\msvcp100.dll").c_str()) != INVALID_FILE_ATTRIBUTES));
     if (ReadTextFile(markerPath, existingMarker) && existingMarker == marker &&
         (legacyForge122
             ? markerReady
@@ -1348,7 +1351,18 @@ bool PrepareTargetNativeDir(
         extractedJna = ExtractDllsFromJar(jar, nativeDir, true) || extractedJna;
     }
 
-    if (!legacyForge122) {
+    if (legacyForge122) {
+        // LWJGL 2.9.4's x64 DLL imports the VC++ 2010 CRT. The CRT is not
+        // inside the LWJGL native JAR, so copy the packaged dependencies into
+        // the target-specific native directory before the JVM loads lwjgl64.
+        const bool copiedMsvcr = CopyFileIfNeeded(
+            packageNativesDir + L"\\msvcr100.dll",
+            nativeDir + L"\\msvcr100.dll");
+        const bool copiedMsvcp = CopyFileIfNeeded(
+            packageNativesDir + L"\\msvcp100.dll",
+            nativeDir + L"\\msvcp100.dll");
+        WriteLogF(L"Legacy LWJGL CRT: msvcr100=%d msvcp100=%d", copiedMsvcr ? 1 : 0, copiedMsvcp ? 1 : 0);
+    } else {
         CopyFileIfNeeded(packageNativesDir + L"\\glfw.dll", nativeDir + L"\\glfw.dll");
     }
 
