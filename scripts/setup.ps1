@@ -350,28 +350,11 @@ function Ensure-LegacyVc2010Runtime {
 }
 Write-Host "=== Preparing non-Fabric target: $version + $Loader $LoaderVersion ==="
 if ($Loader -eq "forge" -and $version -eq "1.12.2") {
-    # Forge Maven publishes the legacy version without any build/source suffix.
-    # Some local shells/workflows can leak a trailing "git" marker into
-    # LOADER_VERSION; strip that marker before constructing the Maven coordinate.
+    # Forge Maven publishes the legacy version without a source/build suffix.
+    # Normalize an accidental trailing "git" marker before constructing the coordinate.
     $forgeLoaderVersion = ([string]$LoaderVersion).Trim()
     $forgeLoaderVersion = $forgeLoaderVersion -replace "(?i)git$", ""
-    if ($forgeLoaderVersion -notmatch '^\\d+\\.\\d+\\.\\d+\\.\\d+
-
-    Ensure-LegacyVc2010Runtime
-
-    Write-Host "=== Downloading asset index ==="
-    $indexDir = Join-Path $assetsDir "indexes"
-    Ensure-Dir $indexDir
-    $assetIndexId = $versionJson.assetIndex.id
-    $assetIndexPath = Join-Path $indexDir "$assetIndexId.json"
-    Save-RemoteFile -Uri $versionJson.assetIndex.url -Path $assetIndexPath
-    if ($assetIndexId -ne $assetIndex) {
-        Write-Warning "Configured asset index is $assetIndex, but Mojang metadata for $version reports $assetIndexId."
-    }
-
-    Write-Host "Forge 1.12.2 cache is ready."
-    return
-}
+    if ($forgeLoaderVersion -notmatch '^\d+\.\d+\.\d+\.\d+
 
 if ($Loader -ne "fabric") {
     throw "Setup currently supports Fabric plus the legacy Forge 1.12.2 target. Unsupported loader: $Loader"
@@ -596,7 +579,7 @@ Write-Host "CI cache is ready."
         throw "Invalid Forge 1.12.2 loader version for Maven: $LoaderVersion. Expected four numeric components, e.g. 14.23.5.2864."
     }
     if ($forgeLoaderVersion -ne $LoaderVersion) {
-        Write-Warning "Normalizing Forge loader version '$LoaderVersion' to '$forgeLoaderVersion' for Maven download."
+        Write-Warning ("Normalizing Forge loader version {0} to {1} for Maven download." -f $LoaderVersion, $forgeLoaderVersion)
     }
     $forgeVersion = if ($forgeLoaderVersion.StartsWith("$version-")) { $forgeLoaderVersion } else { "$version-$forgeLoaderVersion" }
     $forgeJar = Join-Path (Get-ConfigPath "GameDir") "libraries\net\minecraftforge\forge\$forgeVersion\forge-$forgeVersion-universal.jar"
