@@ -747,7 +747,7 @@ void LogHsErrExcerpt(const std::string& text) {
     }
 
     constexpr size_t kHeaderLines = 32;
-    constexpr size_t kMaxLines = 80;
+    constexpr size_t kMaxLines = 128;
     size_t logged = 0;
 
     // Header covers the exception code, problematic frame, current thread and siginfo.
@@ -770,6 +770,27 @@ void LogHsErrExcerpt(const std::string& text) {
     WriteLog(L"hs_err | ... (Native frames section)");
     for (size_t i = nativeAt; i < lines.size() && logged < kMaxLines; ++i) {
         if (i > nativeAt && lines[i].empty()) break;
+        WriteLogF(L"hs_err | %s", a2w(lines[i].c_str()).c_str());
+        ++logged;
+    }
+
+    // The Java frames name the exact call that entered native code (e.g. which
+    // GL method lwjgl64 was executing when it crashed), so keep that section in
+    // the excerpt as well - some devices can only export mc_launch.log.
+    size_t javaAt = std::string::npos;
+    for (size_t i = nativeAt + 1; i < lines.size() && i < nativeAt + 400; ++i) {
+        const size_t start = lines[i].find_first_not_of(" \t");
+        if (start == std::string::npos) continue;
+        if (lines[i].compare(start, 11, "Java frames:") == 0) {
+            javaAt = i;
+            break;
+        }
+    }
+    if (javaAt == std::string::npos) return;
+
+    WriteLog(L"hs_err | ... (Java frames section)");
+    for (size_t i = javaAt; i < lines.size() && logged < kMaxLines; ++i) {
+        if (i > javaAt && lines[i].empty()) break;
         WriteLogF(L"hs_err | %s", a2w(lines[i].c_str()).c_str());
         ++logged;
     }

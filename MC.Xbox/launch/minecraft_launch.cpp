@@ -1292,6 +1292,29 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
     if (earlyBlockedRemoved > 0) {
         WriteLogF(L"Removed %d blocked mod(s) from active profile before configuring launch", earlyBlockedRemoved);
     }
+    // Forge 1.12.2 SplashProgress draws the loading screen from a second GL
+    // thread on a second shared GL context (SharedDrawable), while the Client
+    // thread keeps loading with the other context. The UWP GLFW/WGL shim serves
+    // a single WGL context, so the splash thread steals it from the Client
+    // thread and Mesa crashes with EXCEPTION_ACCESS_VIOLATION inside
+    // libgallium_wgl (e.g. during the texture-atlas upload). Forge documents
+    // config/splash.properties enabled=false as the supported fallback for
+    // systems where the splash misbehaves, so seed it for this legacy profile.
+    if (minecraftVersion == L"1.12.2" && loaderId == LoaderId::Forge) {
+        const std::wstring splashConfigPath = gameDir + L"\\config\\splash.properties";
+        const std::wstring splashConfig =
+            L"# Written by the BanditVault launcher for the UWP/Xbox GL shim.\n"
+            L"# Forge SplashProgress renders from a second GL thread through a\n"
+            L"# second shared GL context. The shim has one WGL context, so the\n"
+            L"# splash thread steals it from the game thread and Mesa crashes in\n"
+            L"# libgallium_wgl. Re-enable only after multi-context support.\n"
+            L"enabled=false\n";
+        if (WriteTextFile(splashConfigPath, splashConfig)) {
+            WriteLog(L"Legacy Forge splash disabled via config/splash.properties (single-context UWP GL shim)");
+        } else {
+            WriteLogF(L"Failed to write %s err=%u", splashConfigPath.c_str(), GetLastError());
+        }
+    }
     ConfigureKnownModDefaults(gameDir, userModsDir, minecraftVersion, bundledModsDir);
     if (SetCurrentDirectoryW(gameDir.c_str())) {
         WriteLogF(L"Process current directory set to gameDir: %s", gameDir.c_str());
