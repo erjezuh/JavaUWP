@@ -20,12 +20,20 @@ $launchwrapperJar = Join-Path $launchwrapperDir "launchwrapper-1.12.jar"
 $asmDir = Join-Path $gameDir "libraries\org\ow2\asm\asm-debug-all\5.2"
 $asmJar = Join-Path $asmDir "asm-debug-all-5.2.jar"
 
-$lwjglJar = Join-Path $gameDir "libraries\org\lwjgl\lwjgl\2.9.4\lwjgl-2.9.4.jar"
+$lwjglRoot = Join-Path $gameDir "libraries\org\lwjgl\lwjgl"
+$lwjglCandidates = @(
+    Get-ChildItem -LiteralPath $lwjglRoot -Recurse -Filter "lwjgl-*.jar" -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -match '^lwjgl-2\.9\.4(?:-|\.)' } |
+        Sort-Object FullName
+)
+$lwjglJar = if ($lwjglCandidates.Count -gt 0) { $lwjglCandidates[0].FullName } else { $null }
 
 if (-not (Test-Path $forgeJar)) { throw "Forge universal jar missing: $forgeJar. Run the legacy Forge setup first." }
 if (-not (Test-Path $launchwrapperJar)) { throw "LaunchWrapper 1.12 missing: $launchwrapperJar." }
 if (-not (Test-Path $asmJar)) { throw "ASM 5.2 missing: $asmJar." }
-if (-not (Test-Path $lwjglJar)) { throw "LWJGL 2.9.4 jar missing: $lwjglJar." }
+if (-not $lwjglJar -or -not (Test-Path $lwjglJar)) {
+    throw "LWJGL 2.9.4 artifact missing under $lwjglRoot."
+}
 
 $javaHome = Resolve-JavaHome
 $javac = Join-Path $javaHome "bin\javac.exe"
