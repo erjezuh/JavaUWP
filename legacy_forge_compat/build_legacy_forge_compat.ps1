@@ -43,6 +43,11 @@ if (-not (Test-Path $jarExe)) { throw "jar.exe missing from Java home: $javaHome
 $javaExe = Join-Path $javaHome "bin\java.exe"
 if (-not (Test-Path $javaExe)) { throw "java.exe missing from Java home: $javaHome" }
 
+$packageDir = Get-ConfigPath "PackageContentDir"
+$legacyLwjglPackageDir = Join-Path $packageDir "runtime\legacy-forge"
+$legacyLwjglPackageJar = Join-Path $legacyLwjglPackageDir "lwjgl-2.9.4-uwp.jar"
+$legacyWindowsDisplayClass = Join-Path $legacyLwjglPackageDir "org\lwjgl\opengl\WindowsDisplay.class"
+Ensure-Dir $legacyLwjglPackageDir
 
 $buildRoot = Join-Path (Get-ConfigPath "BuildDir") "legacy_forge_compat\$MinecraftVersion-$ForgeVersion"
 $classesDir = Join-Path $buildRoot "classes"
@@ -75,19 +80,18 @@ if (-not (Test-BuildStampCurrent -StampPath $stampPath -Stamp $stamp -RequiredOu
 
 # LaunchWrapper keeps org.lwjgl.* delegated to the parent classloader, so the
 # IClassTransformer cannot reliably see WindowsDisplay. Patch the actual LWJGL
-# 2.9.4 jar in-place; this keeps all other Minecraft versions untouched.
-& $javaExe -cp "$classesDir;$asmJar;$launchwrapperJar" banditvault.legacyforge.LegacyLwjglJarPatcher $lwjglJar
+# 2.9.4 jar and export the exact transformed class separately. The standalone
+# class is copied into launcher-overrides at runtime, where it is the first
+# classpath source and cannot be hidden behind a stock LWJGL jar.
+& $javaExe -cp "$classesDir;$asmJar;$launchwrapperJar" banditvault.legacyforge.LegacyLwjglJarPatcher $lwjglJar $legacyWindowsDisplayClass
 if ($LASTEXITCODE -ne 0) { throw "LWJGL 2.9.4 UWP WindowsDisplay patch failed." }
 
 # Keep the stock Maven artifact immutable for the download manifest. The patched
 # compatibility copy is packaged separately and selected only by the legacy
 # 1.12.2 Forge launcher path at runtime.
-$packageDir = Get-ConfigPath "PackageContentDir"
-$legacyLwjglPackageDir = Join-Path $packageDir "runtime\legacy-forge"
-$legacyLwjglPackageJar = Join-Path $legacyLwjglPackageDir "lwjgl-2.9.4-uwp.jar"
-Ensure-Dir $legacyLwjglPackageDir
 Copy-Item -LiteralPath $lwjglJar -Destination $legacyLwjglPackageJar -Force
 Write-Host "Packaged legacy LWJGL compatibility jar: $legacyLwjglPackageJar"
+Write-Host "Packaged patched WindowsDisplay class: $legacyWindowsDisplayClass"
 
 Ensure-Dir $OutputDir
 $targetJar = Join-Path $OutputDir "banditvault-legacy-forge-compat.jar"
