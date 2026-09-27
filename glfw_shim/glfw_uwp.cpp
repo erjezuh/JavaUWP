@@ -3020,6 +3020,13 @@ GLFWwindow* glfwCreateWindow(int w, int h, const char* title, GLFWmonitor*, GLFW
             : h;
     }
     RefreshWindowMetrics(false);
+    // Legacy LWJGL 2 passes no size (0x0): the CoreWindow owns the surface.
+    // Keep the menu-protocol sizes tracking the real framebuffer like
+    // RefreshWindowMetrics does when the metrics change.
+    if (w <= 0 || h <= 0) {
+        g_menu_window_width = g_framebuffer_width;
+        g_menu_window_height = g_framebuffer_height;
+    }
     if (!CreateEglContext()) {
         ShimLog("CreateEglContext FAILED");
         return NULL;

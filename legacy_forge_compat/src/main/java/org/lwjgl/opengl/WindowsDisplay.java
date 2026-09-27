@@ -45,20 +45,28 @@ final class WindowsDisplay implements DisplayImplementation {
         this.parent = parent;
         this.x = x;
         this.y = y;
-        this.width = mode != null ? mode.getWidth() : WIDTH;
-        this.height = mode != null ? mode.getHeight() : HEIGHT;
-        this.currentMode = mode != null ? mode : new DisplayMode(WIDTH, HEIGHT);
+        // Minecraft requests its legacy default mode (854x480), but Mesa
+        // presents the full-screen UWP CoreWindow surface. Rendering 854x480
+        // into that surface shows the game as a tiny corner. Pass 0x0 so the
+        // shim keeps tracking the CoreWindow size, then adopt the real raw
+        // framebuffer size as the display mode.
+        LegacyUwpGlfwBridge.createWindow(0, 0, Display.getTitle());
+        int[] fb = LegacyUwpGlfwBridge.getFramebufferSize();
+        this.width = fb[0] > 0 ? fb[0] : WIDTH;
+        this.height = fb[1] > 0 ? fb[1] : HEIGHT;
+        this.currentMode = new DisplayMode(width, height);
         this.closeRequested = false;
         this.visible = true;
         this.active = true;
         this.dirty = true;
-        this.resized = false;
-
-        LegacyUwpGlfwBridge.createWindow(width, height, Display.getTitle());
+        // Kick LWJGL's Display.update() -> wasResized() handshake so Minecraft
+        // adopts this size on its first frame instead of its 854x480 default.
+        this.resized = true;
         created = true;
 
         System.err.println(
-            "[BanditVault] LWJGL 2 WindowsDisplay using CoreWindow UWP backend");
+            "[BanditVault] LWJGL 2 WindowsDisplay using CoreWindow UWP backend "
+                + width + "x" + height);
     }
 
     @Override
@@ -106,9 +114,14 @@ final class WindowsDisplay implements DisplayImplementation {
 
     @Override
     public DisplayMode init() throws LWJGLException {
-        currentMode = new DisplayMode(WIDTH, HEIGHT);
-        width = WIDTH;
-        height = HEIGHT;
+        // The CoreWindow surface is the real display on Xbox/UWP. Report its
+        // raw-pixel size so desktop/fullscreen code paths use sane values.
+        int[] fb = LegacyUwpGlfwBridge.getFramebufferSize();
+        width = fb[0] > 0 ? fb[0] : WIDTH;
+        height = fb[1] > 0 ? fb[1] : HEIGHT;
+        currentMode = new DisplayMode(width, height);
+        System.err.println(
+            "[BanditVault] LWJGL 2 display surface resolved to " + width + "x" + height);
         return currentMode;
     }
 
@@ -160,7 +173,8 @@ final class WindowsDisplay implements DisplayImplementation {
             active = true;
         }
         dirty = true;
-        resized = false;
+        // resized is consumed only by wasResized() (LWJGL Display.update()
+        // samples it every frame); clearing it here would eat the signal.
     }
 
     @Override
@@ -179,7 +193,7 @@ final class WindowsDisplay implements DisplayImplementation {
 
     @Override
     public DisplayMode[] getAvailableDisplayModes() throws LWJGLException {
-        return new DisplayMode[] {new DisplayMode(WIDTH, HEIGHT)};
+        return new DisplayMode[] {new DisplayMode(width, height)};
     }
 
     @Override

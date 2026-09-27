@@ -3,6 +3,7 @@ package banditvault.legacyforge;
 import com.sun.jna.Library;
 import com.sun.jna.Native;
 import com.sun.jna.Pointer;
+import com.sun.jna.ptr.IntByReference;
 import org.lwjgl.LWJGLException;
 
 /**
@@ -25,6 +26,8 @@ public final class LegacyUwpGlfwBridge {
         void glfwSetWindowShouldClose(Pointer window, int value);
         void glfwSetWindowTitle(Pointer window, String title);
         void glfwPollEvents();
+        void glfwGetFramebufferSize(
+            Pointer window, IntByReference width, IntByReference height);
     }
 
     private static GlfwLibrary library;
@@ -58,9 +61,29 @@ public final class LegacyUwpGlfwBridge {
         }
 
         makeCurrent();
+        int[] fb = getFramebufferSize();
         System.err.println(
             "[BanditVault] Legacy LWJGL window routed through UWP GLFW/CoreWindow shim: "
-                + width + "x" + height);
+                + fb[0] + "x" + fb[1]);
+    }
+
+    /** Real size, in raw pixels, of the CoreWindow surface Mesa presents to. */
+    public static synchronized int[] getFramebufferSize() {
+        try {
+            load();
+        } catch (Throwable error) {
+            return new int[] {0, 0};
+        }
+        if (!initialized) {
+            if (library.glfwInit() == 0) {
+                return new int[] {0, 0};
+            }
+            initialized = true;
+        }
+        IntByReference width = new IntByReference(0);
+        IntByReference height = new IntByReference(0);
+        library.glfwGetFramebufferSize(window, width, height);
+        return new int[] {width.getValue(), height.getValue()};
     }
 
     public static synchronized void destroyWindow() {
