@@ -1250,10 +1250,9 @@ function Build-Java8ZipfsRealpathPatch {
     # can open the file and read its attributes, but toRealPath() is denied for
     # LocalState paths. Keep the original path as the stable key when resolution
     # is unavailable. This patch is deliberately scoped to the Java 8 runtime.
-    $providerSource = [regex]::Replace(
-        $providerSource,
-        "(?<!safeRealPath\()([A-Za-z0-9_\.]+)\.toRealPath\(\)",
-        "safeRealPath(\$1)")
+    $providerSource = $providerSource.Replace("uriToPath(uri).toRealPath()", "safeRealPath(uriToPath(uri))")
+    $providerSource = $providerSource.Replace("zfpath.toRealPath()", "safeRealPath(zfpath)")
+    $providerSource = $providerSource.Replace("path.toRealPath()", "safeRealPath(path)")
     $providerSource = $providerSource.Replace(
         "        private boolean ensureFile(Path path) {",
         "        private static Path safeRealPath(Path path) throws IOException {
