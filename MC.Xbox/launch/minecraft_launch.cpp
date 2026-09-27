@@ -997,17 +997,39 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
         (packagedNativesReady ? packagedNativesDir : nativesDir);
     const std::wstring lwjglGlfwDll = lwjglNativeDir + L"\\glfw.dll";
 
-    // Java's UnsatisfiedLinkError only reports "Can't find dependent libraries".
-    // Probe the actual legacy LWJGL module from the native host first so the
-    // Windows loader resolves its transitive imports using the DLL's own
-    // directory and we get the real Win32 error code in launcher.log.
+    // LWJGL 2 is loaded by java.lang.System.load(), but on UWP the JVM's
+    // native loader does not always inherit the same DLL search semantics as
+    // the native host. Keep the legacy native directory on the process search
+    // path and retain a successful preload so Java reuses the already-loaded
+    // module instead of resolving its dependencies a second time.
+    HMODULE legacyLwjglModule = nullptr;
     if (legacyForge122Natives) {
+        if (!SetDllDirectoryW(lwjglNativeDir.c_str())) {
+            WriteLogF(L"Legacy LWJGL SetDllDirectory FAILED: %s err=%u", lwjglNativeDir.c_str(), GetLastError());
+        } else {
+            WriteLogF(L"Legacy LWJGL DLL search directory: %s", lwjglNativeDir.c_str());
+        }
+
+        const std::wstring legacyCrt100 = lwjglNativeDir + L"\\msvcr100.dll";
+        if (GetFileAttributesW(legacyCrt100.c_str()) != INVALID_FILE_ATTRIBUTES) {
+            HMODULE crt = LoadLibraryExW(
+                legacyCrt100.c_str(), nullptr,
+                LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+            if (crt) {
+                WriteLogF(L"Legacy LWJGL CRT preload OK: %s", legacyCrt100.c_str());
+            } else {
+                WriteLogF(L"Legacy LWJGL CRT preload FAILED: %s err=%u", legacyCrt100.c_str(), GetLastError());
+            }
+        } else {
+            WriteLogF(L"Legacy LWJGL CRT not packaged: %s", legacyCrt100.c_str());
+        }
+
         const std::wstring legacyLwjgl64 = lwjglNativeDir + L"\\lwjgl64.dll";
-        HMODULE probe = LoadLibraryExW(
+        legacyLwjglModule = LoadLibraryExW(
             legacyLwjgl64.c_str(),
             nullptr,
             LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
-        if (!probe) {
+        if (!legacyLwjglModule) {
             const DWORD error = GetLastError();
             WriteLogF(L"Legacy LWJGL preload FAILED: %s err=%u", legacyLwjgl64.c_str(), error);
             WriteLogF(
@@ -1016,8 +1038,7 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
                 packagedNativesReady ? 1 : 0,
                 lwjglNativeDir.c_str());
         } else {
-            WriteLogF(L"Legacy LWJGL preload OK: %s", legacyLwjgl64.c_str());
-            FreeLibrary(probe);
+            WriteLogF(L"Legacy LWJGL preload OK and retained: %s", legacyLwjgl64.c_str());
         }
     }
     const std::wstring logConfigPath = exeDir + L"\\game\\log_configs\\client-uwp.xml";
