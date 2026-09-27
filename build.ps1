@@ -1536,6 +1536,15 @@ try {
     $jre8Src = Resolve-JavaRuntimeHomeExact -MajorVersion 8
     Copy-PackagedJre -JavaHome $jre8Src -PackageRelativeDir "jre8" -SecurityPropertiesPath $xboxSecurityProperties
     Write-Host "Packaged Java 8 runtime for Forge 1.12.2: $jre8Src"
+    if ($McVersion -eq "1.12.2" -and $Loader.ToLowerInvariant() -eq "forge") {
+        $jdk8Src = $null
+        if (Test-Path (Join-Path $jre8Src "bin\javac.exe")) {
+            $jdk8Src = $jre8Src
+        } else {
+            $jdk8Src = Resolve-JavaHomeExact -MajorVersion 8
+        }
+        Build-Java8ZipfsRealpathPatch -JavaHome $jdk8Src -OutputJar (Join-Path $pkg "java-zipfs-realpath-8.jar") -WorkName "java8_zipfs_realpath_patch"
+    }
 } catch {
     Write-Warning "Java 8 runtime not packaged: $($_.Exception.Message). Forge 1.12.2 requires a Java 8 runtime."
 }
