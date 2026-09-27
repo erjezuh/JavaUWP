@@ -84,8 +84,7 @@ public final class LegacyZipFsTransformer implements net.minecraft.launchwrapper
                         int opcode, String owner, String calledName,
                         String calledDescriptor, boolean isInterface) {
 
-                        if (patchCraftingManager &&
-                            opcode == Opcodes.INVOKESTATIC
+                        if (opcode == Opcodes.INVOKESTATIC
                                 && FILE_SYSTEMS.equals(owner)
                                 && "newFileSystem".equals(calledName)
                                 && URI_FS_DESC.equals(calledDescriptor)) {
@@ -110,6 +109,9 @@ public final class LegacyZipFsTransformer implements net.minecraft.launchwrapper
             return basicClass;
         }
 
+        System.err.println("[BanditVault] Legacy UWP transformer patched " +
+            (patchWindowsDisplay ? "WindowsDisplay" : "ZipFS") +
+            " in " + (name != null ? name : transformedName));
         return writer.toByteArray();
     }
 }
