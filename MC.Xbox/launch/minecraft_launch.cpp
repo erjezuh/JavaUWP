@@ -1017,12 +1017,47 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
     if (legacyForge122Natives) {
         // LWJGL 2.9.4 statically imports OPENGL32.dll. The Java-side
         // org.lwjgl.opengl.libname override is too late for Windows to use
-        // when resolving lwjgl64.dll, so preload the selected Mesa OpenGL DLL.
+        // when resolving lwjgl64.dll. Copy the complete Mesa runtime beside
+        // the legacy natives first, then preload that local OpenGL DLL.
         if (GetFileAttributesW(selectedOpenGl.c_str()) != INVALID_FILE_ATTRIBUTES) {
+            const wchar_t* mesaDllNames[] = {
+                L"opengl32.dll",
+                L"libgallium_wgl.dll",
+                L"dxil.dll",
+                L"spirv_to_dxil.dll",
+                L"vulkan_dzn.dll",
+                L"z-1.dll"
+            };
+            bool mesaBundleReady = true;
+            for (const wchar_t* mesaDllName : mesaDllNames) {
+                const std::wstring source = packageDir + L"\\graphics\\" + graphicsRuntime + L"\\" + mesaDllName;
+                const std::wstring destination = lwjglNativeDir + L"\\" + mesaDllName;
+                if (GetFileAttributesW(source.c_str()) == INVALID_FILE_ATTRIBUTES) {
+                    mesaBundleReady = false;
+                    WriteLogF(L"Legacy Mesa bundle missing: %s", source.c_str());
+                    continue;
+                }
+                if (!CopyFileW(source.c_str(), destination.c_str(), FALSE)) {
+                    const DWORD copyError = GetLastError();
+                    if (GetFileAttributesW(destination.c_str()) == INVALID_FILE_ATTRIBUTES) {
+                        mesaBundleReady = false;
+                        WriteLogF(L"Legacy Mesa bundle copy FAILED: %s -> %s err=%u",
+                            source.c_str(), destination.c_str(), copyError);
+                    }
+                }
+            }
+            if (mesaBundleReady) {
+                WriteLogF(L"Legacy Mesa bundle ready in nativesDir: %s", lwjglNativeDir.c_str());
+            }
             // The Mesa DLL is inside the MSIX package. Prefer the packaged loader
             // for that copy so Windows resolves its package-local dependency graph
             // (libgallium_wgl.dll, dxil.dll, z-1.dll, etc.) as packaged DLLs.
-            if (selectedOpenGl.size() > packageDir.size() &&
+            if (GetFileAttributesW((lwjglNativeDir + L"\\opengl32.dll").c_str()) != INVALID_FILE_ATTRIBUTES) {
+                legacyOpenGlModule = LoadLibraryExW(
+                    (lwjglNativeDir + L"\\opengl32.dll").c_str(), nullptr,
+                    LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+            }
+            if (!legacyOpenGlModule && selectedOpenGl.size() > packageDir.size() &&
                 selectedOpenGl.compare(0, packageDir.size(), packageDir) == 0) {
                 std::wstring packageRelativeOpenGl = selectedOpenGl.substr(packageDir.size());
                 while (!packageRelativeOpenGl.empty() &&
