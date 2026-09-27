@@ -1280,13 +1280,21 @@ public final class Java8ZipFsBytecodePatcher {
                 return new MethodVisitor(Opcodes.ASM5, delegate) {
                     @Override
                     public void visitMethodInsn(int opcode, String owner, String methodName, String methodDescriptor, boolean isInterface) {
-                        if (opcode == Opcodes.INVOKEVIRTUAL && "java/nio/file/Path".equals(owner) && "toRealPath".equals(methodName) && "()Ljava/nio/file/Path;".equals(methodDescriptor)) {
-                            super.visitMethodInsn(Opcodes.INVOKESTATIC, "banditvault/legacyforge/LegacyZipFsRealPath", "safeRealPath", "(Ljava/nio/file/Path;)Ljava/nio/file/Path;", false);
+                        if ((opcode == Opcodes.INVOKEVIRTUAL || opcode == Opcodes.INVOKEINTERFACE)
+                                && "java/nio/file/Path".equals(owner)
+                                && "toRealPath".equals(methodName)
+                                && "()Ljava/nio/file/Path;".equals(methodDescriptor)) {
+                            super.visitMethodInsn(Opcodes.INVOKESTATIC, "banditvault/legacyforge/LegacyZipFsRealPath",
+                                "safeRealPath", "(Ljava/nio/file/Path;)Ljava/nio/file/Path;", false);
                             patched[0] = true;
                             return;
                         }
-                        if (opcode == Opcodes.INVOKEVIRTUAL && "java/nio/file/Path".equals(owner) && "toRealPath".equals(methodName) && "([Ljava/nio/file/LinkOption;)Ljava/nio/file/Path;".equals(methodDescriptor)) {
-                            super.visitMethodInsn(Opcodes.INVOKESTATIC, "banditvault/legacyforge/LegacyZipFsRealPath", "safeRealPath", "(Ljava/nio/file/Path;[Ljava/nio/file/LinkOption;)Ljava/nio/file/Path;", false);
+                        if ((opcode == Opcodes.INVOKEVIRTUAL || opcode == Opcodes.INVOKEINTERFACE)
+                                && "java/nio/file/Path".equals(owner)
+                                && "toRealPath".equals(methodName)
+                                && "([Ljava/nio/file/LinkOption;)Ljava/nio/file/Path;".equals(methodDescriptor)) {
+                            super.visitMethodInsn(Opcodes.INVOKESTATIC, "banditvault/legacyforge/LegacyZipFsRealPath",
+                                "safeRealPath", "(Ljava/nio/file/Path;[Ljava/nio/file/LinkOption;)Ljava/nio/file/Path;", false);
                             patched[0] = true;
                             return;
                         }
