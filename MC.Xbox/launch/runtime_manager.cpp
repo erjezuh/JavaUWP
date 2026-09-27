@@ -1090,7 +1090,7 @@ JavaRuntimeInfo ResolveJavaRuntimeInfo(
         // Java 8 predates the module system; the Java 17/21 UWP module patches
         // are intentionally not applied to the legacy Forge runtime.
         info.javaBasePatchName.clear();
-        info.zipfsPatchName.clear();
+        info.zipfsPatchName = L"java-zipfs-realpath-8.jar";
     } else {
         info.runtimeId = L"current";
         info.packageRelativeDir = L"jre";
