@@ -1414,7 +1414,7 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
                 return false;
             }
             SetLastError(ERROR_SUCCESS);
-            if (CopyFileW(source.c_str(), destination.c_str(), TRUE)) {
+            if (CopyFileW(source.c_str(), destination.c_str(), FALSE)) {
                 WriteLogF(L"%s installed in launcher-overrides: %s", label, destination.c_str());
                 return true;
             }
