@@ -996,6 +996,16 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
         suppliedNativesReady ? nativesDir :
         (packagedNativesReady ? packagedNativesDir : nativesDir);
     const std::wstring lwjglGlfwDll = lwjglNativeDir + L"\\glfw.dll";
+    std::wstring graphicsRuntime = GetEnvVarString(L"MC_GRAPHICS_RUNTIME");
+    if (graphicsRuntime.empty()) {
+        graphicsRuntime = L"mesa";
+    }
+    const std::wstring packagedOpenGl = packageDir + L"\\graphics\\" + graphicsRuntime + L"\\opengl32.dll";
+    const std::wstring localOpenGl = exeDir + L"\\graphics\\" + graphicsRuntime + L"\\opengl32.dll";
+    const std::wstring selectedOpenGl =
+        GetFileAttributesW(packagedOpenGl.c_str()) != INVALID_FILE_ATTRIBUTES
+            ? packagedOpenGl
+            : localOpenGl;
 
     // LWJGL 2 is loaded by java.lang.System.load(), but on UWP the JVM's
     // native loader does not always inherit the same DLL search semantics as
@@ -1003,6 +1013,23 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
     // path and retain a successful preload so Java reuses the already-loaded
     // module instead of resolving its dependencies a second time.
     HMODULE legacyLwjglModule = nullptr;
+    HMODULE legacyOpenGlModule = nullptr;
+    if (legacyForge122Natives) {
+        // LWJGL 2.9.4 statically imports OPENGL32.dll. The Java-side
+        // org.lwjgl.opengl.libname override is too late for Windows to use
+        // when resolving lwjgl64.dll, so preload the selected Mesa OpenGL DLL.
+        if (GetFileAttributesW(selectedOpenGl.c_str()) != INVALID_FILE_ATTRIBUTES) {
+            legacyOpenGlModule = LoadLibraryExW(
+                selectedOpenGl.c_str(), nullptr,
+                LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+            if (legacyOpenGlModule) {
+                WriteLogF(L"Legacy LWJGL OpenGL preload OK: %s", selectedOpenGl.c_str());
+            } else {
+                WriteLogF(L"Legacy LWJGL OpenGL preload FAILED: %s err=%u", selectedOpenGl.c_str(), GetLastError());
+            }
+        } else {
+            WriteLogF(L"Legacy LWJGL OpenGL preload missing: %s", selectedOpenGl.c_str());
+        }
     if (legacyForge122Natives) {
         // Packaged/UWP builds do not expose the desktop SetDllDirectoryW API.
         // The explicit LoadLibraryExW calls below already use the DLL's own
@@ -1297,16 +1324,6 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
         WriteLog(L"LWJGL 2 legacy path: GLFW override disabled");
     }
     WriteLogF(L"LWJGL native directory: %s", lwjglNativeDir.c_str());
-    std::wstring graphicsRuntime = GetEnvVarString(L"MC_GRAPHICS_RUNTIME");
-    if (graphicsRuntime.empty()) {
-        graphicsRuntime = L"mesa";
-    }
-    const std::wstring packagedOpenGl = packageDir + L"\\graphics\\" + graphicsRuntime + L"\\opengl32.dll";
-    const std::wstring localOpenGl = exeDir + L"\\graphics\\" + graphicsRuntime + L"\\opengl32.dll";
-    const std::wstring selectedOpenGl =
-        GetFileAttributesW(packagedOpenGl.c_str()) != INVALID_FILE_ATTRIBUTES
-            ? packagedOpenGl
-            : localOpenGl;
     if (GetFileAttributesW(selectedOpenGl.c_str()) != INVALID_FILE_ATTRIBUTES) {
         vmOptionStorage.push_back("-Dorg.lwjgl.opengl.libname=" + w2a(fwd(selectedOpenGl)));
         WriteLogF(L"LWJGL OpenGL library forced: %s", selectedOpenGl.c_str());
