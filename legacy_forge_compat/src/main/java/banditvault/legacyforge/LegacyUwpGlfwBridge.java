@@ -110,9 +110,11 @@ public final class LegacyUwpGlfwBridge {
     }
 
     public static synchronized boolean shouldClose() {
+        // JNA defines Pointer.NULL as literally null ("Convenience constant,
+        // same as null"), so it must never be dereferenced. JNA already maps a
+        // NULL native return to a Java null reference; window != null covers it.
         return library != null &&
             window != null &&
-            !Pointer.NULL.equals(window) &&
             library.glfwWindowShouldClose(window) != 0;
     }
 
