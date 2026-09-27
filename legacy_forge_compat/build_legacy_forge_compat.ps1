@@ -20,9 +20,12 @@ $launchwrapperJar = Join-Path $launchwrapperDir "launchwrapper-1.12.jar"
 $asmDir = Join-Path $gameDir "libraries\org\ow2\asm\asm-debug-all\5.2"
 $asmJar = Join-Path $asmDir "asm-debug-all-5.2.jar"
 
+$lwjglJar = Join-Path $gameDir "libraries\org\lwjgl\lwjgl\2.9.4\lwjgl-2.9.4.jar"
+
 if (-not (Test-Path $forgeJar)) { throw "Forge universal jar missing: $forgeJar. Run the legacy Forge setup first." }
 if (-not (Test-Path $launchwrapperJar)) { throw "LaunchWrapper 1.12 missing: $launchwrapperJar." }
 if (-not (Test-Path $asmJar)) { throw "ASM 5.2 missing: $asmJar." }
+if (-not (Test-Path $lwjglJar)) { throw "LWJGL 2.9.4 jar missing: $lwjglJar." }
 
 $javaHome = Resolve-JavaHome
 $javac = Join-Path $javaHome "bin\javac.exe"
@@ -49,6 +52,8 @@ if (-not (Test-BuildStampCurrent -StampPath $stampPath -Stamp $stamp -RequiredOu
 
     $cp = @($forgeJar, $launchwrapperJar, $asmJar) -join ";"
     & $javac --release 8 -cp $cp -d $classesDir $sources
+    $javaExe = Join-Path $javaHome "bin\java.exe"
+    if (-not (Test-Path $javaExe)) { throw "java.exe missing from Java home: $javaHome" }
     if ($LASTEXITCODE -ne 0) { throw "Legacy Forge compat coremod compile failed." }
 
     Copy-Item -Recurse "$resourceDir\*" $classesDir -Force
@@ -58,6 +63,12 @@ if (-not (Test-BuildStampCurrent -StampPath $stampPath -Stamp $stamp -RequiredOu
     if ($LASTEXITCODE -ne 0) { throw "Legacy Forge compat coremod JAR creation failed." }
     Set-BuildStamp -StampPath $stampPath -Stamp $stamp
 }
+
+# LaunchWrapper keeps org.lwjgl.* delegated to the parent classloader, so the
+# IClassTransformer cannot reliably see WindowsDisplay. Patch the actual LWJGL
+# 2.9.4 jar in-place; this keeps all other Minecraft versions untouched.
+& $javaExe -cp "$classesDir;$asmJar;$launchwrapperJar" banditvault.legacyforge.LegacyLwjglJarPatcher $lwjglJar
+if ($LASTEXITCODE -ne 0) { throw "LWJGL 2.9.4 UWP WindowsDisplay patch failed." }
 
 Ensure-Dir $OutputDir
 $targetJar = Join-Path $OutputDir "banditvault-legacy-forge-compat.jar"
