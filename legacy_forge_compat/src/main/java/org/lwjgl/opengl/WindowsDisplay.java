@@ -282,9 +282,9 @@ final class WindowsDisplay implements DisplayImplementation {
 
     @Override
     public void pollMouse(IntBuffer coordBuffer, ByteBuffer buttons) {
-        if (coordBuffer != null && coordBuffer.remaining() >= 2) {
-            coordBuffer.put(0, (int)LegacyUwpGlfwBridge.mouseX());
-            coordBuffer.put(1, (int)LegacyUwpGlfwBridge.mouseY());
+        if (coordBuffer != null && coordBuffer.capacity() >= 2) {
+            coordBuffer.put(0, 0);
+            coordBuffer.put(1, 0);
         }
         if (buttons != null) {
             while (buttons.hasRemaining()) {
