@@ -19,6 +19,8 @@ $launchwrapperDir = Join-Path $gameDir "libraries\net\minecraft\launchwrapper\1.
 $launchwrapperJar = Join-Path $launchwrapperDir "launchwrapper-1.12.jar"
 $asmDir = Join-Path $gameDir "libraries\org\ow2\asm\asm-debug-all\5.2"
 $asmJar = Join-Path $asmDir "asm-debug-all-5.2.jar"
+$jnaDir = Join-Path $gameDir "libraries\net\java\dev\jna\jna\4.4.0"
+$jnaJar = Join-Path $jnaDir "jna-4.4.0.jar"
 
 $lwjglRoot = Join-Path $gameDir "libraries\org\lwjgl\lwjgl"
 $lwjglCandidates = @(
@@ -31,6 +33,7 @@ $lwjglJar = if ($lwjglCandidates.Count -gt 0) { $lwjglCandidates[0].FullName } e
 if (-not (Test-Path $forgeJar)) { throw "Forge universal jar missing: $forgeJar. Run the legacy Forge setup first." }
 if (-not (Test-Path $launchwrapperJar)) { throw "LaunchWrapper 1.12 missing: $launchwrapperJar." }
 if (-not (Test-Path $asmJar)) { throw "ASM 5.2 missing: $asmJar." }
+if (-not (Test-Path $jnaJar)) { throw "JNA 4.4.0 missing: $jnaJar." }
 if (-not $lwjglJar -or -not (Test-Path $lwjglJar)) {
     throw "LWJGL 2.9.4 artifact missing under $lwjglRoot."
 }
@@ -47,6 +50,9 @@ $packageDir = Get-ConfigPath "PackageContentDir"
 $legacyLwjglPackageDir = Join-Path $packageDir "runtime\legacy-forge"
 $legacyLwjglPackageJar = Join-Path $legacyLwjglPackageDir "lwjgl-2.9.4-uwp.jar"
 $legacyWindowsDisplayClass = Join-Path $legacyLwjglPackageDir "org\lwjgl\opengl\WindowsDisplay.class"
+$legacyWindowsDisplayPeerInfoClass = Join-Path $legacyLwjglPackageDir "org\lwjgl\opengl\WindowsDisplayPeerInfo.class"
+$legacyWindowsContextImplClass = Join-Path $legacyLwjglPackageDir "org\lwjgl\opengl\WindowsContextImplementation.class"
+$legacyBridgeClass = Join-Path $legacyLwjglPackageDir "banditvault\legacyforge\LegacyUwpGlfwBridge.class"
 $legacyLaunchClassLoaderClass = Join-Path $legacyLwjglPackageDir "net\minecraft\launchwrapper\LaunchClassLoader.class"
 Ensure-Dir $legacyLwjglPackageDir
 
@@ -61,13 +67,13 @@ if (-not $sources) { throw "No legacy Forge compat Java sources found." }
 $resourceFiles = @(Get-ChildItem $resourceDir -Recurse -File | Select-Object -ExpandProperty FullName)
 
 $stampValues = @("legacy_forge_compat", $MinecraftVersion, $ForgeVersion, $javaHome)
-$stamp = New-BuildStamp -Values $stampValues -ContentFiles (@($PSCommandPath) + $sources + $resourceFiles) -DependencyFiles @($forgeJar, $launchwrapperJar, $asmJar, $lwjglJar)
+$stamp = New-BuildStamp -Values $stampValues -ContentFiles (@($PSCommandPath) + $sources + $resourceFiles) -DependencyFiles @($forgeJar, $launchwrapperJar, $asmJar, $jnaJar, $lwjglJar)
 
 if (-not (Test-BuildStampCurrent -StampPath $stampPath -Stamp $stamp -RequiredOutputs @($jarPath))) {
     Remove-Item -Recurse -Force $buildRoot -ErrorAction SilentlyContinue
     Ensure-Dir $classesDir
 
-    $cp = @($forgeJar, $launchwrapperJar, $asmJar) -join ";"
+    $cp = @($forgeJar, $launchwrapperJar, $asmJar, $jnaJar) -join ";"
     & $javac --release 8 -cp $cp -d $classesDir $sources
     if ($LASTEXITCODE -ne 0) { throw "Legacy Forge compat coremod compile failed." }
 
@@ -79,13 +85,37 @@ if (-not (Test-BuildStampCurrent -StampPath $stampPath -Stamp $stamp -RequiredOu
     Set-BuildStamp -StampPath $stampPath -Stamp $stamp
 }
 
-# LaunchWrapper keeps org.lwjgl.* delegated to the parent classloader, so the
-# IClassTransformer cannot reliably see WindowsDisplay. Patch the actual LWJGL
-# 2.9.4 jar and export the exact transformed class separately. The standalone
-# class is copied into launcher-overrides at runtime, where it is the first
-# classpath source and cannot be hidden behind a stock LWJGL jar.
-& $javaExe -cp "$classesDir;$asmJar;$launchwrapperJar" banditvault.legacyforge.LegacyLwjglJarPatcher $lwjglJar $legacyWindowsDisplayClass
-if ($LASTEXITCODE -ne 0) { throw "LWJGL 2.9.4 UWP WindowsDisplay patch failed." }
+# Patch LaunchClassLoader itself so the org.lwjgl. class-loader exclusion is gone
+# from the moment the loader is constructed. This runs before Forge coremod
+# injection and avoids racing any early LWJGL reference.
+& $javaExe -cp "$classesDir;$asmJar;$launchwrapperJar" banditvault.legacyforge.LegacyLaunchClassLoaderPatcher $launchwrapperJar $legacyLaunchClassLoaderClass
+if ($LASTEXITCODE -ne 0) { throw "Legacy LaunchClassLoader patch failed." }
+
+# The legacy UWP implementation replaces LWJGL's Win32 display/context classes
+# from launcher-overrides. Keep the stock Maven LWJGL artifact untouched.
+$overrideClasses = @(
+    @{ Source = (Join-Path $classesDir "org\lwjgl\opengl\WindowsDisplay.class"); Destination = $legacyWindowsDisplayClass },
+    @{ Source = (Join-Path $classesDir "org\lwjgl\opengl\WindowsDisplayPeerInfo.class"); Destination = $legacyWindowsDisplayPeerInfoClass },
+    @{ Source = (Join-Path $classesDir "org\lwjgl\opengl\WindowsContextImplementation.class"); Destination = $legacyWindowsContextImplClass },
+    @{ Source = (Join-Path $classesDir "banditvault\legacyforge\LegacyUwpGlfwBridge.class"); Destination = $legacyBridgeClass }
+)
+foreach ($item in $overrideClasses) {
+    if (-not (Test-Path $item.Source)) {
+        throw "Legacy UWP override class missing after compile: $($item.Source)"
+    }
+    Ensure-Dir (Split-Path $item.Destination -Parent)
+    Copy-Item -LiteralPath $item.Source -Destination $item.Destination -Force
+    Write-Host "Packaged legacy override class: $($item.Destination)"
+}
+$bridgeInnerClasses = @(Get-ChildItem $classesDir -Filter "LegacyUwpGlfwBridge$*.class" -Recurse -ErrorAction SilentlyContinue)
+foreach ($inner in $bridgeInnerClasses) {
+    $relative = $inner.FullName.Substring($classesDir.Length).TrimStart('\','/')
+    $destination = Join-Path $legacyLwjglPackageDir $relative
+    Ensure-Dir (Split-Path $destination -Parent)
+    Copy-Item -LiteralPath $inner.FullName -Destination $destination -Force
+    Write-Host "Packaged legacy bridge helper: $destination"
+}
+
 
 # Patch LaunchClassLoader itself so the org.lwjgl. class-loader exclusion is gone
 # from the moment the loader is constructed. This runs before Forge coremod
@@ -93,12 +123,14 @@ if ($LASTEXITCODE -ne 0) { throw "LWJGL 2.9.4 UWP WindowsDisplay patch failed." 
 & $javaExe -cp "$classesDir;$asmJar;$launchwrapperJar" banditvault.legacyforge.LegacyLaunchClassLoaderPatcher $launchwrapperJar $legacyLaunchClassLoaderClass
 if ($LASTEXITCODE -ne 0) { throw "Legacy LaunchClassLoader patch failed." }
 
-# Keep the stock Maven artifact immutable for the download manifest. The patched
-# compatibility copy is packaged separately and selected only by the legacy
-# 1.12.2 Forge launcher path at runtime.
+# Keep an unmodified copy of the stock LWJGL artifact for diagnostics/rollback.
+# The class-level UWP overrides above are what the legacy runtime actually uses.
 Copy-Item -LiteralPath $lwjglJar -Destination $legacyLwjglPackageJar -Force
-Write-Host "Packaged legacy LWJGL compatibility jar: $legacyLwjglPackageJar"
-Write-Host "Packaged patched WindowsDisplay class: $legacyWindowsDisplayClass"
+Write-Host "Packaged legacy LWJGL stock compatibility artifact: $legacyLwjglPackageJar"
+Write-Host "Packaged legacy WindowsDisplay class: $legacyWindowsDisplayClass"
+Write-Host "Packaged legacy WindowsDisplayPeerInfo class: $legacyWindowsDisplayPeerInfoClass"
+Write-Host "Packaged legacy WindowsContextImplementation class: $legacyWindowsContextImplClass"
+Write-Host "Packaged legacy UWP GLFW bridge: $legacyBridgeClass"
 Write-Host "Packaged patched LaunchClassLoader class: $legacyLaunchClassLoaderClass"
 
 Ensure-Dir $OutputDir
