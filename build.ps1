@@ -1172,6 +1172,126 @@ function Build-JavaBaseUwpFilesystemPatch {
     Write-Host "Java base UWP filesystem patch: $OutputJar"
 }
 
+function Build-Java8ZipfsRealpathPatch {
+    param(
+        [Parameter(Mandatory = $true)][string]$JavaHome,
+        [Parameter(Mandatory = $true)][string]$OutputJar,
+        [Parameter(Mandatory = $true)][string]$WorkName
+    )
+
+    Write-Host "Building Java 8 ZipFS realpath patch: $OutputJar"
+    $javacExe = Join-Path $JavaHome "bin\javac.exe"
+    if (-not (Test-Path $javacExe)) {
+        throw "javac.exe not found at $JavaHome; Java 8 ZipFS patch requires a JDK 8."
+    }
+
+    $runtimeJarExe = Join-Path $JavaHome "bin\jar.exe"
+    if (-not (Test-Path $runtimeJarExe)) {
+        throw "jar.exe not found at $JavaHome; Java 8 ZipFS patch requires a JDK 8."
+    }
+
+    $srcZipCandidates = @(
+        (Join-Path $JavaHome "lib\src.zip"),
+        (Join-Path $JavaHome "src.zip")
+    )
+    $srcZip = $srcZipCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+    if (-not $srcZip) {
+        throw "Java 8 source archive not found under $JavaHome; cannot build the ZipFS patch."
+    }
+
+    $zipfsJarCandidates = @(
+        (Join-Path $JavaHome "jre\lib\ext\zipfs.jar"),
+        (Join-Path $JavaHome "lib\ext\zipfs.jar")
+    )
+    $zipfsJar = $zipfsJarCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+    if (-not $zipfsJar) {
+        throw "Java 8 zipfs.jar not found under $JavaHome."
+    }
+
+    $cacheJar = Join-Path $buildDir "$WorkName.jar"
+    $stampPath = Join-Path $buildDir "$WorkName.stamp"
+    $stamp = New-BuildStamp `
+        -Values @("java8_zipfs_realpath_patch", $JavaHome) `
+        -ContentFiles @($PSCommandPath, (Join-Path $JavaHome "release")) `
+        -ImmutableFiles @($srcZip, $zipfsJar)
+    if (Test-BuildStampCurrent -StampPath $stampPath -Stamp $stamp -RequiredOutputs @($cacheJar)) {
+        Copy-Item $cacheJar $OutputJar -Force
+        Write-Host "Java 8 ZipFS patch up to date: $OutputJar"
+        return
+    }
+
+    $zipfsPatchDir = Join-Path $buildDir $WorkName
+    $zipfsPatchSrcDir = Join-Path $zipfsPatchDir "src"
+    $zipfsPatchClassesDir = Join-Path $zipfsPatchDir "classes"
+    Remove-Item -Recurse -Force $zipfsPatchDir -ErrorAction SilentlyContinue
+    Ensure-Dir (Join-Path $zipfsPatchSrcDir "com\sun\nio\zipfs"), $zipfsPatchClassesDir
+
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $srcArchive = [System.IO.Compression.ZipFile]::OpenRead($srcZip)
+    try {
+        $providerEntry = $srcArchive.Entries |
+            Where-Object { $_.FullName -match "(^|/)com/sun/nio/zipfs/ZipFileSystemProvider\.java$" } |
+            Select-Object -First 1
+        if (-not $providerEntry) {
+            throw "ZipFileSystemProvider.java not found inside Java 8 src.zip"
+        }
+
+        $reader = [System.IO.StreamReader]::new($providerEntry.Open())
+        try {
+            $providerSource = $reader.ReadToEnd()
+        } finally {
+            $reader.Dispose()
+        }
+    } finally {
+        $srcArchive.Dispose()
+    }
+
+    # Java 8's provider keeps its registry keyed by Path.toRealPath(). Xbox/UWP
+    # can open the file and read its attributes, but toRealPath() is denied for
+    # LocalState paths. Keep the original path as the stable key when resolution
+    # is unavailable. This patch is deliberately scoped to the Java 8 runtime.
+    $providerSource = [regex]::Replace(
+        $providerSource,
+        "(?<!safeRealPath\()([A-Za-z0-9_\.]+)\.toRealPath\(\)",
+        "safeRealPath(\$1)")
+    $providerSource = $providerSource.Replace(
+        "        private boolean ensureFile(Path path) {",
+        "        private static Path safeRealPath(Path path) throws IOException {
+            try {
+                return path.toRealPath();
+            } catch (IOException realPathFailure) {
+                return path.toAbsolutePath().normalize();
+            }
+        }
+
+        private boolean ensureFile(Path path) {")
+
+    if ($providerSource -notmatch "safeRealPath\(path\)" -or
+        $providerSource -match "(?<!safeRealPath\()\b(?:path|zfpath|uriToPath\(uri\))\.toRealPath\(\)") {
+        throw "Java 8 ZipFileSystemProvider realpath patch did not apply cleanly."
+    }
+
+    $providerSourcePath = Join-Path $zipfsPatchSrcDir "com\sun\nio\zipfs\ZipFileSystemProvider.java"
+    [System.IO.File]::WriteAllText($providerSourcePath, $providerSource)
+
+    & $javacExe -source 8 -target 8 -Xlint:-options -cp $zipfsJar -d $zipfsPatchClassesDir $providerSourcePath
+    if ($LASTEXITCODE -ne 0) {
+        throw "Java 8 ZipFS patch compile failed"
+    }
+
+    Push-Location $zipfsPatchClassesDir
+    & $runtimeJarExe cf $cacheJar .
+    $jarResult = $LASTEXITCODE
+    Pop-Location
+    if ($jarResult -ne 0) {
+        throw "Java 8 ZipFS patch jar creation failed"
+    }
+
+    Set-BuildStamp -StampPath $stampPath -Stamp $stamp
+    Copy-Item $cacheJar $OutputJar -Force
+    Write-Host "Java 8 ZipFS patch: $OutputJar"
+}
+
 function Build-JavaZipfsRealpathPatch {
     param(
         [Parameter(Mandatory = $true)][string]$JavaHome,
