@@ -1355,13 +1355,17 @@ bool PrepareTargetNativeDir(
         // LWJGL 2.9.4's x64 DLL imports the VC++ 2010 CRT. The CRT is not
         // inside the LWJGL native JAR, so copy the packaged dependencies into
         // the target-specific native directory before the JVM loads lwjgl64.
-        const bool copiedMsvcr = CopyFileIfNeeded(
+        CopyFileIfNeeded(
             packageNativesDir + L"\\msvcr100.dll",
             nativeDir + L"\\msvcr100.dll");
-        const bool copiedMsvcp = CopyFileIfNeeded(
+        CopyFileIfNeeded(
             packageNativesDir + L"\\msvcp100.dll",
             nativeDir + L"\\msvcp100.dll");
-        WriteLogF(L"Legacy LWJGL CRT: msvcr100=%d msvcp100=%d", copiedMsvcr ? 1 : 0, copiedMsvcp ? 1 : 0);
+        const bool hasMsvcr = GetFileAttributesW(
+            (nativeDir + L"\\msvcr100.dll").c_str()) != INVALID_FILE_ATTRIBUTES;
+        const bool hasMsvcp = GetFileAttributesW(
+            (nativeDir + L"\\msvcp100.dll").c_str()) != INVALID_FILE_ATTRIBUTES;
+        WriteLogF(L"Legacy LWJGL CRT: msvcr100=%d msvcp100=%d", hasMsvcr ? 1 : 0, hasMsvcp ? 1 : 0);
     } else {
         CopyFileIfNeeded(packageNativesDir + L"\\glfw.dll", nativeDir + L"\\glfw.dll");
     }
