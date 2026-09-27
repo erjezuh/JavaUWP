@@ -1720,6 +1720,10 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
     vmOptionStorage.push_back("-Djna.boot.library.path=" + w2a(fwd(nativesDir)));
     vmOptionStorage.push_back("-Djava.library.path=" + w2a(fwd(lwjglNativeDir)));
     vmOptionStorage.push_back("-Dorg.lwjgl.librarypath=" + w2a(fwd(lwjglNativeDir)));
+    if (legacyForge122Natives) {
+        vmOptionStorage.push_back("-Djna.library.path=" + w2a(fwd(lwjglNativeDir)));
+        WriteLogF(L"Legacy JNA library path: %s", lwjglNativeDir.c_str());
+    }
     if (VerboseLoggingEnabled()) {
         vmOptionStorage.push_back("-Dorg.lwjgl.util.Debug=true");
         vmOptionStorage.push_back("-Dorg.lwjgl.util.DebugLoader=true");
