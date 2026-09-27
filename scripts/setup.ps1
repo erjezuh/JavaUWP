@@ -372,28 +372,27 @@ if ($Loader -eq "forge" -and $version -eq "1.12.2") {
         throw "ASM 5.2 could not be prepared: $legacyAsmJar"
     }
 
-    # Minecraft 1.12.2 publishes LWJGL 2.9.4 as the 2.9.4-nightly-20150209
-    # Maven artifact. Resolve it from Mojang version metadata rather than
-    # hard-coding a non-existent /2.9.4/ path.
-    $legacyLwjglLibrary = $versionJson.libraries |
-        Where-Object { [string]$_.name -eq "org.lwjgl:lwjgl:2.9.4-nightly-20150209" } |
-        Select-Object -First 1
-    if (-not $legacyLwjglLibrary -or -not $legacyLwjglLibrary.downloads.artifact.url) {
-        $legacyLwjglLibrary = $versionJson.libraries |
-            Where-Object { [string]$_.name -match '^org\.lwjgl:lwjgl:2\.9\.4' -and $_.downloads.artifact.url } |
-            Select-Object -First 1
-    }
-    if (-not $legacyLwjglLibrary) {
-        throw "Minecraft 1.12.2 metadata does not contain a downloadable LWJGL 2.9.4 artifact."
-    }
-    $legacyLwjglArtifact = $legacyLwjglLibrary.downloads.artifact
-    $legacyLwjglJar = Join-Path $gameDir ("libraries\" + ([string]$legacyLwjglArtifact.path).Replace('/', '\'))
-    Save-RemoteFile -Uri ([string]$legacyLwjglArtifact.url) -Path $legacyLwjglJar
+    # Minecraft 1.12.2 uses LWJGL 2.9.4-nightly-20150209. Some refreshed
+    # Mojang metadata no longer exposes the legacy artifact in the shape used
+    # by the generic downloader, so pin the known Maven-compatible artifact
+    # path here for the legacy target.
+    $legacyLwjglVersion = "2.9.4-nightly-20150209"
+    $legacyLwjglJar = Join-Path $gameDir "libraries\\org\\lwjgl\\lwjgl\\$legacyLwjglVersion\\lwjgl-$legacyLwjglVersion.jar"
+    $legacyLwjglUrl = "https://libraries.minecraft.net/org/lwjgl/lwjgl/lwjgl/$legacyLwjglVersion/lwjgl-$legacyLwjglVersion.jar"
+    Save-RemoteFile -Uri $legacyLwjglUrl -Path $legacyLwjglJar
+
+    $legacyLwjglUtilJar = Join-Path $gameDir "libraries\\org\\lwjgl\\lwjgl_util\\$legacyLwjglVersion\\lwjgl_util-$legacyLwjglVersion.jar"
+    $legacyLwjglUtilUrl = "https://libraries.minecraft.net/org/lwjgl/lwjgl/lwjgl_util/$legacyLwjglVersion/lwjgl_util-$legacyLwjglVersion.jar"
+    Save-RemoteFile -Uri $legacyLwjglUtilUrl -Path $legacyLwjglUtilJar
+
     if (-not (Test-Path $legacyLwjglJar)) {
-        throw "LWJGL 2.9.4 artifact could not be prepared: $legacyLwjglJar"
+        throw "LWJGL 2.9.4 core artifact could not be prepared: $legacyLwjglJar"
+    }
+    if (-not (Test-Path $legacyLwjglUtilJar)) {
+        throw "LWJGL 2.9.4 util artifact could not be prepared: $legacyLwjglUtilJar"
     }
 
-    Write-Host "Legacy Forge libraries ready: LaunchWrapper 1.12 + ASM 5.2 + LWJGL 2.9.4 artifact ($($legacyLwjglArtifact.path))"
+    Write-Host "Legacy Forge libraries ready: LaunchWrapper 1.12 + ASM 5.2 + LWJGL $legacyLwjglVersion"
 
     Ensure-LegacyVc2010Runtime
 
