@@ -1,0 +1,105 @@
+package banditvault.legacyforge;
+
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.StandardCopyOption;
+import java.util.Enumeration;
+import java.util.jar.JarEntry;
+import java.util.jar.JarFile;
+import java.util.jar.JarOutputStream;
+
+public final class LegacyLwjglJarPatcher {
+    private static final String TARGET = "org/lwjgl/opengl/WindowsDisplay.class";
+
+    public static void main(String[] args) throws Exception {
+        if (args.length != 1) {
+            throw new IllegalArgumentException("Usage: LegacyLwjglJarPatcher <lwjgl-2.9.4.jar>");
+        }
+
+        File jarFile = new File(args[0]);
+        if (!jarFile.isFile()) {
+            throw new IOException("LWJGL jar missing: " + jarFile);
+        }
+
+        File tempFile = new File(jarFile.getAbsolutePath() + ".uwp-patched.tmp");
+        boolean changed = false;
+
+        try (JarFile input = new JarFile(jarFile)) {
+            JarEntry targetEntry = input.getJarEntry(TARGET);
+            if (targetEntry == null) {
+                throw new IOException("LWJGL jar does not contain " + TARGET);
+            }
+
+            byte[] original = readAll(input.getInputStream(targetEntry));
+            byte[] transformed = new LegacyZipFsTransformer().transform(
+                "org.lwjgl.opengl.WindowsDisplay",
+                "org.lwjgl.opengl.WindowsDisplay",
+                original);
+
+            if (transformed == null || transformed == original) {
+                System.out.println("[BanditVault] LWJGL 2 WindowsDisplay already UWP-patched: " + jarFile);
+                return;
+            }
+
+            changed = true;
+            try (JarOutputStream output = new JarOutputStream(new FileOutputStream(tempFile))) {
+                Enumeration<JarEntry> entries = input.entries();
+                while (entries.hasMoreElements()) {
+                    JarEntry entry = entries.nextElement();
+                    JarEntry copy = new JarEntry(entry.getName());
+
+                    if (entry.getMethod() == JarEntry.STORED) {
+                        copy.setMethod(JarEntry.STORED);
+                        copy.setSize(entry.getSize());
+                        copy.setCompressedSize(entry.getCompressedSize());
+                        copy.setCrc(entry.getCrc());
+                    }
+                    if (entry.getTime() != -1L) {
+                        copy.setTime(entry.getTime());
+                    }
+
+                    output.putNextEntry(copy);
+                    if (TARGET.equals(entry.getName())) {
+                        output.write(transformed);
+                    } else {
+                        try (InputStream in = input.getInputStream(entry)) {
+                            byte[] buffer = new byte[8192];
+                            int read;
+                            while ((read = in.read(buffer)) != -1) {
+                                output.write(buffer, 0, read);
+                            }
+                        }
+                    }
+                    output.closeEntry();
+                }
+            }
+        }
+
+        if (!changed) {
+            Files.deleteIfExists(tempFile.toPath());
+            return;
+        }
+
+        Files.move(
+            tempFile.toPath(),
+            jarFile.toPath(),
+            StandardCopyOption.REPLACE_EXISTING,
+            StandardCopyOption.ATOMIC_MOVE);
+        System.out.println("[BanditVault] Patched LWJGL 2.9.4 WindowsDisplay for UWP: " + jarFile);
+    }
+
+    private static byte[] readAll(InputStream input) throws IOException {
+        try (InputStream in = input) {
+            java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+            byte[] buffer = new byte[8192];
+            int read;
+            while ((read = in.read(buffer)) != -1) {
+                out.write(buffer, 0, read);
+            }
+            return out.toByteArray();
+        }
+    }
+}
