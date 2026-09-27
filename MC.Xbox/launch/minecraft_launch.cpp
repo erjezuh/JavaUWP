@@ -1037,6 +1037,43 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
                 suppliedNativesReady ? 1 : 0,
                 packagedNativesReady ? 1 : 0,
                 lwjglNativeDir.c_str());
+
+            // Probe the legacy natives individually. If a DLL's dependency
+            // cannot be resolved, LoadLibraryEx gives us the Windows loader
+            // error before Java's System.load() collapses it into the generic
+            // UnsatisfiedLinkError: Can't find dependent libraries.
+            const wchar_t* legacyProbeNames[] = {
+                L"msvcr100.dll", L"msvcp100.dll",
+                L"lwjgl.dll", L"OpenAL32.dll", L"OpenAL64.dll",
+                L"jinput-raw.dll", L"jinput-raw_64.dll",
+                L"jinput-dx8.dll", L"jinput-dx8_64.dll",
+                L"jinput-wintab.dll"
+            };
+            for (const wchar_t* name : legacyProbeNames) {
+                const std::wstring probePath = lwjglNativeDir + L"\\" + name;
+                if (GetFileAttributesW(probePath.c_str()) == INVALID_FILE_ATTRIBUTES) {
+                    WriteLogF(L"Legacy LWJGL probe MISSING FILE: %s", probePath.c_str());
+                    continue;
+                }
+                SetLastError(ERROR_SUCCESS);
+                HMODULE probe = LoadLibraryExW(
+                    probePath.c_str(),
+                    nullptr,
+                    LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+                if (probe) {
+                    WriteLogF(L"Legacy LWJGL probe OK: %s", name);
+                    FreeLibrary(probe);
+                } else {
+                    WriteLogF(L"Legacy LWJGL probe FAILED: %s err=%u", name, GetLastError());
+                }
+            }
+
+            // 126 is ERROR_MOD_NOT_FOUND, which normally means the requested
+            // module or one of its transitive dependencies could not be found.
+            // Keep the exact value in the launch log for diagnosis.
+            if (error == ERROR_MOD_NOT_FOUND) {
+                WriteLog(L"Legacy LWJGL error 126: module/dependency not found by Windows loader");
+            }
         } else {
             WriteLogF(L"Legacy LWJGL preload OK and retained: %s", legacyLwjgl64.c_str());
         }
