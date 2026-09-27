@@ -372,16 +372,28 @@ if ($Loader -eq "forge" -and $version -eq "1.12.2") {
         throw "ASM 5.2 could not be prepared: $legacyAsmJar"
     }
 
-    # Mojang's 1.12.2 metadata normally contains LWJGL 2.9.4, but keep an
-    # explicit fallback here because the legacy build patches this exact jar.
-    $legacyLwjglJar = Join-Path $gameDir "libraries\org\lwjgl\lwjgl\2.9.4\lwjgl-2.9.4.jar"
-    $legacyLwjglUrl = "https://libraries.minecraft.net/org/lwjgl/lwjgl/2.9.4/lwjgl-2.9.4.jar"
-    Save-RemoteFile -Uri $legacyLwjglUrl -Path $legacyLwjglJar
+    # Minecraft 1.12.2 publishes LWJGL 2.9.4 as the 2.9.4-nightly-20150209
+    # Maven artifact. Resolve it from Mojang version metadata rather than
+    # hard-coding a non-existent /2.9.4/ path.
+    $legacyLwjglLibrary = $versionJson.libraries |
+        Where-Object { [string]$_.name -eq "org.lwjgl:lwjgl:2.9.4-nightly-20150209" } |
+        Select-Object -First 1
+    if (-not $legacyLwjglLibrary -or -not $legacyLwjglLibrary.downloads.artifact.url) {
+        $legacyLwjglLibrary = $versionJson.libraries |
+            Where-Object { [string]$_.name -match '^org\.lwjgl:lwjgl:2\.9\.4' -and $_.downloads.artifact.url } |
+            Select-Object -First 1
+    }
+    if (-not $legacyLwjglLibrary) {
+        throw "Minecraft 1.12.2 metadata does not contain a downloadable LWJGL 2.9.4 artifact."
+    }
+    $legacyLwjglArtifact = $legacyLwjglLibrary.downloads.artifact
+    $legacyLwjglJar = Join-Path $gameDir ("libraries\" + ([string]$legacyLwjglArtifact.path).Replace('/', '\'))
+    Save-RemoteFile -Uri ([string]$legacyLwjglArtifact.url) -Path $legacyLwjglJar
     if (-not (Test-Path $legacyLwjglJar)) {
-        throw "LWJGL 2.9.4 could not be prepared: $legacyLwjglJar"
+        throw "LWJGL 2.9.4 artifact could not be prepared: $legacyLwjglJar"
     }
 
-    Write-Host "Legacy Forge libraries ready: LaunchWrapper 1.12 + ASM 5.2 + LWJGL 2.9.4"
+    Write-Host "Legacy Forge libraries ready: LaunchWrapper 1.12 + ASM 5.2 + LWJGL 2.9.4 artifact ($($legacyLwjglArtifact.path))"
 
     Ensure-LegacyVc2010Runtime
 
