@@ -1030,6 +1030,38 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
                     packageRelativeOpenGl.erase(packageRelativeOpenGl.begin());
                 }
                 legacyOpenGlModule = LoadPackagedLibrary(packageRelativeOpenGl.c_str(), 0);
+                if (!legacyOpenGlModule) {
+                    const wchar_t* mesaDependencyNames[] = {
+                        L"libgallium_wgl.dll",
+                        L"dxil.dll",
+                        L"spirv_to_dxil.dll",
+                        L"vulkan_dzn.dll",
+                        L"z-1.dll"
+                    };
+                    WriteLog(L"Legacy Mesa dependency probe: package loader");
+                    for (const wchar_t* dependencyName : mesaDependencyNames) {
+                        std::wstring dependencyRelative = packageRelativeOpenGl;
+                        const size_t slash = dependencyRelative.find_last_of(L"\\/");
+                        if (slash != std::wstring::npos) {
+                            dependencyRelative.resize(slash + 1);
+                        } else {
+                            dependencyRelative.clear();
+                        }
+                        dependencyRelative += dependencyName;
+                        SetLastError(ERROR_SUCCESS);
+                        HMODULE dependency = LoadPackagedLibrary(dependencyRelative.c_str(), 0);
+                        if (dependency) {
+                            WriteLogF(L"Legacy Mesa dependency OK: %s", dependencyName);
+                        } else {
+                            WriteLogF(L"Legacy Mesa dependency FAILED: %s err=%u", dependencyName, GetLastError());
+                        }
+                    }
+                    // Retry Mesa OpenGL after explicitly loading its package-local
+                    // dependency chain. This distinguishes a dependency-graph failure
+                    // from a problem loading opengl32.dll itself.
+                    SetLastError(ERROR_SUCCESS);
+                    legacyOpenGlModule = LoadPackagedLibrary(packageRelativeOpenGl.c_str(), 0);
+                }
             }
             if (!legacyOpenGlModule) {
                 legacyOpenGlModule = LoadLibraryExW(
