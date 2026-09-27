@@ -269,12 +269,58 @@ if (-not $nativeDlls) {
     throw "No native DLLs were prepared under $nativesDir."
 }
 
+function Ensure-LegacyVc2010Runtime {
+    $vcDir = Join-Path (Get-ConfigPath "CacheDir") "legacy-vc2010-x64"
+    $vcExe = Join-Path $toolsDir "vcredist_x64-vc2010.exe"
+    $marker = Join-Path $vcDir ".ready"
+
+    if ((Test-Path (Join-Path $vcDir "msvcr100.dll")) -and
+        (Test-Path (Join-Path $vcDir "msvcp100.dll"))) {
+        Write-Host "Legacy VC++ 2010 x64 runtime cache is ready."
+        return
+    }
+
+    Write-Host "=== Preparing Microsoft Visual C++ 2010 x64 runtime ==="
+    # Official Microsoft Download Center payload (VC++ 2010 SP1 MFC security update).
+    $vcUrl = "https://download.microsoft.com/download/1/6/5/165255E7-1014-4D0A-B094-B6A430A6BFFC/vcredist_x64.exe"
+    Save-RemoteFile -Uri $vcUrl -Path $vcExe
+
+    $extractDir = Join-Path (Get-ConfigPath "CacheDir") "legacy-vc2010-extracted"
+    Ensure-Dir $extractDir
+    $needExtract = -not (Test-Path (Join-Path $extractDir "vc_runtimeMinimum_x64.msi"))
+    if ($needExtract) {
+        Remove-Item -LiteralPath $extractDir -Recurse -Force -ErrorAction SilentlyContinue
+        Ensure-Dir $extractDir
+        $proc = Start-Process -FilePath $vcExe -ArgumentList @("/x:$extractDir") -Wait -PassThru -WindowStyle Hidden
+        if ($proc.ExitCode -ne 0) {
+            throw "VC++ 2010 x64 extraction failed with exit code $($proc.ExitCode)."
+        }
+    }
+
+    $dlls = @(Get-ChildItem -LiteralPath $extractDir -Recurse -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -in @("msvcr100.dll", "msvcp100.dll") })
+    if ($dlls.Count -lt 2) {
+        throw "VC++ 2010 x64 extraction completed but msvcr100.dll/msvcp100.dll were not found."
+    }
+
+    Remove-Item -LiteralPath $vcDir -Recurse -Force -ErrorAction SilentlyContinue
+    Ensure-Dir $vcDir
+    foreach ($dllName in @("msvcr100.dll", "msvcp100.dll")) {
+        $source = $dlls | Where-Object { $_.Name -eq $dllName } | Select-Object -First 1
+        Copy-Item -LiteralPath $source.FullName -Destination (Join-Path $vcDir $dllName) -Force
+    }
+    Set-Content -LiteralPath $marker -Value "Microsoft VC++ 2010 x64" -NoNewline
+    Write-Host "Legacy VC++ 2010 x64 runtime cache ready: $vcDir"
+}
+
 Write-Host "=== Preparing non-Fabric target: $version + $Loader $LoaderVersion ==="
 if ($Loader -eq "forge" -and $version -eq "1.12.2") {
     $forgeVersion = if ($LoaderVersion.StartsWith("$version-")) { $LoaderVersion } else { "$version-$LoaderVersion" }
     $forgeJar = Join-Path (Get-ConfigPath "GameDir") "libraries\net\minecraftforge\forge\$forgeVersion\forge-$forgeVersion-universal.jar"
     $forgeUrl = "https://maven.minecraftforge.net/net/minecraftforge/forge/$forgeVersion/forge-$forgeVersion-universal.jar"
     Save-RemoteFile -Uri $forgeUrl -Path $forgeJar
+
+    Ensure-LegacyVc2010Runtime
 
     Write-Host "=== Downloading asset index ==="
     $indexDir = Join-Path $assetsDir "indexes"
