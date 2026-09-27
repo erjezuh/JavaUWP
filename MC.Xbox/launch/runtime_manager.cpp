@@ -303,7 +303,7 @@ bool SeedLocalRuntime(
     if (progress) {
         progress(L"Copying native libraries", L"Preparing graphics and input runtime", 0.80f);
     }
-    CopyDirectoryContentsIfNeeded(packageDir + L"\\natives", localDir + L"\\natives");
+    // Native DLLs are immutable package runtime content. Always refresh them so a newly packaged legacy Forge dependency (e.g. VC++ 2010 CRT or JInput x64) cannot be masked by an older LocalState copy.\n    CopyDirectoryContentsAlways(packageDir + L"\\natives", localDir + L"\\natives");
     CopyDirectoryContentsIfNeeded(packageDir + L"\\graphics", localDir + L"\\graphics");
     if (progress) {
         progress(L"Finalizing runtime", L"Writing launch configuration", 0.96f);
