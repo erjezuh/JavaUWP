@@ -51,12 +51,6 @@ public final class LegacyLwjglJarPatcher {
                     JarEntry entry = entries.nextElement();
                     JarEntry copy = new JarEntry(entry.getName());
 
-                    if (entry.getMethod() == JarEntry.STORED) {
-                        copy.setMethod(JarEntry.STORED);
-                        copy.setSize(entry.getSize());
-                        copy.setCompressedSize(entry.getCompressedSize());
-                        copy.setCrc(entry.getCrc());
-                    }
                     if (entry.getTime() != -1L) {
                         copy.setTime(entry.getTime());
                     }
@@ -87,7 +81,7 @@ public final class LegacyLwjglJarPatcher {
             tempFile.toPath(),
             jarFile.toPath(),
             StandardCopyOption.REPLACE_EXISTING,
-            StandardCopyOption.ATOMIC_MOVE);
+            StandardCopyOption.REPLACE_EXISTING);
         System.out.println("[BanditVault] Patched LWJGL 2.9.4 WindowsDisplay for UWP: " + jarFile);
     }
 
