@@ -1358,6 +1358,39 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
     effectiveClassPath = loaderSetup.effectiveClassPath;
     const bool neoForgeStartedWithGameClassPath = loaderSetup.neoForgeStartedWithGameClassPath;
 
+    // The official LWJGL 2.9.4 artifact remains the download-manifest artifact,
+    // but legacy Forge 1.12.2 needs our unsealed WindowsDisplay compatibility copy.
+    // Replace only that exact legacy artifact in the effective classpath; modern
+    // Forge/Fabric/NeoForge paths are left untouched.
+    if (minecraftVersion == L"1.12.2" && loaderId == LoaderId::Forge) {
+        const std::wstring legacyLwjglOriginal =
+            libraryDir + L"\\org\\lwjgl\\lwjgl\\lwjgl\\2.9.4-nightly-20150209\\lwjgl-2.9.4-nightly-20150209.jar";
+        const std::wstring legacyLwjglOverride =
+            packageDir + L"\\runtime\\legacy-forge\\lwjgl-2.9.4-uwp.jar";
+        if (GetFileAttributesW(legacyLwjglOverride.c_str()) != INVALID_FILE_ATTRIBUTES) {
+            const std::wstring originalFwd = fwd(legacyLwjglOriginal);
+            const std::wstring overrideFwd = fwd(legacyLwjglOverride);
+            size_t replaced = 0;
+            size_t pos = 0;
+            while ((pos = effectiveClassPath.find(originalFwd, pos)) != std::wstring::npos) {
+                effectiveClassPath.replace(pos, originalFwd.size(), overrideFwd);
+                pos += overrideFwd.size();
+                ++replaced;
+            }
+            if (replaced > 0) {
+                WriteLogF(L"Legacy Forge LWJGL compatibility jar selected: %s (replaced %zu classpath entry%s)",
+                    legacyLwjglOverride.c_str(),
+                    replaced,
+                    replaced == 1 ? L"" : L"ies");
+            } else {
+                WriteLogF(L"Legacy Forge LWJGL compatibility jar present but stock artifact was not on the effective classpath: %s",
+                    legacyLwjglOverride.c_str());
+            }
+        } else {
+            WriteLogF(L"Legacy Forge LWJGL compatibility jar missing: %s", legacyLwjglOverride.c_str());
+        }
+    }
+
     std::vector<std::string> vmOptionStorage;
     vmOptionStorage.reserve(64);
     // 5120 MB app budget on series s dev mode, so a 3G heap that never resizes fits
