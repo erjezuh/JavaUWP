@@ -55,7 +55,7 @@ if (-not $sources) { throw "No legacy Forge compat Java sources found." }
 $resourceFiles = @(Get-ChildItem $resourceDir -Recurse -File | Select-Object -ExpandProperty FullName)
 
 $stampValues = @("legacy_forge_compat", $MinecraftVersion, $ForgeVersion, $javaHome)
-$stamp = New-BuildStamp -Values $stampValues -ContentFiles (@($PSCommandPath) + $sources + $resourceFiles) -DependencyFiles @($forgeJar, $launchwrapperJar, $asmJar)
+$stamp = New-BuildStamp -Values $stampValues -ContentFiles (@($PSCommandPath) + $sources + $resourceFiles) -DependencyFiles @($forgeJar, $launchwrapperJar, $asmJar, $lwjglJar)
 
 if (-not (Test-BuildStampCurrent -StampPath $stampPath -Stamp $stamp -RequiredOutputs @($jarPath))) {
     Remove-Item -Recurse -Force $buildRoot -ErrorAction SilentlyContinue
