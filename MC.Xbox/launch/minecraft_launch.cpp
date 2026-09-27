@@ -1004,12 +1004,10 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
     // module instead of resolving its dependencies a second time.
     HMODULE legacyLwjglModule = nullptr;
     if (legacyForge122Natives) {
-        if (!SetDllDirectoryW(lwjglNativeDir.c_str())) {
-            WriteLogF(L"Legacy LWJGL SetDllDirectory FAILED: %s err=%u", lwjglNativeDir.c_str(), GetLastError());
-        } else {
-            WriteLogF(L"Legacy LWJGL DLL search directory: %s", lwjglNativeDir.c_str());
-        }
-
+        // Packaged/UWP builds do not expose the desktop SetDllDirectoryW API.
+        // The explicit LoadLibraryExW calls below already use the DLL's own
+        // directory for transitive dependency resolution, so do not alter the
+        // process-wide DLL search path here.
         const std::wstring legacyCrt100 = lwjglNativeDir + L"\\msvcr100.dll";
         if (GetFileAttributesW(legacyCrt100.c_str()) != INVALID_FILE_ATTRIBUTES) {
             HMODULE crt = LoadLibraryExW(
