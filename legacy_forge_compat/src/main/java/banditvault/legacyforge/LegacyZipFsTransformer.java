@@ -40,6 +40,40 @@ public final class LegacyZipFsTransformer implements net.minecraft.launchwrapper
                 int access, String methodName, String descriptor,
                 String signature, String[] exceptions) {
 
+                if (patchWindowsDisplay &&
+                    "getCurrentDisplayMode".equals(methodName)
+                    && "()Lorg/lwjgl/opengl/DisplayMode;".equals(descriptor)) {
+                    /*
+                     * LWJGL 2.9.4 implements this method as a native Win32 display
+                     * query. On Xbox/UWP the underlying call returns ERROR_CALL_NOT_IMPLEMENTED
+                     * (120), which aborts Display's static initialization before a GL
+                     * context can exist. Replace the native method itself rather than
+                     * relying on rewriting its caller; this is stable even if LWJGL's
+                     * bytecode layout changes.
+                     */
+                    patched[0] = true;
+                    final int patchedAccess =
+                        access & ~Opcodes.ACC_NATIVE & ~Opcodes.ACC_ABSTRACT;
+
+                    MethodVisitor mv = super.visitMethod(
+                        patchedAccess, methodName, descriptor, signature, exceptions);
+                    mv.visitCode();
+                    mv.visitTypeInsn(Opcodes.NEW, DISPLAY_MODE);
+                    mv.visitInsn(Opcodes.DUP);
+                    mv.visitLdcInsn(Integer.valueOf(1920));
+                    mv.visitLdcInsn(Integer.valueOf(1080));
+                    mv.visitMethodInsn(
+                        Opcodes.INVOKESPECIAL,
+                        DISPLAY_MODE,
+                        "<init>",
+                        "(II)V",
+                        false);
+                    mv.visitInsn(Opcodes.ARETURN);
+                    mv.visitMaxs(3, 0);
+                    mv.visitEnd();
+                    return null;
+                }
+
                 MethodVisitor delegate =
                     super.visitMethod(access, methodName, descriptor, signature, exceptions);
 
@@ -59,35 +93,6 @@ public final class LegacyZipFsTransformer implements net.minecraft.launchwrapper
                                 BRIDGE,
                                 "newFileSystem",
                                 URI_FS_DESC,
-                                false);
-                            patched[0] = true;
-                            return;
-                        }
-
-                        if (patchWindowsDisplay &&
-                            "init".equals(methodName)
-                            && "()Lorg/lwjgl/opengl/DisplayMode;".equals(descriptor)
-                            && opcode == Opcodes.INVOKESTATIC
-                            && WINDOWS_DISPLAY.equals(owner)
-                            && "getCurrentDisplayMode".equals(calledName)
-                            && "()Lorg/lwjgl/opengl/DisplayMode;".equals(calledDescriptor)) {
-                            /*
-                             * LWJGL 2 asks Windows for the desktop display mode during
-                             * static Display initialization. In UWP that native query
-                             * returns ERROR_CALL_NOT_IMPLEMENTED (120). Minecraft only
-                             * needs a sane initial mode here; fullscreen enumeration is
-                             * handled separately. Use public DisplayMode(width,height)
-                             * so the result is valid without invoking Win32 display APIs.
-                             */
-                            super.visitTypeInsn(Opcodes.NEW, DISPLAY_MODE);
-                            super.visitInsn(Opcodes.DUP);
-                            super.visitLdcInsn(Integer.valueOf(1920));
-                            super.visitLdcInsn(Integer.valueOf(1080));
-                            super.visitMethodInsn(
-                                Opcodes.INVOKESPECIAL,
-                                DISPLAY_MODE,
-                                "<init>",
-                                "(II)V",
                                 false);
                             patched[0] = true;
                             return;
