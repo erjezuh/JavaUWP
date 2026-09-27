@@ -681,7 +681,7 @@ Write-Host "Copying natives..."
 Ensure-Dir (Join-Path $pkg "natives")
 Copy-Item (Join-Path $nativesSourceDir "*.dll") (Join-Path $pkg "natives\") -Force
 
-if ($ProjectConfig.MinecraftVersion -eq "1.12.2" -and $ProjectConfig.DefaultLoader -eq "forge") {
+if ($ProjectConfig.MinecraftVersion -eq "1.12.2" -and $Loader.ToLowerInvariant() -eq "forge") {
     # Forge 1.12.2 uses LWJGL 2.9.4. Its x64 native is a legacy Win32 DLL
     # whose import table expects the VC++ 2010 CRT on many builds. A plain
     # "Can't find dependent libraries" from Java does not tell us which
@@ -709,6 +709,13 @@ if ($ProjectConfig.MinecraftVersion -eq "1.12.2" -and $ProjectConfig.DefaultLoad
     if ($jre8Src) {
         $crtCandidates += Join-Path $jre8Src "bin"
     }
+    # Prefer the cached Microsoft VC++ 2010 x64 payload prepared by setup.ps1.
+    $legacyVcCache = Join-Path (Get-ConfigPath "CacheDir") "legacy-vc2010-x64"
+    if (Test-Path $legacyVcCache) {
+        $crtCandidates += $legacyVcCache
+        $crtCandidates += @(Get-ChildItem -LiteralPath $legacyVcCache -Directory -Recurse -ErrorAction SilentlyContinue |
+            Select-Object -ExpandProperty FullName)
+    }
     $crtCandidates += Join-Path $env:WINDIR "System32"
 
     # Visual C++ 2010 may be installed side-by-side in WinSxS even when the
@@ -734,7 +741,7 @@ if ($ProjectConfig.MinecraftVersion -eq "1.12.2" -and $ProjectConfig.DefaultLoad
             Copy-Item -LiteralPath $crtSource -Destination $crtDest -Force
             Write-Host "Legacy LWJGL CRT: $crtName <- $crtSource"
         } else {
-            throw "Legacy LWJGL CRT $crtName was not found. Install the x64 Visual C++ 2010 runtime or provide it through the Java 8/Windows installation before building Forge 1.12.2."
+            throw "Legacy LWJGL CRT $crtName was not found. setup.ps1 should download/extract the Microsoft Visual C++ 2010 x64 runtime into staging/cache/legacy-vc2010-x64 before building Forge 1.12.2."
         }
     }
 
