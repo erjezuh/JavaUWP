@@ -49,7 +49,17 @@ public final class LegacyLwjglJarPatcher {
                 Enumeration<JarEntry> entries = input.entries();
                 while (entries.hasMoreElements()) {
                     JarEntry entry = entries.nextElement();
-                    JarEntry copy = new JarEntry(entry.getName());
+                    String entryName = entry.getName();
+
+                    // The stock LWJGL jar seals org.lwjgl.*. We are replacing
+                    // bytecode, so emit an unsealed, unsigned compatibility jar.
+                    if ("META-INF/MANIFEST.MF".equalsIgnoreCase(entryName) ||
+                        (entryName.startsWith("META-INF/") &&
+                         (entryName.endsWith(".SF") || entryName.endsWith(".RSA") || entryName.endsWith(".DSA")))) {
+                        continue;
+                    }
+
+                    JarEntry copy = new JarEntry(entryName);
 
                     if (entry.getTime() != -1L) {
                         copy.setTime(entry.getTime());
@@ -80,7 +90,6 @@ public final class LegacyLwjglJarPatcher {
         Files.move(
             tempFile.toPath(),
             jarFile.toPath(),
-            StandardCopyOption.REPLACE_EXISTING,
             StandardCopyOption.REPLACE_EXISTING);
         System.out.println("[BanditVault] Patched LWJGL 2.9.4 WindowsDisplay for UWP: " + jarFile);
     }
