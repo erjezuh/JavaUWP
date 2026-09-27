@@ -723,6 +723,60 @@ void PrepareHardCrash(const std::wstring& runtimeRoot) {
     g_hardCrash.latestLog = ReadFileUtf8(gameDir + L"\\logs\\latest.log");
 }
 
+namespace {
+
+// Dumps the essential hs_err sections into mc_launch.log. Some devices can only
+// export the launch log, so the crash diagnostics have to travel inside it.
+void LogHsErrExcerpt(const std::string& text) {
+    if (text.empty()) return;
+
+    std::vector<std::string> lines;
+    std::string current;
+    for (char ch : text) {
+        if (ch == '\n') {
+            if (!current.empty() && current.back() == '\r') current.pop_back();
+            lines.push_back(current);
+            current.clear();
+        } else {
+            current.push_back(ch);
+        }
+    }
+    if (!current.empty()) {
+        if (current.back() == '\r') current.pop_back();
+        lines.push_back(current);
+    }
+
+    constexpr size_t kHeaderLines = 32;
+    constexpr size_t kMaxLines = 80;
+    size_t logged = 0;
+
+    // Header covers the exception code, problematic frame, current thread and siginfo.
+    for (size_t i = 0; i < lines.size() && logged < kHeaderLines; ++i) {
+        WriteLogF(L"hs_err | %s", a2w(lines[i].c_str()).c_str());
+        ++logged;
+    }
+
+    size_t nativeAt = std::string::npos;
+    for (size_t i = 0; i < lines.size(); ++i) {
+        const size_t start = lines[i].find_first_not_of(" \t");
+        if (start == std::string::npos) continue;
+        if (lines[i].compare(start, 14, "Native frames:") == 0) {
+            nativeAt = i;
+            break;
+        }
+    }
+    if (nativeAt == std::string::npos || nativeAt < logged) return;
+
+    WriteLog(L"hs_err | ... (Native frames section)");
+    for (size_t i = nativeAt; i < lines.size() && logged < kMaxLines; ++i) {
+        if (i > nativeAt && lines[i].empty()) break;
+        WriteLogF(L"hs_err | %s", a2w(lines[i].c_str()).c_str());
+        ++logged;
+    }
+}
+
+}  // namespace
+
 void ReportHardCrash(const std::wstring& runtimeRoot) {
     if (!g_hardCrash.found) return;
 
@@ -754,6 +808,24 @@ void ReportHardCrash(const std::wstring& runtimeRoot) {
         a2w(crash.fingerprint.c_str()).c_str(),
         a2w(phase.c_str()).c_str(),
         a2w(parsed.source.c_str()).c_str());
+
+    // Local diagnostics for the next session: mirror the crash evidence into
+    // mc_launch.log before the telemetry opt-out check, so any device that can
+    // only export the launch log still reports the crash details.
+    WriteLogF(L"hard crash context: launcherBuild=%s mc=%s loader=%s loaderVersion=%s gameDir=%s",
+        context.launcherBuild.c_str(),
+        context.mcVersion.c_str(),
+        context.loader.c_str(),
+        context.loaderVersion.c_str(),
+        a2w(crashparse::MarkerValue(g_hardCrash.markerText, "gameDir").c_str()).c_str());
+    WriteLogF(L"hard crash parse: source=%s exception=%s message=%s",
+        a2w(parsed.source.c_str()).c_str(),
+        a2w(parsed.outerClass.c_str()).c_str(),
+        a2w(parsed.message.c_str()).c_str());
+    for (size_t i = 0; i < parsed.frames.size() && i < 25; ++i) {
+        WriteLogF(L"hard crash frame[%zu]=%s", i, a2w(parsed.frames[i].c_str()).c_str());
+    }
+    LogHsErrExcerpt(g_hardCrash.hsErr);
 
     if (!Enabled()) return;
 
@@ -904,6 +976,24 @@ CrashRecord ReadLastCrash() {
         EnsureDirectoryTree(dir);
         WriteTextFile(streakPath,
             record.fingerprint + L" " + std::to_wstring(record.repeatCount) + L"\n");
+    }
+
+    // Mirror the persisted crash record into mc_launch.log: this recovers the
+    // previous crash frames on devices that can only export the launch log.
+    WriteLogF(L"last_crash record: fingerprint=%s exception=%s message=%s phase=%s repeat=%d",
+        record.fingerprint.c_str(),
+        record.exception.c_str(),
+        record.message.c_str(),
+        record.phase.c_str(),
+        record.repeatCount);
+    WriteLogF(L"last_crash record: build=%s mc=%s loader=%s loaderVersion=%s zip=%s",
+        record.launcherBuild.c_str(),
+        record.mcVersion.c_str(),
+        record.loader.c_str(),
+        record.loaderVersion.c_str(),
+        record.zip.c_str());
+    for (size_t i = 0; i < record.frames.size() && i < 25; ++i) {
+        WriteLogF(L"last_crash frame[%zu]=%s", i, record.frames[i].c_str());
     }
 
     return record;
