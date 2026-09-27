@@ -52,7 +52,9 @@ if (-not (Test-BuildStampCurrent -StampPath $stampPath -Stamp $stamp -RequiredOu
     if ($LASTEXITCODE -ne 0) { throw "Legacy Forge compat coremod compile failed." }
 
     Copy-Item -Recurse "$resourceDir\*" $classesDir -Force
-    & $jarExe cf $jarPath -C $classesDir .
+    $manifestPath = Join-Path $resourceDir "META-INF\MANIFEST.MF"
+    Remove-Item -LiteralPath (Join-Path $classesDir "META-INF\MANIFEST.MF") -Force -ErrorAction SilentlyContinue
+    & $jarExe cfm $jarPath $manifestPath -C $classesDir .
     if ($LASTEXITCODE -ne 0) { throw "Legacy Forge compat coremod JAR creation failed." }
     Set-BuildStamp -StampPath $stampPath -Stamp $stamp
 }
