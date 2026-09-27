@@ -48,7 +48,6 @@ if (-not (Test-Path $javaExe)) { throw "java.exe missing from Java home: $javaHo
 
 $packageDir = Get-ConfigPath "PackageContentDir"
 $legacyLwjglPackageDir = Join-Path $packageDir "runtime\legacy-forge"
-$legacyLwjglPackageJar = Join-Path $legacyLwjglPackageDir "lwjgl-2.9.4-uwp.jar"
 $legacyWindowsDisplayClass = Join-Path $legacyLwjglPackageDir "org\lwjgl\opengl\WindowsDisplay.class"
 $legacyWindowsDisplayPeerInfoClass = Join-Path $legacyLwjglPackageDir "org\lwjgl\opengl\WindowsDisplayPeerInfo.class"
 $legacyWindowsContextImplClass = Join-Path $legacyLwjglPackageDir "org\lwjgl\opengl\WindowsContextImplementation.class"
@@ -125,8 +124,6 @@ if ($LASTEXITCODE -ne 0) { throw "Legacy LaunchClassLoader patch failed." }
 
 # Keep an unmodified copy of the stock LWJGL artifact for diagnostics/rollback.
 # The class-level UWP overrides above are what the legacy runtime actually uses.
-Copy-Item -LiteralPath $lwjglJar -Destination $legacyLwjglPackageJar -Force
-Write-Host "Packaged legacy LWJGL stock compatibility artifact: $legacyLwjglPackageJar"
 Write-Host "Packaged legacy WindowsDisplay class: $legacyWindowsDisplayClass"
 Write-Host "Packaged legacy WindowsDisplayPeerInfo class: $legacyWindowsDisplayPeerInfoClass"
 Write-Host "Packaged legacy WindowsContextImplementation class: $legacyWindowsContextImplClass"
