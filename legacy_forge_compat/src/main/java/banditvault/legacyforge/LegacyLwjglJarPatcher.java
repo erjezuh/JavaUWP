@@ -33,15 +33,21 @@ public final class LegacyLwjglJarPatcher {
                 throw new IOException("LWJGL jar does not contain " + TARGET);
             }
 
+            boolean hadManifest = input.getManifest() != null;
             byte[] original = readAll(input.getInputStream(targetEntry));
             byte[] transformed = new LegacyZipFsTransformer().transform(
                 "org.lwjgl.opengl.WindowsDisplay",
                 "org.lwjgl.opengl.WindowsDisplay",
                 original);
 
+            // A previously patched jar may still carry the stock sealing manifest.
+            // Rebuild it once more so the compatibility copy is actually unsealed.
             if (transformed == null || transformed == original) {
-                System.out.println("[BanditVault] LWJGL 2 WindowsDisplay already UWP-patched: " + jarFile);
-                return;
+                if (!hadManifest) {
+                    System.out.println("[BanditVault] LWJGL 2 WindowsDisplay already UWP-patched: " + jarFile);
+                    return;
+                }
+                transformed = original;
             }
 
             changed = true;
