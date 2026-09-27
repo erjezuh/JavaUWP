@@ -30,9 +30,4 @@ public final class LegacyForgeCorePlugin implements IFMLLoadingPlugin {
     public String getAccessTransformerClass() {
         return null;
     }
-
-    @Override
-    public String[] getLibraryRequestClass() {
-        return null;
-    }
 }
