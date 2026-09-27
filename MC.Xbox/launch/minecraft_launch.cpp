@@ -996,6 +996,30 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
         suppliedNativesReady ? nativesDir :
         (packagedNativesReady ? packagedNativesDir : nativesDir);
     const std::wstring lwjglGlfwDll = lwjglNativeDir + L"\\glfw.dll";
+
+    // Java's UnsatisfiedLinkError only reports "Can't find dependent libraries".
+    // Probe the actual legacy LWJGL module from the native host first so the
+    // Windows loader resolves its transitive imports using the DLL's own
+    // directory and we get the real Win32 error code in launcher.log.
+    if (legacyForge122Natives) {
+        const std::wstring legacyLwjgl64 = lwjglNativeDir + L"\\lwjgl64.dll";
+        HMODULE probe = LoadLibraryExW(
+            legacyLwjgl64.c_str(),
+            nullptr,
+            LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+        if (!probe) {
+            const DWORD error = GetLastError();
+            WriteLogF(L"Legacy LWJGL preload FAILED: %s err=%u", legacyLwjgl64.c_str(), error);
+            WriteLogF(
+                L"Legacy LWJGL native state: supplied=%d packaged=%d dir=%s",
+                suppliedNativesReady ? 1 : 0,
+                packagedNativesReady ? 1 : 0,
+                lwjglNativeDir.c_str());
+        } else {
+            WriteLogF(L"Legacy LWJGL preload OK: %s", legacyLwjgl64.c_str());
+            FreeLibrary(probe);
+        }
+    }
     const std::wstring logConfigPath = exeDir + L"\\game\\log_configs\\client-uwp.xml";
     const std::wstring fabricLogPath = gameDir + L"\\logs\\fabric-loader.log";
     const std::wstring forgeLogPath = gameDir + L"\\logs\\forge-loader.log";
