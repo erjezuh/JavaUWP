@@ -1398,12 +1398,80 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
                 originalExists ? 1 : 0);
         }
 
-        // Put the transformed WindowsDisplay.class into the dedicated
-        // launcher-overrides directory as an actual class resource. LaunchWrapper
-        // builds its source list from java.class.path, and this directory is first,
-        // so the patched class wins even when a JAR has already been mutated or
-        // multiple LWJGL artifacts are present.
+        // Put the transformed legacy classes into the dedicated
+        // launcher-overrides directory as actual class resources. LaunchWrapper
+        // builds its source list from the JVM classpath, and this directory is
+        // first. In particular, the patched LaunchClassLoader is loaded by the
+        // system classloader before Forge starts, so Mojang's org.lwjgl. exclusion
+        // never exists for this legacy target.
         if (overrideExists) {
+            const std::wstring legacyLaunchClassLoaderClass =
+                packageDir + L"\\runtime\\legacy-forge\\net\\minecraft\\launchwrapper\\LaunchClassLoader.class";
+            const std::wstring legacyWindowsDisplayClass =
+                packageDir + L"\\runtime\\legacy-forge\\org\\lwjgl\\opengl\\WindowsDisplay.class";
+
+            const std::wstring overrideNetDir = launcherOverrideDir + L"\\net";
+            const std::wstring overrideNetMinecraftDir = overrideNetDir + L"\\minecraft";
+            const std::wstring overrideLaunchWrapperDir = overrideNetMinecraftDir + L"\\launchwrapper";
+            const std::wstring overrideOrgDir = launcherOverrideDir + L"\\org";
+            const std::wstring overrideLwjglDir = overrideOrgDir + L"\\lwjgl";
+            const std::wstring overrideOpenglDir = overrideLwjglDir + L"\\opengl";
+
+            CreateDirectoryW(overrideNetDir.c_str(), nullptr);
+            CreateDirectoryW(overrideNetMinecraftDir.c_str(), nullptr);
+            CreateDirectoryW(overrideLaunchWrapperDir.c_str(), nullptr);
+            CreateDirectoryW(overrideOrgDir.c_str(), nullptr);
+            CreateDirectoryW(overrideLwjglDir.c_str(), nullptr);
+            CreateDirectoryW(overrideOpenglDir.c_str(), nullptr);
+
+            const std::wstring launcherLaunchClassLoaderClass =
+                overrideLaunchWrapperDir + L"\\LaunchClassLoader.class";
+            const std::wstring launcherWindowsDisplayClass =
+                overrideOpenglDir + L"\\WindowsDisplay.class";
+
+            if (GetFileAttributesW(legacyLaunchClassLoaderClass.c_str()) != INVALID_FILE_ATTRIBUTES) {
+                SetLastError(ERROR_SUCCESS);
+                if (CopyFileW(
+                        legacyLaunchClassLoaderClass.c_str(),
+                        launcherLaunchClassLoaderClass.c_str(),
+                        FALSE)) {
+                    WriteLogF(
+                        L"Legacy patched LaunchClassLoader installed in launcher-overrides: %s",
+                        launcherLaunchClassLoaderClass.c_str());
+                } else {
+                    WriteLogF(
+                        L"Legacy patched LaunchClassLoader copy FAILED: %s -> %s err=%u",
+                        legacyLaunchClassLoaderClass.c_str(),
+                        launcherLaunchClassLoaderClass.c_str(),
+                        GetLastError());
+                }
+            } else {
+                WriteLogF(
+                    L"Legacy patched LaunchClassLoader missing from package: %s",
+                    legacyLaunchClassLoaderClass.c_str());
+            }
+
+            if (GetFileAttributesW(legacyWindowsDisplayClass.c_str()) != INVALID_FILE_ATTRIBUTES) {
+                SetLastError(ERROR_SUCCESS);
+                if (CopyFileW(
+                        legacyWindowsDisplayClass.c_str(),
+                        launcherWindowsDisplayClass.c_str(),
+                        FALSE)) {
+                    WriteLogF(
+                        L"Legacy Forge patched WindowsDisplay class installed in launcher-overrides: %s",
+                        launcherWindowsDisplayClass.c_str());
+                } else {
+                    WriteLogF(
+                        L"Legacy Forge patched WindowsDisplay class copy FAILED: %s -> %s err=%u",
+                        legacyWindowsDisplayClass.c_str(),
+                        launcherWindowsDisplayClass.c_str(),
+                        GetLastError());
+                }
+            } else {
+                WriteLogF(
+                    L"Legacy Forge patched WindowsDisplay class missing from package: %s",
+                    legacyWindowsDisplayClass.c_str());
+            }
             const std::wstring legacyWindowsDisplayClass =
                 packageDir + L"\\runtime\\legacy-forge\\org\\lwjgl\\opengl\\WindowsDisplay.class";
             const std::wstring overrideOrgDir = launcherOverrideDir + L"\\org";
