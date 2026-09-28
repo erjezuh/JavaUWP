@@ -36,7 +36,13 @@ public final class LegacyUwpGlfwBridge {
         void glfwGetWindowSize(Pointer window, IntByReference width, IntByReference height);
         int glfwBanditReadChars(int[] out, int maxCount);
         void glfwBanditGetAndClearScroll(DoubleByReference x, DoubleByReference y);
+        void glfwSetInputMode(Pointer window, int mode, int value);
     }
+
+    /** GLFW input-mode constants (match the shim's glfw3.h). */
+    public static final int GLFW_CURSOR = 0x00033001;
+    public static final int GLFW_CURSOR_NORMAL = 0x00034001;
+    public static final int GLFW_CURSOR_DISABLED = 0x00034003;
 
     private static GlfwLibrary library;
     private static Pointer window;
@@ -179,6 +185,25 @@ public final class LegacyUwpGlfwBridge {
             library.glfwGetWindowSize(window, width, height);
         }
         return new int[] {width.getValue(), height.getValue()};
+    }
+
+    /**
+     * Mirrors Minecraft's mouse grab state into the shim's cursor mode so the
+     * shim knows when absolute pointer positions may steer the cursor (menus)
+     * and when only deltas matter (gameplay). Without this the shim stays in
+     * its default grabbed mode forever and menus get delta-only tracking.
+     */
+    public static synchronized void setCursorGrabbed(boolean grabbed) {
+        if (library == null || window == null) {
+            return;
+        }
+        try {
+            library.glfwSetInputMode(
+                window, GLFW_CURSOR,
+                grabbed ? GLFW_CURSOR_DISABLED : GLFW_CURSOR_NORMAL);
+        } catch (Throwable error) {
+            // Keep the poll path alive if a native call fails.
+        }
     }
 
     /** Drains pending Unicode code points from the shim's char queue. */

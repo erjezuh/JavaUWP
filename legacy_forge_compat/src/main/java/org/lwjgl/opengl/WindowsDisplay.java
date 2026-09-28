@@ -563,6 +563,10 @@ final class WindowsDisplay implements DisplayImplementation {
 
     @Override
     public void grabMouse(boolean grab) {
+        // Always mirror the grab state into the shim, even when our own flag
+        // already matches: the shim starts in grabbed mode and needs the first
+        // explicit ungrab (menu) call to enable absolute pointer tracking.
+        LegacyUwpGlfwBridge.setCursorGrabbed(grab);
         if (grab == mouseGrabbed) {
             return;
         }

@@ -7,6 +7,8 @@ import org.objectweb.asm.Label;
 import org.objectweb.asm.MethodVisitor;
 import org.objectweb.asm.Opcodes;
 
+import net.minecraftforge.fml.common.asm.transformers.deobf.FMLDeobfuscatingRemapper;
+
 /**
  * Skips world-render frames during the vanilla 1.12.2 first-frame race.
  *
@@ -36,6 +38,16 @@ public final class LegacyWorldRenderGuard implements net.minecraft.launchwrapper
         return TARGET_CLASS.equals(value) || TARGET_CLASS_DOTTED.equals(value);
     }
 
+    /** Maps a notch method name to its SRG name; returns it unchanged if it
+     *  already is SRG or if the remapper is not available. */
+    private static String safeMapMethodName(String owner, String name, String desc) {
+        try {
+            return FMLDeobfuscatingRemapper.INSTANCE.mapMethodName(owner, name, desc);
+        } catch (Throwable ignored) {
+            return name;
+        }
+    }
+
     @Override
     public byte[] transform(String name, String transformedName, byte[] basicClass) {
         if (basicClass == null) {
@@ -57,7 +69,13 @@ public final class LegacyWorldRenderGuard implements net.minecraft.launchwrapper
                     int access, String methodName, String descriptor,
                     String signature, String[] exceptions) {
 
-                    if (RENDER_WORLD.equals(methodName)
+                    // Coremod transformers run before FML's deobfuscation in
+                    // production, so Minecraft methods can still carry their
+                    // notch names here (e.g. "b" instead of "func_78471_a").
+                    // Map through FML's remapper and accept either name.
+                    final String mappedName = safeMapMethodName(
+                        reader.getClassName(), methodName, descriptor);
+                    if ((RENDER_WORLD.equals(methodName) || RENDER_WORLD.equals(mappedName))
                         && RENDER_WORLD_DESC.equals(descriptor)) {
                         patched[0] = true;
                         originalAccess[0] = access;

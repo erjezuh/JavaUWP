@@ -2683,7 +2683,9 @@ static void HandleMouseDeviceMoved(ABI::Windows::Devices::Input::IMouseEventArgs
     ABI::Windows::Devices::Input::MouseDelta delta = {};
     if (FAILED(args->get_MouseDelta(&delta))) return;
     if (AbsolutePointerFresh()) return;
-    DispatchMouseDelta(delta.X, delta.Y);
+    // Observed on Xbox: this delta stream's positive Y points up, the opposite
+    // of screen coordinates. Invert it so cursor/look follow the pointer.
+    DispatchMouseDelta(delta.X, -delta.Y);
 }
 static void PollCoreWindowPointerPosition() {
     if (!g_coreWindow || g_cursorDisabled) {
@@ -2776,8 +2778,9 @@ static void PollGameInputMouse() {
     if ((dx || dy) && !AbsolutePointerFresh()) {
         // GameInput positions are accumulated movement deltas with no relation
         // to screen coordinates; only use them when the system pointer is not
-        // reporting (e.g. pure relative mice).
-        DispatchMouseDelta(ClampInt64ToInt(dx), ClampInt64ToInt(dy));
+        // reporting (e.g. pure relative mice). Their positive Y points up (raw
+        // HID convention), the opposite of screen coordinates: invert it.
+        DispatchMouseDelta(ClampInt64ToInt(dx), ClampInt64ToInt(-dy));
     }
     if (wheelX || wheelY) {
         AccumulateLegacyScroll((double)wheelX / 120.0, (double)wheelY / 120.0);
@@ -3296,8 +3299,13 @@ extern "C" __declspec(dllexport) void glfwPollEvents(void) {
 
     if (mouseCompanionActive) {
         DrainRemoteMouseInput();
-        PollGameInputMouse();
     }
+    // Native USB mouse (Edge/BanditLauncher package identity) does not use the
+    // companion relay. Poll GameInput mouse and the system pointer position
+    // unconditionally: they were previously gated on the companion being active
+    // AND no gamepad being present, which is never true on Xbox (a controller
+    // is always connected), so absolute pointer tracking never ran at all.
+    PollGameInputMouse();
     if (g_controller_bridge_enabled || !LegacyControllerModMode()) {
         // When no controller mod owns the gamepad (the legacy 1.12.2 profile
         // ships none), the shim itself maps the controller to keyboard/mouse
@@ -3305,9 +3313,7 @@ extern "C" __declspec(dllexport) void glfwPollEvents(void) {
         // camera, triggers click, A confirm/jump, B back, bumpers hotbar.
         PollGameInputGamepad(true);
     }
-    if (mouseCompanionActive && !g_gamepad_present) {
-        PollCoreWindowPointerPosition();
-    }
+    PollCoreWindowPointerPosition();
     RefreshWindowMetrics(true);
 }
 extern "C" __declspec(dllexport) void glfwWaitEvents(void) {
