@@ -491,6 +491,13 @@ final class WindowsDisplay implements DisplayImplementation {
         if (windowSize[1] > 0 && windowSize[1] != height) {
             rawY = (int)Math.round(cursor[1] * (double)height / (double)windowSize[1]);
         }
+        // LWJGL 2 Mouse coordinates use a bottom-left origin: Mouse.getY()
+        // grows UPWARD (like OpenGL), and Minecraft itself converts GUI
+        // coordinates with (displayHeight - Mouse.getY()). The shim tracks the
+        // cursor top-down like the screen, so convert exactly once here at the
+        // LWJGL boundary. Without this the in-game cursor moves inverted
+        // up/down relative to the pointer.
+        rawY = height - 1 - rawY;
 
         // Scrolling: wheel notches -> Windows-style +-120 per notch.
         double[] scroll = LegacyUwpGlfwBridge.getAndClearScroll();
@@ -573,7 +580,8 @@ final class WindowsDisplay implements DisplayImplementation {
         mouseGrabbed = grab;
         double[] cursor = LegacyUwpGlfwBridge.getCursorPos();
         lastMouseX = (int)Math.round(cursor[0]);
-        lastMouseY = (int)Math.round(cursor[1]);
+        // Same bottom-left LWJGL space as pollMouse (see the conversion there).
+        lastMouseY = height - 1 - (int)Math.round(cursor[1]);
         // In grab mode events report deltas starting from zero; in free mode
         // they report absolute coordinates.
         lastEventMouseX = mouseGrabbed ? 0 : lastMouseX;

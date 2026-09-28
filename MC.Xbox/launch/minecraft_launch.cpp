@@ -1548,10 +1548,15 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
 
     std::vector<std::string> vmOptionStorage;
     vmOptionStorage.reserve(64);
-    // 5120 MB app budget on series s dev mode, so a 3G heap that never resizes fits
-    vmOptionStorage.push_back("-Xmx3G");
-    vmOptionStorage.push_back("-Xms3G");
-    vmOptionStorage.push_back("-XX:MaxDirectMemorySize=512M");
+    // 5120 MB app budget on series s dev mode. Heap+direct stay at 3.5G total,
+    // but the split moves 3G/512M -> 2560M/1024M: chunk render setup
+    // (ChunkRenderDispatcher -> BufferBuilder allocateDirect) exhausted the old
+    // 512M direct cap at world join ("OutOfMemoryError: Direct buffer memory"),
+    // which left the client half-initialized (null player) and crashed it later
+    // in world render / GuiIngameForge.
+    vmOptionStorage.push_back("-Xmx2560M");
+    vmOptionStorage.push_back("-Xms2560M");
+    vmOptionStorage.push_back("-XX:MaxDirectMemorySize=1024M");
 
     // ignoreUnrecognized is JNI_FALSE, so a typo in jvm_args.txt would stop it booting
     vmOptionStorage.push_back("-XX:+IgnoreUnrecognizedVMOptions");
@@ -1564,7 +1569,7 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
     vmOptionStorage.push_back("-XX:G1HeapRegionSize=32M");
     // hsperfdata is mmapped and rewritten every collection, on console storage that is a frame hitch
     vmOptionStorage.push_back("-XX:+PerfDisableSharedMem");
-    WriteLog(L"JVM heap: -Xmx3G -Xms3G -XX:MaxDirectMemorySize=512M, G1 at 50ms pause target");
+    WriteLog(L"JVM heap: -Xmx2560M -Xms2560M -XX:MaxDirectMemorySize=1024M, G1 at 50ms pause target");
     const bool legacyJava8 = packagedJreRelativeDir == L"jre8";
     if (!legacyJava8) {
         vmOptionStorage.push_back("--enable-native-access=ALL-UNNAMED");
