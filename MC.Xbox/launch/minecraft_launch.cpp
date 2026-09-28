@@ -1314,6 +1314,37 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
         } else {
             WriteLogF(L"Failed to write %s err=%u", splashConfigPath.c_str(), GetLastError());
         }
+
+        // Also force the startup resolution at the GameSettings layer:
+        // overrideWidth/overrideHeight in options.txt make Minecraft adopt
+        // 1920x1080 no matter how its command line parsed. Upsert the two keys
+        // and keep every other user setting intact.
+        const std::wstring optionsPath = gameDir + L"\\options.txt";
+        std::wstring optionsText;
+        ReadTextFile(optionsPath, optionsText);
+        std::wstring rewritten;
+        size_t pos = 0;
+        while (pos < optionsText.size()) {
+            size_t end = optionsText.find(L'\n', pos);
+            if (end == std::wstring::npos) end = optionsText.size();
+            const std::wstring line = TrimWhitespace(optionsText.substr(pos, end - pos));
+            pos = end + 1;
+            if (line.rfind(L"overrideWidth:", 0) == 0 ||
+                line.rfind(L"overrideHeight:", 0) == 0) {
+                continue;
+            }
+            if (!line.empty()) {
+                rewritten += line;
+                rewritten += L"\r\n";
+            }
+        }
+        rewritten += L"overrideWidth:1920\r\n";
+        rewritten += L"overrideHeight:1080\r\n";
+        if (WriteTextFile(optionsPath, rewritten)) {
+            WriteLog(L"Legacy client resolution forced to 1920x1080 via options.txt overrideWidth/overrideHeight");
+        } else {
+            WriteLogF(L"Failed to seed %s err=%u", optionsPath.c_str(), GetLastError());
+        }
     }
     ConfigureKnownModDefaults(gameDir, userModsDir, minecraftVersion, bundledModsDir);
     if (SetCurrentDirectoryW(gameDir.c_str())) {
@@ -1752,27 +1783,40 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
         WriteLogF(L"jvm_args.txt not present at %s, using built in options only", jvmArgsPath.c_str());
     }
 
-    std::vector<std::string> appArgs = {
-        "--username", authConfig.username,
-        "--version", w2a(launchVersion),
-        "--gameDir", w2a(fwd(gameDir)),
-        "--assetsDir", w2a(fwd(assetsDir)),
-        "--assetIndex", w2a(assetIndex),
-        "--uuid", authConfig.uuid,
-        "--accessToken", authConfig.accessToken,
-        "--versionType", "release"
-    };
+    std::vector<std::string> appArgs;
+    // Legacy 1.12.2 defaults to 854x480 and would render into half of the
+    // screen. Force Full HD. Two defenses, because FMLTweaker re-parses the
+    // whole game-argument list into a HashMap with a fragile option-pair state
+    // machine that orphans values when profile arguments repeat options (the
+    // --width value was observed landing in "Completely ignored arguments"):
+    // 1. Pass the resolution as single --key=value tokens, which FMLTweaker
+    //    consumes atomically, and place them FIRST so the pairing state is
+    //    guaranteed clean at that point.
+    // 2. options.txt overrideWidth/overrideHeight is seeded before launch as
+    //    well (independent of any argument parsing).
+    if (minecraftVersion == L"1.12.2" && loaderId == LoaderId::Forge) {
+        appArgs.push_back("--width=1920");
+        appArgs.push_back("--height=1080");
+        WriteLog(L"Legacy client resolution forced to 1920x1080 via --width=1920 --height=1080");
+    }
+    appArgs.push_back("--username");
+    appArgs.push_back(authConfig.username);
+    appArgs.push_back("--version");
+    appArgs.push_back(w2a(launchVersion));
+    appArgs.push_back("--gameDir");
+    appArgs.push_back(w2a(fwd(gameDir)));
+    appArgs.push_back("--assetsDir");
+    appArgs.push_back(w2a(fwd(assetsDir)));
+    appArgs.push_back("--assetIndex");
+    appArgs.push_back(w2a(assetIndex));
+    appArgs.push_back("--uuid");
+    appArgs.push_back(authConfig.uuid);
+    appArgs.push_back("--accessToken");
+    appArgs.push_back(authConfig.accessToken);
+    appArgs.push_back("--versionType");
+    appArgs.push_back("release");
     for (const std::wstring& arg : extraGameArgs) {
         appArgs.push_back(w2a(expandLaunchArg(arg)));
-    }
-    // Legacy 1.12.2 defaults to 854x480 and would render into a small corner
-    // of the screen. Force Full HD so the game occupies the whole display.
-    if (minecraftVersion == L"1.12.2" && loaderId == LoaderId::Forge) {
-        appArgs.push_back("--width");
-        appArgs.push_back("1920");
-        appArgs.push_back("--height");
-        appArgs.push_back("1080");
-        WriteLog(L"Legacy client resolution forced to 1920x1080 via --width/--height");
     }
     if (loaderId == LoaderId::NeoForge && !neoForgeUniversalJar.empty()) {
         if (GetFileAttributesW(neoForgeUniversalJar.c_str()) != INVALID_FILE_ATTRIBUTES) {

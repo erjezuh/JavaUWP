@@ -2799,7 +2799,7 @@ static void UpdateControllerBridge(const GameInputGamepadState& state) {
     SetControllerKeyState(GLFW_KEY_ESCAPE,
         IsGamepadButtonDown(state, GameInputGamepadB) ||
         IsGamepadButtonDown(state, GameInputGamepadMenu));
-    SetControllerKeyState(GLFW_KEY_E, false);
+    SetControllerKeyState(GLFW_KEY_E, IsGamepadButtonDown(state, GameInputGamepadX));
     SetControllerKeyState(GLFW_KEY_Q, IsGamepadButtonDown(state, GameInputGamepadY));
     SetControllerKeyState(GLFW_KEY_LEFT_SHIFT, IsGamepadButtonDown(state, GameInputGamepadLeftThumbstick));
     SetControllerKeyState(GLFW_KEY_LEFT_CONTROL, IsGamepadButtonDown(state, GameInputGamepadRightThumbstick));
@@ -2809,11 +2809,17 @@ static void UpdateControllerBridge(const GameInputGamepadState& state) {
 
     const bool lbDown = IsGamepadButtonDown(state, GameInputGamepadLeftShoulder);
     const bool rbDown = IsGamepadButtonDown(state, GameInputGamepadRightShoulder);
-    if (g_scroll_cb && lbDown && !g_controller_lb_down) {
-        g_scroll_cb((GLFWwindow*)&g_fake_window, 0.0, 1.0);
+    if (lbDown && !g_controller_lb_down) {
+        AccumulateLegacyScroll(0.0, 1.0);
+        if (g_scroll_cb) {
+            g_scroll_cb((GLFWwindow*)&g_fake_window, 0.0, 1.0);
+        }
     }
-    if (g_scroll_cb && rbDown && !g_controller_rb_down) {
-        g_scroll_cb((GLFWwindow*)&g_fake_window, 0.0, -1.0);
+    if (rbDown && !g_controller_rb_down) {
+        AccumulateLegacyScroll(0.0, -1.0);
+        if (g_scroll_cb) {
+            g_scroll_cb((GLFWwindow*)&g_fake_window, 0.0, -1.0);
+        }
     }
     g_controller_lb_down = lbDown;
     g_controller_rb_down = rbDown;
@@ -3268,7 +3274,11 @@ extern "C" __declspec(dllexport) void glfwPollEvents(void) {
         DrainRemoteMouseInput();
         PollGameInputMouse();
     }
-    if (g_controller_bridge_enabled) {
+    if (g_controller_bridge_enabled || !LegacyControllerModMode()) {
+        // When no controller mod owns the gamepad (the legacy 1.12.2 profile
+        // ships none), the shim itself maps the controller to keyboard/mouse
+        // state so the game stays playable: left stick WASD, right stick
+        // camera, triggers click, A confirm/jump, B back, bumpers hotbar.
         PollGameInputGamepad(true);
     }
     if (mouseCompanionActive && !g_gamepad_present) {
