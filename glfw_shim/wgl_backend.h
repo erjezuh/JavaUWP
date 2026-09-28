@@ -131,6 +131,21 @@ static bool CreateContext(HWND coreWindow) {
     }
     p_swapinterval = (PFN_wglSwapIntervalEXT)p_getproc("wglSwapIntervalEXT");
     Log("wgl wglSwapIntervalEXT => %p", (void*)p_swapinterval);
+    // Ground truth for driver identity. mesa-dist-win: llvmpipe (pure software
+    // raster) is the SILENT default whenever GLonD3D12 is unavailable or fails
+    // to load. "llvmpipe (LLVM ...)" here means we are software-rasterizing;
+    // "D3D12 (...)" means the hardware translation path is active.
+    typedef const unsigned char* (APIENTRY* PFN_gs)(unsigned int);
+    PFN_gs glGetStringFn = (PFN_gs)p_getproc("glGetString");
+    if (!glGetStringFn && s_gl) glGetStringFn = (PFN_gs)::GetProcAddress(s_gl, "glGetString");
+    if (glGetStringFn) {
+        const unsigned char* vendor = glGetStringFn(0x1F00);
+        const unsigned char* renderer = glGetStringFn(0x1F01);
+        const unsigned char* version = glGetStringFn(0x1F02);
+        Log("GL_VENDOR: %s", vendor ? (const char*)vendor : "?");
+        Log("GL_RENDERER: %s", renderer ? (const char*)renderer : "?");
+        Log("GL_VERSION: %s", version ? (const char*)version : "?");
+    }
     s_active = true;
     return true;
 }

@@ -1573,6 +1573,17 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
         SetEnvironmentVariableW(L"MESA_NO_ERROR", L"1");
         WriteLog(L"Mesa: MESA_NO_ERROR=1 (per-call GL error checking disabled)");
     }
+    // mesa-dist-win: llvmpipe (pure software rasterization) is the silent
+    // default whenever GLonD3D12 is unavailable or fails to load - the exact
+    // "500 fps at sky / 30 fps at terrain" software-raster profile. Prefer the
+    // hardware D3D12 translation path explicitly. A pre-set GALLIUM_DRIVER
+    // (mesa_env.txt or shell) is applied at app start and wins here.
+    if (GetEnvVarString(L"GALLIUM_DRIVER").empty()) {
+        SetEnvironmentVariableW(L"GALLIUM_DRIVER", L"d3d12");
+        WriteLog(L"Mesa: GALLIUM_DRIVER=d3d12 (hardware path; software llvmpipe fallback disabled)");
+    } else {
+        WriteLogF(L"Mesa: GALLIUM_DRIVER preset to %s (honored)", GetEnvVarString(L"GALLIUM_DRIVER").c_str());
+    }
     // Persist Mesa's shader cache on the writable drive so each launch does not
     // recompile every pipeline (first-frame hitches and PSO stalls otherwise).
     {
