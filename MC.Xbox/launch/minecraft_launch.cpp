@@ -1319,10 +1319,20 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
         // overrideWidth/overrideHeight in options.txt make Minecraft adopt
         // 1920x1080 no matter how its command line parsed. Upsert the two keys
         // and keep every other user setting intact.
+        //
+        // Additionally seed video-performance defaults for the Mesa->D3D12
+        // translation layer (measured 20 fps @ 8 chunks vs 130 fps @ 2 is
+        // draw/state-call bound): Fast graphics, smooth lighting off, clouds
+        // off, minimal particles. Seeded ONLY when the key is missing (first
+        // launch); after that the player's Video Settings choices win.
         const std::wstring optionsPath = gameDir + L"\\options.txt";
         std::wstring optionsText;
         ReadTextFile(optionsPath, optionsText);
         std::wstring rewritten;
+        bool hasGraphics = false;
+        bool hasAo = false;
+        bool hasClouds = false;
+        bool hasParticles = false;
         size_t pos = 0;
         while (pos < optionsText.size()) {
             size_t end = optionsText.find(L'\n', pos);
@@ -1333,6 +1343,10 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
                 line.rfind(L"overrideHeight:", 0) == 0) {
                 continue;
             }
+            if (line.rfind(L"graphics:", 0) == 0) hasGraphics = true;
+            if (line.rfind(L"ao:", 0) == 0) hasAo = true;
+            if (line.rfind(L"clouds:", 0) == 0) hasClouds = true;
+            if (line.rfind(L"particles:", 0) == 0) hasParticles = true;
             if (!line.empty()) {
                 rewritten += line;
                 rewritten += L"\r\n";
@@ -1340,8 +1354,12 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
         }
         rewritten += L"overrideWidth:1920\r\n";
         rewritten += L"overrideHeight:1080\r\n";
+        if (!hasGraphics) rewritten += L"graphics:0\r\n";
+        if (!hasAo) rewritten += L"ao:0\r\n";
+        if (!hasClouds) rewritten += L"clouds:0\r\n";
+        if (!hasParticles) rewritten += L"particles:0\r\n";
         if (WriteTextFile(optionsPath, rewritten)) {
-            WriteLog(L"Legacy client resolution forced to 1920x1080 via options.txt overrideWidth/overrideHeight");
+            WriteLog(L"Legacy client resolution forced to 1920x1080; video performance defaults seeded (missing keys only)");
         } else {
             WriteLogF(L"Failed to seed %s err=%u", optionsPath.c_str(), GetLastError());
         }
@@ -1544,6 +1562,35 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
         WriteLogF(L"Legacy patched LaunchWrapper jar prepended to JVM classpath: %s",
             (legacyRuntimeDir + L"\\launchwrapper-1.12-uwp.jar").c_str());
         WriteTextFile(launcherLogDir + L"\\java_classpath_final.txt", effectiveClassPath);
+    }
+
+    // ---- Process/GPU-stack performance environment -------------------------
+    // Mesa's OpenGL-on-D3D12 translation layer validates every GL call; with
+    // Minecraft's per-frame call volume that validation is real CPU cost. The
+    // KHR_no_error mode (MESA_NO_ERROR=1) skips it. Set MC_MESA_NO_ERROR=0 to
+    // opt out if a scene ever glitches.
+    if (GetEnvVarString(L"MC_MESA_NO_ERROR") != L"0") {
+        SetEnvironmentVariableW(L"MESA_NO_ERROR", L"1");
+        WriteLog(L"Mesa: MESA_NO_ERROR=1 (per-call GL error checking disabled)");
+    }
+    // Persist Mesa's shader cache on the writable drive so each launch does not
+    // recompile every pipeline (first-frame hitches and PSO stalls otherwise).
+    {
+        std::wstring shaderCacheDir = gameDir + L"\\..\\mesa-shader-cache";
+        wchar_t normalized[MAX_PATH] = {};
+        if (GetFullPathNameW(shaderCacheDir.c_str(), MAX_PATH, normalized, nullptr) > 0) {
+            shaderCacheDir = normalized;
+        }
+        EnsureDirectoryTree(shaderCacheDir);
+        SetEnvironmentVariableW(L"MESA_GLSL_CACHE_DIR", shaderCacheDir.c_str());
+        WriteLogF(L"Mesa: MESA_GLSL_CACHE_DIR=%s", shaderCacheDir.c_str());
+    }
+    // The integrated JVM renders on this process; ask the console scheduler for
+    // stable frame pacing on the shared cores.
+    if (SetPriorityClass(GetCurrentProcess(), HIGH_PRIORITY_CLASS)) {
+        WriteLog(L"Process priority class set to HIGH for stable frame pacing");
+    } else {
+        WriteLogF(L"SetPriorityClass(HIGH) failed err=%u", GetLastError());
     }
 
     std::vector<std::string> vmOptionStorage;

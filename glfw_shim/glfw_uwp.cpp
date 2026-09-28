@@ -3333,6 +3333,41 @@ extern "C" __declspec(dllexport) void glfwWaitEventsTimeout(double) {
     glfwPollEvents();
 }
 extern "C" __declspec(dllexport) void glfwPostEmptyEvent(void) {}
+// Official UWP 3-D-game pattern (Microsoft docs, "Relative mouse movement and
+// CoreWindow"): hide the system cursor with a null PointerCursor while the
+// game is in relative/gameplay mode; restore it for menus/inventory. Note that
+// PointerPosition stops updating while hidden - fine, grabbed gameplay uses
+// deltas. Public so a future hook can force the cursor on at any time.
+static ComPtr<ABI::Windows::UI::Core::ICoreCursor> g_savedSystemCursor;
+static bool g_systemCursorVisible = true;
+extern "C" __declspec(dllexport) void SetSystemCursorVisible(int visible) {
+    const bool makeVisible = (visible != 0);
+    if (makeVisible == g_systemCursorVisible) return;
+    g_systemCursorVisible = makeVisible;
+    if (!g_coreWindow) return;
+    if (!makeVisible) {
+        g_savedSystemCursor = nullptr;
+        g_coreWindow->get_PointerCursor(g_savedSystemCursor.GetAddressOf());
+        g_coreWindow->put_PointerCursor(nullptr);
+        ShimLog("System cursor hidden for gameplay");
+    } else {
+        if (g_savedSystemCursor) {
+            g_coreWindow->put_PointerCursor(g_savedSystemCursor.Get());
+        } else {
+            ComPtr<ABI::Windows::UI::Core::ICoreCursorFactory> factory;
+            HRESULT hr = RoGetActivationFactory(
+                HStringReference(RuntimeClass_Windows_UI_Core_CoreCursor).Get(),
+                IID_PPV_ARGS(&factory));
+            ComPtr<ABI::Windows::UI::Core::ICoreCursor> arrow;
+            if (SUCCEEDED(hr) && SUCCEEDED(factory->CreateCursor(
+                    ABI::Windows::UI::Core::CoreCursorType_Arrow, 0,
+                    arrow.GetAddressOf()))) {
+                g_coreWindow->put_PointerCursor(arrow.Get());
+            }
+        }
+        ShimLog("System cursor shown for menu");
+    }
+}
 extern "C" __declspec(dllexport) int  glfwGetInputMode(GLFWwindow*, int m) {
     if (m == GLFW_CURSOR) return g_cursorMode;
     if (m == GLFW_RAW_MOUSE_MOTION) return g_raw_mouse_motion ? GLFW_TRUE : GLFW_FALSE;
@@ -3355,6 +3390,10 @@ extern "C" __declspec(dllexport) void glfwSetInputMode(GLFWwindow*, int mode, in
     g_cursorMode = value;
     g_cursorDisabled = (value == GLFW_CURSOR_DISABLED);
     PushMouseHostState();
+    // Gameplay (cursor grabbed or hidden) runs with the system cursor hidden;
+    // menus/inventory (GLFW_CURSOR_NORMAL) restore it. Order matters: the
+    // absolute-position dispatch below runs while visible again.
+    SetSystemCursorVisible(value == GLFW_CURSOR_NORMAL ? 1 : 0);
     if (!g_cursorDisabled) {
         g_menu_abs_x = ClampDouble(g_cursor_x, 0.0, CursorMaxX());
         g_menu_abs_y = ClampDouble(g_cursor_y, 0.0, CursorMaxY());
