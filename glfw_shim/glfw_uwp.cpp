@@ -462,6 +462,19 @@ static int g_cursorMode = GLFW_CURSOR_DISABLED;
 static bool g_cursor_inside = false;
 static double g_cursor_x = 960.0;
 static double g_cursor_y = 540.0;
+// Tick of the last absolute system-pointer movement (CoreWindow pointer
+// position/events). While it is fresh, delta-only sources (GameInput mouse,
+// WinRT MouseDevice deltas, remote-mouse relay) must not steer the cursor:
+// GameInput positions are accumulated deltas that "don't correlate with
+// screen-space coordinates" (Microsoft GameInput docs), so letting them fight
+// the real pointer desyncs the game cursor from the native Xbox cursor and
+// can invert its up/down direction.
+static ULONGLONG g_lastAbsolutePointerTickMs = 0;
+static bool AbsolutePointerFresh() {
+    return !g_cursorDisabled &&
+        g_lastAbsolutePointerTickMs != 0 &&
+        (GetTickCount64() - g_lastAbsolutePointerTickMs) < 750;
+}
 static int g_gameinput_log_count = 0;
 static bool g_haveGameInputMouseState = false;
 static int g_height = 1080;
@@ -2334,6 +2347,7 @@ static void DispatchMouseDelta(double dx, double dy) {
     }
 }
 static void DispatchMouseAbsolute(double x, double y) {
+    if (AbsolutePointerFresh()) return;
     g_menu_abs_x = ClampDouble(ProtocolToWindowX(x), 0.0, CursorMaxX());
     g_menu_abs_y = ClampDouble(ProtocolToWindowY(y), 0.0, CursorMaxY());
     const double inputX = WindowToMenuInputX(g_menu_abs_x);
@@ -2604,7 +2618,13 @@ static void HandlePointerEvent(IPointerEventArgs* args, PointerDispatchKind kind
     ComPtr<ABI::Windows::UI::Input::IPointerPointProperties> props;
     const bool hasPoint = ReadPointerEvent(args, &x, &y, &props);
     if (hasPoint) {
-        DispatchCursorPos(x, y);
+        if (!g_cursorDisabled) {
+            DispatchCursorPos(x, y);
+            g_lastAbsolutePointerTickMs = GetTickCount64();
+        }
+        // While the cursor is grabbed Minecraft consumes deltas; an absolute
+        // pointer report would reset the virtual position every event and
+        // break mouse-look.
     } else if (kind == PointerDispatchEnter) {
         DispatchCursorEnter(true);
     }
@@ -2662,11 +2682,11 @@ static void HandleMouseDeviceMoved(ABI::Windows::Devices::Input::IMouseEventArgs
 
     ABI::Windows::Devices::Input::MouseDelta delta = {};
     if (FAILED(args->get_MouseDelta(&delta))) return;
+    if (AbsolutePointerFresh()) return;
     DispatchMouseDelta(delta.X, delta.Y);
 }
 static void PollCoreWindowPointerPosition() {
-    if (!g_coreWindow || g_cursorDisabled ||
-        MouseSupport_LastActivityTickMs() != 0) {
+    if (!g_coreWindow || g_cursorDisabled) {
         return;
     }
 
@@ -2677,6 +2697,7 @@ static void PollCoreWindowPointerPosition() {
     const double y = (double)position.Y * CurrentPointerScaleY();
     if (x == g_cursor_x && y == g_cursor_y) return;
 
+    g_lastAbsolutePointerTickMs = GetTickCount64();
     g_menu_abs_x = ClampDouble(x, 0.0, CursorMaxX());
     g_menu_abs_y = ClampDouble(y, 0.0, CursorMaxY());
     DispatchCursorPosInternal(WindowToMenuInputX(g_menu_abs_x), WindowToMenuInputY(g_menu_abs_y), true);
@@ -2752,7 +2773,10 @@ static void PollGameInputMouse() {
     const int64_t wheelY = state.wheelY - g_lastGameInputMouseState.wheelY;
     g_lastGameInputMouseState = state;
 
-    if (dx || dy) {
+    if ((dx || dy) && !AbsolutePointerFresh()) {
+        // GameInput positions are accumulated movement deltas with no relation
+        // to screen coordinates; only use them when the system pointer is not
+        // reporting (e.g. pure relative mice).
         DispatchMouseDelta(ClampInt64ToInt(dx), ClampInt64ToInt(dy));
     }
     if (wheelX || wheelY) {

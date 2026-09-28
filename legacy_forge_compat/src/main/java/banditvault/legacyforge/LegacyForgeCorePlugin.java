@@ -12,7 +12,10 @@ import net.minecraftforge.fml.relauncher.IFMLLoadingPlugin;
 public final class LegacyForgeCorePlugin implements IFMLLoadingPlugin {
     @Override
     public String[] getASMTransformerClass() {
-        return new String[] {"banditvault.legacyforge.LegacyZipFsTransformer"};
+        return new String[] {
+            "banditvault.legacyforge.LegacyZipFsTransformer",
+            "banditvault.legacyforge.LegacyWorldRenderGuard"
+        };
     }
 
     @Override
