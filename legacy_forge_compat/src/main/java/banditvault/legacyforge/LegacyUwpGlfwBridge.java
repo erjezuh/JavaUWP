@@ -3,6 +3,7 @@ package banditvault.legacyforge;
 import com.sun.jna.Library;
 import com.sun.jna.Native;
 import com.sun.jna.Pointer;
+import com.sun.jna.ptr.DoubleByReference;
 import com.sun.jna.ptr.IntByReference;
 import org.lwjgl.LWJGLException;
 
@@ -29,6 +30,12 @@ public final class LegacyUwpGlfwBridge {
         void glfwGetFramebufferSize(
             Pointer window, IntByReference width, IntByReference height);
         long BanditShimPresentedFrames();
+        void glfwBanditGetKeyStates(byte[] states);
+        int glfwGetMouseButton(Pointer window, int button);
+        void glfwGetCursorPos(Pointer window, DoubleByReference x, DoubleByReference y);
+        void glfwGetWindowSize(Pointer window, IntByReference width, IntByReference height);
+        int glfwBanditReadChars(int[] out, int maxCount);
+        void glfwBanditGetAndClearScroll(DoubleByReference x, DoubleByReference y);
     }
 
     private static GlfwLibrary library;
@@ -135,6 +142,73 @@ public final class LegacyUwpGlfwBridge {
         IntByReference height = new IntByReference(0);
         library.glfwGetFramebufferSize(window, width, height);
         return new int[] {width.getValue(), height.getValue()};
+    }
+
+    /** Copies the shim's GLFW key states (512 bytes, indexed by GLFW key code). */
+    public static synchronized void getKeyStates(byte[] states) {
+        if (library == null || states == null) {
+            return;
+        }
+        try {
+            library.glfwBanditGetKeyStates(states);
+        } catch (Throwable error) {
+            // Keep the poll path alive if a native call fails.
+        }
+    }
+
+    public static synchronized boolean isMouseButtonPressed(int button) {
+        return library != null &&
+            window != null &&
+            library.glfwGetMouseButton(window, button) != 0;
+    }
+
+    /** Cursor position in the shim's window coordinate space. */
+    public static synchronized double[] getCursorPos() {
+        DoubleByReference x = new DoubleByReference(0.0);
+        DoubleByReference y = new DoubleByReference(0.0);
+        if (library != null) {
+            library.glfwGetCursorPos(window, x, y);
+        }
+        return new double[] {x.getValue(), y.getValue()};
+    }
+
+    public static synchronized int[] getWindowSize() {
+        IntByReference width = new IntByReference(0);
+        IntByReference height = new IntByReference(0);
+        if (library != null) {
+            library.glfwGetWindowSize(window, width, height);
+        }
+        return new int[] {width.getValue(), height.getValue()};
+    }
+
+    /** Drains pending Unicode code points from the shim's char queue. */
+    public static synchronized int[] readChars(int maxCount) {
+        if (library == null || maxCount <= 0) {
+            return new int[0];
+        }
+        int[] out = new int[maxCount];
+        int read;
+        try {
+            read = library.glfwBanditReadChars(out, maxCount);
+        } catch (Throwable error) {
+            return new int[0];
+        }
+        if (read <= 0) {
+            return new int[0];
+        }
+        int[] result = new int[read];
+        System.arraycopy(out, 0, result, 0, read);
+        return result;
+    }
+
+    /** Read-and-clear of the accumulated scroll (in wheel notches). */
+    public static synchronized double[] getAndClearScroll() {
+        DoubleByReference x = new DoubleByReference(0.0);
+        DoubleByReference y = new DoubleByReference(0.0);
+        if (library != null) {
+            library.glfwBanditGetAndClearScroll(x, y);
+        }
+        return new double[] {x.getValue(), y.getValue()};
     }
 
     public static synchronized void destroyWindow() {

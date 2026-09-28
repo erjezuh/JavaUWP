@@ -1765,6 +1765,15 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
     for (const std::wstring& arg : extraGameArgs) {
         appArgs.push_back(w2a(expandLaunchArg(arg)));
     }
+    // Legacy 1.12.2 defaults to 854x480 and would render into a small corner
+    // of the screen. Force Full HD so the game occupies the whole display.
+    if (minecraftVersion == L"1.12.2" && loaderId == LoaderId::Forge) {
+        appArgs.push_back("--width");
+        appArgs.push_back("1920");
+        appArgs.push_back("--height");
+        appArgs.push_back("1080");
+        WriteLog(L"Legacy client resolution forced to 1920x1080 via --width/--height");
+    }
     if (loaderId == LoaderId::NeoForge && !neoForgeUniversalJar.empty()) {
         if (GetFileAttributesW(neoForgeUniversalJar.c_str()) != INVALID_FILE_ATTRIBUTES) {
             WriteLogF(L"NeoForge universal jar available for launch-handler discovery: %s", neoForgeUniversalJar.c_str());

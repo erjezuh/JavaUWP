@@ -964,9 +964,29 @@ static void DispatchKeyEvent(VirtualKey virtualKey, const CorePhysicalKeyStatus&
     }
 }
 
+// Character and scroll accumulators for the legacy LWJGL 2 polling path.
+// CoreWindow delivers chars/scroll through callbacks (modern GLFW path), while
+// legacy LWJGL 2 polls state; these queues bridge the two models.
+static std::mutex g_legacyInputMutex;
+static std::vector<unsigned int> g_charQueue;
+static double g_scroll_accum_x = 0.0;
+static double g_scroll_accum_y = 0.0;
+
+static void AccumulateLegacyScroll(double dx, double dy) {
+    std::lock_guard<std::mutex> lock(g_legacyInputMutex);
+    g_scroll_accum_x += dx;
+    g_scroll_accum_y += dy;
+}
+
 static void DispatchCharEvent(unsigned int codepoint) {
     if (!CoreWindowAcceptsInput()) return;
     if (codepoint == 0) return;
+    {
+        std::lock_guard<std::mutex> lock(g_legacyInputMutex);
+        if (g_charQueue.size() < 512) {
+            g_charQueue.push_back(codepoint);
+        }
+    }
     if (g_char_cb) {
         g_char_cb((GLFWwindow*)&g_fake_window, codepoint);
     }
@@ -2416,6 +2436,9 @@ static void DrainRemoteMouseInput() {
         activity = true;
     }
 
+    if (frame.wheel != 0.0) {
+        AccumulateLegacyScroll(0.0, frame.wheel);
+    }
     if (frame.wheel != 0.0 && g_scroll_cb && MouseCompanionActive()) {
         g_scroll_cb((GLFWwindow*)&g_fake_window, 0.0, frame.wheel);
         activity = true;
@@ -2599,13 +2622,16 @@ static void HandlePointerEvent(IPointerEventArgs* args, PointerDispatchKind kind
             }
         }
 
-        if (kind == PointerDispatchWheel && g_scroll_cb && MouseCompanionActive()) {
+        if (kind == PointerDispatchWheel) {
             INT32 wheelDelta = 0;
             boolean horizontal = false;
             props->get_IsHorizontalMouseWheel(&horizontal);
             if (SUCCEEDED(props->get_MouseWheelDelta(&wheelDelta)) && wheelDelta != 0) {
                 const double offset = (double)wheelDelta / 120.0;
-                g_scroll_cb((GLFWwindow*)&g_fake_window, horizontal ? offset : 0.0, horizontal ? 0.0 : offset);
+                AccumulateLegacyScroll(horizontal ? offset : 0.0, horizontal ? 0.0 : offset);
+                if (g_scroll_cb && MouseCompanionActive()) {
+                    g_scroll_cb((GLFWwindow*)&g_fake_window, horizontal ? offset : 0.0, horizontal ? 0.0 : offset);
+                }
             }
         }
     }
@@ -2728,6 +2754,9 @@ static void PollGameInputMouse() {
 
     if (dx || dy) {
         DispatchMouseDelta(ClampInt64ToInt(dx), ClampInt64ToInt(dy));
+    }
+    if (wheelX || wheelY) {
+        AccumulateLegacyScroll((double)wheelX / 120.0, (double)wheelY / 120.0);
     }
     if ((wheelX || wheelY) && g_scroll_cb && MouseCompanionActive()) {
         g_scroll_cb((GLFWwindow*)&g_fake_window, (double)wheelX, (double)wheelY);
@@ -3419,10 +3448,34 @@ extern "C" __declspec(dllexport) int  glfwGetKey(GLFWwindow*, int key) {
     if (key < 0 || key >= (int)sizeof(g_key_state)) return GLFW_RELEASE;
     return g_key_state[key] ? GLFW_PRESS : GLFW_RELEASE;
 }
-extern "C" __declspec(dllexport) int  glfwGetMouseButton(GLFWwindow*, int button) {
+extern "C" __declspec(dllexport) int glfwGetMouseButton(GLFWwindow*, int button) {
     if (button < 0 || button >= (int)sizeof(g_mouse_state)) return GLFW_RELEASE;
     const int state = g_mouse_state[button] ? GLFW_PRESS : GLFW_RELEASE;
     return state;
+}
+
+// Legacy LWJGL 2 input polling: bulk key states, drained char queue and
+// read-and-clear scroll accumulator.
+extern "C" __declspec(dllexport) void glfwBanditGetKeyStates(unsigned char* out) {
+    if (!out) return;
+    memcpy(out, g_key_state, sizeof(g_key_state));
+}
+extern "C" __declspec(dllexport) int glfwBanditReadChars(unsigned int* out, int maxCount) {
+    if (!out || maxCount <= 0) return 0;
+    std::lock_guard<std::mutex> lock(g_legacyInputMutex);
+    int read = 0;
+    while (read < maxCount && !g_charQueue.empty()) {
+        out[read++] = g_charQueue.front();
+        g_charQueue.erase(g_charQueue.begin());
+    }
+    return read;
+}
+extern "C" __declspec(dllexport) void glfwBanditGetAndClearScroll(double* x, double* y) {
+    std::lock_guard<std::mutex> lock(g_legacyInputMutex);
+    if (x) *x = g_scroll_accum_x;
+    if (y) *y = g_scroll_accum_y;
+    g_scroll_accum_x = 0.0;
+    g_scroll_accum_y = 0.0;
 }
 extern "C" __declspec(dllexport) void glfwGetCursorPos(GLFWwindow*, double*x, double*y) {
     if (x) *x = g_cursor_x;
