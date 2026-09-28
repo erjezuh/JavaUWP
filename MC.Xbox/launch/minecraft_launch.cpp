@@ -1364,20 +1364,17 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
             WriteLogF(L"Failed to seed %s err=%u", optionsPath.c_str(), GetLastError());
         }
 
-        // OptiFine performance profile (forced upsert on every legacy launch).
-        // optionsof.txt is OptiFine's own settings file. These keys are the
-        // draw-call / texture-cost killers on the Mesa->D3D12 path; measured
-        // bottleneck is per-chunk-layer draws (2 chunks = 130 fps vs 8 = 20):
-        //   ofRenderRegions:true  merges chunk geometry into region VBOs
-        //                         (the single biggest draw-call reducer)
-        //   ofTrees:0             leaves render on the SOLID layer with
-        //                         interior faces culled (drops the extra
-        //                         cutout pass and canopy overdraw)
-        //   ofAaLevel:0/ofAfLevel:0  MSAA and anisotropic filtering multiply
-        //                         cost through the translation layer
-        //   ofSmoothFps:true, ofFastMath:true, ofAoLevel:0.0
-        // All other OptiFine keys are preserved. These seven are re-applied
-        // each launch (in-game changes to them are reverted on purpose).
+        // OptiFine performance profile (legacy client).
+        // Root cause of the terrain fps ceiling is per-call cost through the
+        // Mesa->D3D12 translation (~6us per GL call; MC 1.12.2 emits thousands
+        // of per-chunk-layer draws per frame). Fix = fewer calls, NOT lower
+        // visual quality. So:
+        //   FORCED every launch (invisible batching/pacing, no visual cost):
+        //     ofRenderRegions:true  merges chunk geometry into region VBOs
+        //                           (the structural draw-call reducer)
+        //     ofSmoothFps:true, ofFastMath:true
+        //   Seeded ONLY when absent (user visual choices always win):
+        //     ofTrees:0, ofAaLevel:0, ofAfLevel:0, ofAoLevel:0.0
         const std::wstring optiFinePath = gameDir + L"\\optionsof.txt";
         std::wstring optiFineText;
         ReadTextFile(optiFinePath, optiFineText);
@@ -1389,12 +1386,8 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
             const std::wstring line = TrimWhitespace(optiFineText.substr(ofPos, end - ofPos));
             ofPos = end + 1;
             if (line.rfind(L"ofRenderRegions:", 0) == 0 ||
-                line.rfind(L"ofTrees:", 0) == 0 ||
-                line.rfind(L"ofAaLevel:", 0) == 0 ||
-                line.rfind(L"ofAfLevel:", 0) == 0 ||
                 line.rfind(L"ofSmoothFps:", 0) == 0 ||
-                line.rfind(L"ofFastMath:", 0) == 0 ||
-                line.rfind(L"ofAoLevel:", 0) == 0) {
+                line.rfind(L"ofFastMath:", 0) == 0) {
                 continue;
             }
             if (!line.empty()) {
@@ -1402,15 +1395,19 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
                 ofRewritten += L"\r\n";
             }
         }
+        const bool hasTrees = optiFineText.find(L"ofTrees:") != std::wstring::npos;
+        const bool hasAa = optiFineText.find(L"ofAaLevel:") != std::wstring::npos;
+        const bool hasAf = optiFineText.find(L"ofAfLevel:") != std::wstring::npos;
+        const bool hasAoLevel = optiFineText.find(L"ofAoLevel:") != std::wstring::npos;
         ofRewritten += L"ofRenderRegions:true\r\n";
-        ofRewritten += L"ofTrees:0\r\n";
-        ofRewritten += L"ofAaLevel:0\r\n";
-        ofRewritten += L"ofAfLevel:0\r\n";
         ofRewritten += L"ofSmoothFps:true\r\n";
         ofRewritten += L"ofFastMath:true\r\n";
-        ofRewritten += L"ofAoLevel:0.0\r\n";
+        if (!hasTrees) ofRewritten += L"ofTrees:0\r\n";
+        if (!hasAa) ofRewritten += L"ofAaLevel:0\r\n";
+        if (!hasAf) ofRewritten += L"ofAfLevel:0\r\n";
+        if (!hasAoLevel) ofRewritten += L"ofAoLevel:0.0\r\n";
         if (WriteTextFile(optiFinePath, ofRewritten)) {
-            WriteLog(L"OptiFine perf profile forced in optionsof.txt: RenderRegions=true Trees=0(fast) Aa=0 Af=0 SmoothFps=true FastMath=true AoLevel=0.0");
+            WriteLog(L"OptiFine perf profile in optionsof.txt: RenderRegions=true SmoothFps=true FastMath=true (forced); Trees/Aa/Af/AoLevel seeded only if absent (user choices preserved)");
         } else {
             WriteLogF(L"Failed to write %s err=%u", optiFinePath.c_str(), GetLastError());
         }
