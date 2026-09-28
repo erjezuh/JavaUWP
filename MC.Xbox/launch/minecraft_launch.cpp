@@ -1363,6 +1363,57 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
         } else {
             WriteLogF(L"Failed to seed %s err=%u", optionsPath.c_str(), GetLastError());
         }
+
+        // OptiFine performance profile (forced upsert on every legacy launch).
+        // optionsof.txt is OptiFine's own settings file. These keys are the
+        // draw-call / texture-cost killers on the Mesa->D3D12 path; measured
+        // bottleneck is per-chunk-layer draws (2 chunks = 130 fps vs 8 = 20):
+        //   ofRenderRegions:true  merges chunk geometry into region VBOs
+        //                         (the single biggest draw-call reducer)
+        //   ofTrees:0             leaves render on the SOLID layer with
+        //                         interior faces culled (drops the extra
+        //                         cutout pass and canopy overdraw)
+        //   ofAaLevel:0/ofAfLevel:0  MSAA and anisotropic filtering multiply
+        //                         cost through the translation layer
+        //   ofSmoothFps:true, ofFastMath:true, ofAoLevel:0.0
+        // All other OptiFine keys are preserved. These seven are re-applied
+        // each launch (in-game changes to them are reverted on purpose).
+        const std::wstring optiFinePath = gameDir + L"\\optionsof.txt";
+        std::wstring optiFineText;
+        ReadTextFile(optiFinePath, optiFineText);
+        std::wstring ofRewritten;
+        size_t ofPos = 0;
+        while (ofPos < optiFineText.size()) {
+            size_t end = optiFineText.find(L'\n', ofPos);
+            if (end == std::wstring::npos) end = optiFineText.size();
+            const std::wstring line = TrimWhitespace(optiFineText.substr(ofPos, end - ofPos));
+            ofPos = end + 1;
+            if (line.rfind(L"ofRenderRegions:", 0) == 0 ||
+                line.rfind(L"ofTrees:", 0) == 0 ||
+                line.rfind(L"ofAaLevel:", 0) == 0 ||
+                line.rfind(L"ofAfLevel:", 0) == 0 ||
+                line.rfind(L"ofSmoothFps:", 0) == 0 ||
+                line.rfind(L"ofFastMath:", 0) == 0 ||
+                line.rfind(L"ofAoLevel:", 0) == 0) {
+                continue;
+            }
+            if (!line.empty()) {
+                ofRewritten += line;
+                ofRewritten += L"\r\n";
+            }
+        }
+        ofRewritten += L"ofRenderRegions:true\r\n";
+        ofRewritten += L"ofTrees:0\r\n";
+        ofRewritten += L"ofAaLevel:0\r\n";
+        ofRewritten += L"ofAfLevel:0\r\n";
+        ofRewritten += L"ofSmoothFps:true\r\n";
+        ofRewritten += L"ofFastMath:true\r\n";
+        ofRewritten += L"ofAoLevel:0.0\r\n";
+        if (WriteTextFile(optiFinePath, ofRewritten)) {
+            WriteLog(L"OptiFine perf profile forced in optionsof.txt: RenderRegions=true Trees=0(fast) Aa=0 Af=0 SmoothFps=true FastMath=true AoLevel=0.0");
+        } else {
+            WriteLogF(L"Failed to write %s err=%u", optiFinePath.c_str(), GetLastError());
+        }
     }
     ConfigureKnownModDefaults(gameDir, userModsDir, minecraftVersion, bundledModsDir);
     if (SetCurrentDirectoryW(gameDir.c_str())) {
