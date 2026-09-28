@@ -61,6 +61,37 @@ elseif ($inheritedLoader) { $env:LOADER = $inheritedLoader; $env:DEFAULT_MC_LOAD
 if ($LoaderVersion) { $env:LOADER_VERSION = $LoaderVersion }
 elseif ($inheritedLoaderVersion) { $env:LOADER_VERSION = $inheritedLoaderVersion }
 
+# Defend launcher/Maven version tokens against stray characters (e.g. a
+# pasted "ç") that would otherwise build invalid download URLs like
+# forge-1.12.2-14.23.5.2864ç-installer.jar and 404 at manifest generation.
+# Tokens can arrive via -LoaderVersion/-McVersion/-Loader OR via the
+# LOADER_VERSION/MC_VERSION/LOADER environment variables inherited from the
+# shell, so sanitize the environment copies and sync the script variables back.
+function Protect-VersionToken {
+    param([string]$Value, [string]$Label)
+    if (-not $Value) { return $Value }
+    $clean = $Value.Trim() -replace "[^0-9A-Za-z._+-]", ""
+    if ($clean -ne $Value) {
+        Write-Warning "Sanitized $Label '$Value' -> '$clean' (stray non-version characters removed)."
+    }
+    if (-not $clean) {
+        throw "$Label contained no usable version characters ('$Value'). Pass a clean -LoaderVersion like 14.23.5.2864 and clear the $Label environment variable."
+    }
+    return $clean
+}
+if ($env:LOADER_VERSION) {
+    $env:LOADER_VERSION = Protect-VersionToken $env:LOADER_VERSION "LOADER_VERSION"
+    $LoaderVersion = $env:LOADER_VERSION
+}
+if ($env:MC_VERSION) {
+    $env:MC_VERSION = Protect-VersionToken $env:MC_VERSION "MC_VERSION"
+    $McVersion = $env:MC_VERSION
+}
+if ($env:LOADER) {
+    $env:LOADER = Protect-VersionToken $env:LOADER "LOADER"
+    $Loader = $env:LOADER
+}
+
 # Forge 1.12.2 uses a numeric Maven loader version. Strip an accidental
 # trailing "git" marker before config is loaded so every downstream step sees
 # the same canonical version.

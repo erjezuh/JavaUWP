@@ -27,6 +27,25 @@ if (-not $LoaderVersion) {
 if (-not $FabricLoaderVersion) {
     $FabricLoaderVersion = $LoaderVersion
 }
+
+# Defend Maven coordinates against stray characters (e.g. a pasted "ç") that
+# would otherwise produce a 404 URL like forge-1.12.2-14.23.5.2864ç-installer.jar.
+if ($MinecraftVersion) {
+    $mcClean = $MinecraftVersion.Trim() -replace "[^0-9A-Za-z._+-]", ""
+    if ($mcClean -ne $MinecraftVersion) { Write-Warning "Sanitized MinecraftVersion '$MinecraftVersion' -> '$mcClean'." }
+    $MinecraftVersion = $mcClean
+}
+if ($LoaderVersion) {
+    $lvClean = $LoaderVersion.Trim() -replace "[^0-9A-Za-z._+-]", ""
+    if ($lvClean -ne $LoaderVersion) { Write-Warning "Sanitized LoaderVersion '$LoaderVersion' -> '$lvClean'." }
+    $LoaderVersion = $lvClean
+    if (-not $FabricLoaderVersion) { $FabricLoaderVersion = $lvClean }
+}
+if ($FabricLoaderVersion) {
+    $flvClean = $FabricLoaderVersion.Trim() -replace "[^0-9A-Za-z._+-]", ""
+    $FabricLoaderVersion = $flvClean
+}
+
 if (-not $OutputPath) {
     $OutputPath = Join-Path (Get-ConfigPath "PackageContentDir") "download_manifest.tsv"
 }
