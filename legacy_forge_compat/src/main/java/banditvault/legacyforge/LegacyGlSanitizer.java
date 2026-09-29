@@ -45,6 +45,14 @@ public final class LegacyGlSanitizer {
     private static final boolean unbindEachDraw =
         readEnv("MC_IBO_UNBIND", false);
 
+    static {
+        // Build/config fingerprint in mc_launch.log: proves which draw path
+        // is active and which kill switches were set at class-init time.
+        System.err.println(
+            "[BanditVault] Draw path config: quadsEnabled=" + quadsEnabled
+            + " unbindEachDraw=" + unbindEachDraw);
+    }
+
     private static int elementBufferId;
     private static IntBuffer pattern;
     private static int patternQuads;
