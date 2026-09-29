@@ -1645,13 +1645,52 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
     }
 
     // ---- Process/GPU-stack performance environment -------------------------
+    // Gfx safe mode: if the previous session died with a native access
+    // violation inside Mesa (libgallium), the plausible triggers are
+    // MESA_NO_ERROR undefined behavior on invalid GL calls (Minecraft does
+    // emit some) and the diagnostic GALLIUM_HUD. Downgrade both for this
+    // launch, one-shot per crash fingerprint (marker file). The real cause
+    // is confirmed from the crash zip's full hs_err.
+    bool gfxSafeMode = false;
+    {
+        const std::wstring crashJsonPath = GetLocalStateDir() + L"\\telemetry\\last_crash.json";
+        std::wstring crashJson;
+        if (ReadTextFile(crashJsonPath, crashJson) &&
+            crashJson.find(L"EXCEPTION_ACCESS_VIOLATION") != std::wstring::npos &&
+            crashJson.find(L"libgallium") != std::wstring::npos) {
+            std::wstring fingerprint;
+            const size_t fpKey = crashJson.find(L"\"fingerprint\":\"");
+            if (fpKey != std::wstring::npos) {
+                const size_t fpStart = fpKey + 15;
+                const size_t fpEnd = crashJson.find(L'"', fpStart);
+                if (fpEnd != std::wstring::npos) {
+                    fingerprint = crashJson.substr(fpStart, fpEnd - fpStart);
+                }
+            }
+            const std::wstring markerPath = GetLocalStateDir() + L"\\telemetry\\gfx_safe_mode_applied.txt";
+            std::wstring marker;
+            ReadTextFile(markerPath, marker);
+            const bool alreadyApplied =
+                (!fingerprint.empty() && marker.find(fingerprint) != std::wstring::npos) ||
+                (fingerprint.empty() && !marker.empty());
+            if (!alreadyApplied) {
+                gfxSafeMode = true;
+                WriteTextFile(markerPath, (fingerprint.empty() ? L"unknown" : fingerprint) + L"\r\n");
+            }
+            if (gfxSafeMode) {
+                WriteLog(L"Gfx safe mode: previous session died with a native access violation in libgallium; MESA_NO_ERROR and GALLIUM_HUD disabled for this launch (one-shot per crash fingerprint)");
+            }
+        }
+    }
     // Mesa's OpenGL-on-D3D12 translation layer validates every GL call; with
     // Minecraft's per-frame call volume that validation is real CPU cost. The
     // KHR_no_error mode (MESA_NO_ERROR=1) skips it. Set MC_MESA_NO_ERROR=0 to
     // opt out if a scene ever glitches.
-    if (GetEnvVarString(L"MC_MESA_NO_ERROR") != L"0") {
+    if (!gfxSafeMode && GetEnvVarString(L"MC_MESA_NO_ERROR") != L"0") {
         SetEnvironmentVariableW(L"MESA_NO_ERROR", L"1");
         WriteLog(L"Mesa: MESA_NO_ERROR=1 (per-call GL error checking disabled)");
+    } else if (gfxSafeMode) {
+        WriteLog(L"Mesa: MESA_NO_ERROR stays off (gfx safe mode after the native crash)");
     }
     // mesa-dist-win: llvmpipe (pure software rasterization) is the silent
     // default whenever GLonD3D12 is unavailable or fails to load - the exact
@@ -1672,7 +1711,9 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
         wchar_t hudOff[8] = {};
         GetEnvironmentVariableW(L"MC_HUD", hudOff, ARRAYSIZE(hudOff));
         const std::wstring hudPreset = GetEnvVarString(L"GALLIUM_HUD");
-        if (hudPreset.empty() && std::wstring(hudOff) != L"0") {
+        if (gfxSafeMode) {
+            WriteLog(L"Mesa: GALLIUM_HUD skipped (gfx safe mode)");
+        } else if (hudPreset.empty() && std::wstring(hudOff) != L"0") {
             SetEnvironmentVariableW(L"GALLIUM_HUD", L"draw-calls");
             WriteLog(L"Mesa: GALLIUM_HUD=draw-calls (diagnostic overlay; disable with MC_HUD=0 or a GALLIUM_HUD preset)");
         } else if (!hudPreset.empty()) {
