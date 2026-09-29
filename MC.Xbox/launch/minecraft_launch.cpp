@@ -1425,6 +1425,21 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
         if (WriteTextFile(optiFinePath, ofRewritten)) {
             WriteLogF(L"OptiFine perf profile in optionsof.txt: RenderRegions=%s (%s) LazyChunkLoading=false SmoothFps=true FastMath=true (forced); Trees/Aa/Af/AoLevel seeded only if absent",
                 ofRenderRegionsValue.c_str(), ofRenderRegionsSource.c_str());
+            // Log the effective perf-relevant OptiFine values so every future
+            // mc_launch.log shows exactly which settings produced any fps data.
+            auto ofValue = [&ofRewritten](const wchar_t* key) -> std::wstring {
+                const std::wstring k(key);
+                const size_t p = ofRewritten.find(k);
+                if (p == std::wstring::npos) return L"absent";
+                const size_t start = p + k.size();
+                size_t stop = ofRewritten.find(L"\r\n", start);
+                if (stop == std::wstring::npos) stop = ofRewritten.size();
+                return ofRewritten.substr(start, stop - start);
+            };
+            WriteLogF(L"OptiFine effective: Trees=%s Aa=%s Af=%s Ao=%s FastRender=%s ChunkLoading=%s ChunkUpdates=%s MipmapType=%s",
+                ofValue(L"ofTrees:").c_str(), ofValue(L"ofAaLevel:").c_str(), ofValue(L"ofAfLevel:").c_str(),
+                ofValue(L"ofAoLevel:").c_str(), ofValue(L"ofFastRender:").c_str(), ofValue(L"ofChunkLoading:").c_str(),
+                ofValue(L"ofChunkUpdates:").c_str(), ofValue(L"ofMipmapType:").c_str());
         } else {
             WriteLogF(L"Failed to write %s err=%u", optiFinePath.c_str(), GetLastError());
         }
@@ -1648,6 +1663,21 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
         WriteLog(L"Mesa: GALLIUM_DRIVER=d3d12 (hardware path; software llvmpipe fallback disabled)");
     } else {
         WriteLogF(L"Mesa: GALLIUM_DRIVER preset to %s (honored)", GetEnvVarString(L"GALLIUM_DRIVER").c_str());
+    }
+    // Draw-call HUD: the decisive diagnostic for the draw-count model
+    // (is OptiFine Render Regions actually batching on this stack?).
+    // Only-if-absent (mesa_env.txt wins). Disable with MC_HUD=0 or by
+    // presetting GALLIUM_HUD (custom or empty) in mesa_env.txt.
+    {
+        wchar_t hudOff[8] = {};
+        GetEnvironmentVariableW(L"MC_HUD", hudOff, ARRAYSIZE(hudOff));
+        const std::wstring hudPreset = GetEnvVarString(L"GALLIUM_HUD");
+        if (hudPreset.empty() && std::wstring(hudOff) != L"0") {
+            SetEnvironmentVariableW(L"GALLIUM_HUD", L"draw-calls");
+            WriteLog(L"Mesa: GALLIUM_HUD=draw-calls (diagnostic overlay; disable with MC_HUD=0 or a GALLIUM_HUD preset)");
+        } else if (!hudPreset.empty()) {
+            WriteLogF(L"Mesa: GALLIUM_HUD preset to %s (honored)", hudPreset.c_str());
+        }
     }
     // Persist Mesa's shader cache on the writable drive so each launch does not
     // recompile every pipeline (first-frame hitches and PSO stalls otherwise).
