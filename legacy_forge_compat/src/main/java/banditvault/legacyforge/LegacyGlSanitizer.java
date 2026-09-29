@@ -7,7 +7,8 @@ import org.lwjgl.opengl.GL15;
 import org.lwjgl.opengl.GL32;
 
 /**
- * Turns Minecraft 1.12.2's GL_QUADS draws into native triangle draws.
+ * Turns Minecraft 1.12.2's GL_QUADS draws into native triangle draws and
+ * executes multi draws as minimal single-draw sequences.
  *
  * Root cause of the terrain fps ceiling (F3 data: identical ~170us cost per
  * visible chunk-section whether or not draw calls are batched): MC 1.12.2
@@ -24,26 +25,42 @@ import org.lwjgl.opengl.GL32;
  * per-frame index building occurs and the fallback never runs. Spec-
  * equivalent output; only the primitive presentation changes.
  *
- * Kill switch: MC_QUADS_AS_TRIANGLES=0 (read once at class init).
+ * Draw-call budget: this backend taxes every GL call, so a converted draw
+ * costs exactly ONE GL call - glDrawElementsBaseVertex - the same count as
+ * the glDrawArrays it replaces. The element buffer is created once and LEFT
+ * BOUND between draws (nothing else in vanilla 1.12/OptiFine touches
+ * GL_ELEMENT_ARRAY_BUFFER); MC_IBO_UNBIND=1 restores a per-draw unbind for
+ * mods that bind their own element buffers or use client-side
+ * glDrawElements. Adjacent glMultiDrawArrays ranges (same mode, contiguous
+ * vertices) are merged into single draws before submission.
+ *
+ * Kill switches (read once at class init): MC_QUADS_AS_TRIANGLES=0 (forward
+ * quads unchanged), MC_IBO_UNBIND=1 (safe element-buffer unbinding).
  */
 public final class LegacyGlSanitizer {
     private static final int GL_QUADS = 0x0007;
 
-    private static final boolean quadsEnabled = readEnabled();
+    private static final boolean quadsEnabled =
+        readEnv("MC_QUADS_AS_TRIANGLES", true);
+    private static final boolean unbindEachDraw =
+        readEnv("MC_IBO_UNBIND", false);
+
     private static int elementBufferId;
     private static IntBuffer pattern;
     private static int patternQuads;
     private static int uploadedQuads;
+    private static boolean iboBound;
+    private static boolean loggedFirstConversion;
 
     private LegacyGlSanitizer() {
     }
 
-    private static boolean readEnabled() {
+    private static boolean readEnv(String name, boolean defaultValue) {
         try {
-            String value = System.getenv("MC_QUADS_AS_TRIANGLES");
-            return value == null || !value.equals("0");
+            String value = System.getenv(name);
+            return value == null ? defaultValue : !value.equals("0");
         } catch (Throwable ignored) {
-            return true;
+            return defaultValue;
         }
     }
 
@@ -57,23 +74,19 @@ public final class LegacyGlSanitizer {
             return false;
         }
         try {
-            final int quads = count / 4;
-            ensurePattern(quads);
-            ensureElementBuffer(quads);
-            GL15.glBindBuffer(GL15.GL_ELEMENT_ARRAY_BUFFER, elementBufferId);
-            GL32.glDrawElementsBaseVertex(
-                GL11.GL_TRIANGLES, quads * 6, GL11.GL_UNSIGNED_INT, 0L, first);
-            // Leave the element binding clean for any later glDrawElements
-            // with client-side indices (future mods). Vanilla 1.12 draws
-            // arrays only, but a stale binding would silently break them.
-            GL15.glBindBuffer(GL15.GL_ELEMENT_ARRAY_BUFFER, 0);
+            drawQuadsAsTriangles(first, count);
             return true;
         } catch (Throwable ignored) {
             return false;
         }
     }
 
-    /** Executes a glMultiDrawArrays as validated single draws. */
+    /**
+     * Executes a glMultiDrawArrays as validated single draws. Adjacent
+     * ranges are merged first (same mode, contiguous vertices), so a packed
+     * OptiFine region becomes a handful of draws instead of one per chunk
+     * segment.
+     */
     public static void multiDrawAsSingles(int mode, IntBuffer first, IntBuffer count) {
         try {
             if (first == null || count == null) {
@@ -82,17 +95,61 @@ public final class LegacyGlSanitizer {
             final int firstBase = first.position();
             final int countBase = count.position();
             final int n = Math.min(first.remaining(), count.remaining());
-            for (int i = 0; i < n; i++) {
-                final int f = first.get(firstBase + i);
-                final int c = count.get(countBase + i);
-                if (f >= 0 && c > 0 && f <= Integer.MAX_VALUE - c) {
-                    if (!dispatchDrawArrays(mode, f, c)) {
-                        GL11.glDrawArrays(mode, f, c);
-                    }
+            int runStart = -1;
+            int runCount = 0;
+            for (int i = 0; i <= n; i++) {
+                int f = 0;
+                int c = 0;
+                boolean valid = false;
+                if (i < n) {
+                    f = first.get(firstBase + i);
+                    c = count.get(countBase + i);
+                    valid = f >= 0 && c > 0 && f <= Integer.MAX_VALUE - c;
                 }
+                if (valid && runStart >= 0 && f == runStart + runCount) {
+                    runCount += c;
+                    continue;
+                }
+                if (runStart >= 0) {
+                    drawOne(mode, runStart, runCount);
+                }
+                runStart = valid ? f : -1;
+                runCount = valid ? c : 0;
             }
         } catch (Throwable ignored) {
             // Never break rendering harder than the call we replace.
+        }
+    }
+
+    private static void drawOne(int mode, int first, int count) {
+        if (!dispatchDrawArrays(mode, first, count)) {
+            GL11.glDrawArrays(mode, first, count);
+        }
+    }
+
+    /**
+     * Exactly one GL call per converted draw: the element buffer is bound
+     * once (creation/upload) and left bound unless MC_IBO_UNBIND=1.
+     */
+    private static void drawQuadsAsTriangles(int first, int count) {
+        final int quads = count / 4;
+        ensurePattern(quads);
+        ensureElementBuffer(quads);
+        if (!iboBound) {
+            GL15.glBindBuffer(GL15.GL_ELEMENT_ARRAY_BUFFER, elementBufferId);
+            iboBound = true;
+        }
+        if (!loggedFirstConversion) {
+            loggedFirstConversion = true;
+            System.err.println(
+                "[BanditVault] quads -> triangles conversion active (first="
+                + first + " count=" + count + ")");
+        }
+        GL32.glDrawElementsBaseVertex(
+            GL11.GL_TRIANGLES, quads * 6, GL11.GL_UNSIGNED_INT, 0L, first);
+        if (unbindEachDraw) {
+            GL15.glBindBuffer(GL15.GL_ELEMENT_ARRAY_BUFFER, 0);
+            iboBound = false;
         }
     }
 
@@ -122,6 +179,8 @@ public final class LegacyGlSanitizer {
                 // Best effort; a leaked buffer is harmless.
             }
             elementBufferId = 0;
+            // Deleting the bound buffer resets the binding to zero.
+            iboBound = false;
         }
         uploadedQuads = 0;
     }
@@ -130,9 +189,11 @@ public final class LegacyGlSanitizer {
         if (elementBufferId == 0) {
             elementBufferId = GL15.glGenBuffers();
             uploadedQuads = 0;
+            iboBound = false;
         }
         if (uploadedQuads < quads) {
             GL15.glBindBuffer(GL15.GL_ELEMENT_ARRAY_BUFFER, elementBufferId);
+            iboBound = true;
             pattern.limit(quads * 6);
             pattern.position(0);
             GL15.glBufferData(
