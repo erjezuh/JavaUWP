@@ -95,7 +95,28 @@ public final class LegacyMultiDrawSanitizer
             // visitEnd() under the public name.
             final List<int[]> patched = new ArrayList<int[]>();
             ClassReader reader = new ClassReader(basicClass);
-            ClassWriter writer = new ClassWriter(reader, ClassWriter.COMPUTE_MAXS);
+            // Deliberately NOT ClassWriter(reader, ...): that constructor is
+            // the "mostly add" copy optimization, and per its javadoc the
+            // COMPUTE_* flags "do not affect methods that are copied as is" -
+            // combined with rename-aside and one hand-written frame it emitted
+            // a GL11 that ASM's own reader rejected (ArrayIndexOutOfBoundsException
+            // in readFrameType) while FML's DeobfuscationTransformer re-parsed
+            // it, killing the game with NoClassDefFoundError: GL11 at
+            // Display.create. COMPUTE_FRAMES rebuilds every stack map frame
+            // from the actual bytecode; the javadoc guarantees manual
+            // visitFrame calls are ignored, so no hand-written frame can
+            // corrupt the output again.
+            ClassWriter writer = new ClassWriter(
+                ClassWriter.COMPUTE_FRAMES | ClassWriter.COMPUTE_MAXS) {
+                @Override
+                protected String getCommonSuperClass(String type1, String type2) {
+                    // Never Class.forName while transforming: computing frames
+                    // for GL11 must not trigger loading GL11 (or anything) via
+                    // LaunchClassLoader mid-transform. java/lang/Object is a
+                    // correct - if coarse - common supertype.
+                    return "java/lang/Object";
+                }
+            };
 
             reader.accept(new ClassVisitor(Opcodes.ASM5, writer) {
                 @Override
@@ -134,12 +155,14 @@ public final class LegacyMultiDrawSanitizer
                     "[BanditVault] GL11/GL14 seen but draw entry points not found; leaving unchanged.");
                 return basicClass;
             }
+            byte[] output = writer.toByteArray();
             System.err.println(
                 "[BanditVault] Draw path installed: quads -> native triangles, multi-draw -> crash-free loop.");
-            return writer.toByteArray();
-        } catch (Throwable ignored) {
+            return output;
+        } catch (Throwable failed) {
             System.err.println(
-                "[BanditVault] GL draw-path transform failed: " + ignored);
+                "[BanditVault] GL draw-path transform failed: " + failed);
+            failed.printStackTrace();
             return basicClass;
         }
     }
@@ -158,9 +181,9 @@ public final class LegacyMultiDrawSanitizer
             mv.visitJumpInsn(Opcodes.IFEQ, skip);
             mv.visitInsn(Opcodes.RETURN);
             mv.visitLabel(skip);
-            // Explicit frame at the branch target (COMPUTE_MAXS fills maxs,
-            // not frames); locals unchanged from method entry.
-            mv.visitFrame(Opcodes.F_SAME, 0, null, 0, null);
+            // No manual visitFrame here on purpose: COMPUTE_FRAMES derives the
+            // branch-target frame (locals int,int,int / empty stack) from the
+            // bytecode itself.
             // GL11.bandit$glDrawArraysBody(mode, first, count);
             mv.visitVarInsn(Opcodes.ILOAD, 0);
             mv.visitVarInsn(Opcodes.ILOAD, 1);

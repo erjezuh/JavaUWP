@@ -63,6 +63,10 @@ public final class LegacyGlSanitizer {
             GL15.glBindBuffer(GL15.GL_ELEMENT_ARRAY_BUFFER, elementBufferId);
             GL32.glDrawElementsBaseVertex(
                 GL11.GL_TRIANGLES, quads * 6, GL11.GL_UNSIGNED_INT, 0L, first);
+            // Leave the element binding clean for any later glDrawElements
+            // with client-side indices (future mods). Vanilla 1.12 draws
+            // arrays only, but a stale binding would silently break them.
+            GL15.glBindBuffer(GL15.GL_ELEMENT_ARRAY_BUFFER, 0);
             return true;
         } catch (Throwable ignored) {
             return false;
@@ -96,10 +100,8 @@ public final class LegacyGlSanitizer {
         if (pattern != null && patternQuads >= quads) {
             return;
         }
-        int capacity = Math.max(quads, 4096);
-        while (capacity < quads) {
-            capacity *= 2;
-        }
+        // 1.5x headroom so pattern growth is amortized; no doubling overflow.
+        int capacity = Math.max(quads + quads / 2, 4096);
         final IntBuffer grown = IntBuffer.allocate(capacity * 6);
         for (int q = 0; q < capacity; q++) {
             final int v = q * 4;
