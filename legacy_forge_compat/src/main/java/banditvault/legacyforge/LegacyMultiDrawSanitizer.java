@@ -6,6 +6,7 @@ import java.util.List;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.ClassVisitor;
 import org.objectweb.asm.ClassWriter;
+import org.objectweb.asm.Label;
 import org.objectweb.asm.MethodVisitor;
 import org.objectweb.asm.Opcodes;
 
@@ -153,7 +154,7 @@ public final class LegacyMultiDrawSanitizer
             mv.visitMethodInsn(
                 Opcodes.INVOKESTATIC, HELPER, "dispatchDrawArrays",
                 "(III)Z", false);
-            org.objectweb.Label skip = new org.objectweb.Label();
+            Label skip = new Label();
             mv.visitJumpInsn(Opcodes.IFEQ, skip);
             mv.visitInsn(Opcodes.RETURN);
             mv.visitLabel(skip);
