@@ -60,7 +60,7 @@ public final class LegacyGlSanitizer {
             final int quads = count / 4;
             ensurePattern(quads);
             ensureElementBuffer(quads);
-            GL11.glBindBuffer(GL15.GL_ELEMENT_ARRAY_BUFFER, elementBufferId);
+            GL15.glBindBuffer(GL15.GL_ELEMENT_ARRAY_BUFFER, elementBufferId);
             GL32.glDrawElementsBaseVertex(
                 GL11.GL_TRIANGLES, quads * 6, GL11.GL_UNSIGNED_INT, 0L, first);
             return true;
@@ -130,7 +130,7 @@ public final class LegacyGlSanitizer {
             uploadedQuads = 0;
         }
         if (uploadedQuads < quads) {
-            GL11.glBindBuffer(GL15.GL_ELEMENT_ARRAY_BUFFER, elementBufferId);
+            GL15.glBindBuffer(GL15.GL_ELEMENT_ARRAY_BUFFER, elementBufferId);
             pattern.limit(quads * 6);
             pattern.position(0);
             GL15.glBufferData(
