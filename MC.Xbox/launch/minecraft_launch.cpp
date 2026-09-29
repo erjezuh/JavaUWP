@@ -1368,16 +1368,30 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
         // Root cause of the terrain fps ceiling is per-call cost through the
         // Mesa->D3D12 translation (~6us per GL call; MC 1.12.2 emits thousands
         // of per-chunk-layer draws per frame). Fix = fewer calls, NOT lower
-        // visual quality. So:
-        //   FORCED every launch (invisible batching/pacing, no visual cost):
-        //     ofRenderRegions:true  merges chunk geometry into region VBOs
-        //                           (the structural draw-call reducer)
-        //     ofSmoothFps:true, ofFastMath:true
-        //   Seeded ONLY when absent (user visual choices always win):
-        //     ofTrees:0, ofAaLevel:0, ofAfLevel:0, ofAoLevel:0.0
+        // visual quality. BUT chunk-loading correctness comes first:
+        //   ofLazyChunkLoading:false  FORCED - documented cause of "chunks
+        //                         not loading until you look at them"
+        //   ofRenderRegions:true  FORCED as a trial - the structural draw
+        //                         reducer (16 chunks -> 1 VBO per layer).
+        //                         Known OptiFine 1.12.2 issue #3438 (rare
+        //                         invisible-chunk bug). KILL SWITCH without
+        //                         rebuild: add MC_RENDER_REGIONS=0 to
+        //                         mesa_env.txt (or =1 to force-enable).
+        //   ofSmoothFps:true, ofFastMath:true  FORCED (no visual cost)
+        //   ofTrees:0, ofAaLevel:0, ofAfLevel:0, ofAoLevel:0.0
+        //                         seeded ONLY when absent (user choices win)
         const std::wstring optiFinePath = gameDir + L"\\optionsof.txt";
         std::wstring optiFineText;
         ReadTextFile(optiFinePath, optiFineText);
+        wchar_t rrEnv[8] = {};
+        const DWORD rrLen = GetEnvironmentVariableW(L"MC_RENDER_REGIONS", rrEnv, ARRAYSIZE(rrEnv));
+        std::wstring ofRenderRegionsValue = L"true";
+        std::wstring ofRenderRegionsSource = L"trial-default";
+        if (rrLen > 0 && rrLen < ARRAYSIZE(rrEnv)) {
+            const std::wstring rr(rrEnv);
+            if (rr == L"0") { ofRenderRegionsValue = L"false"; ofRenderRegionsSource = L"MC_RENDER_REGIONS=0"; }
+            else if (rr == L"1") { ofRenderRegionsValue = L"true"; ofRenderRegionsSource = L"MC_RENDER_REGIONS=1"; }
+        }
         std::wstring ofRewritten;
         size_t ofPos = 0;
         while (ofPos < optiFineText.size()) {
@@ -1386,6 +1400,7 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
             const std::wstring line = TrimWhitespace(optiFineText.substr(ofPos, end - ofPos));
             ofPos = end + 1;
             if (line.rfind(L"ofRenderRegions:", 0) == 0 ||
+                line.rfind(L"ofLazyChunkLoading:", 0) == 0 ||
                 line.rfind(L"ofSmoothFps:", 0) == 0 ||
                 line.rfind(L"ofFastMath:", 0) == 0) {
                 continue;
@@ -1399,7 +1414,8 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
         const bool hasAa = optiFineText.find(L"ofAaLevel:") != std::wstring::npos;
         const bool hasAf = optiFineText.find(L"ofAfLevel:") != std::wstring::npos;
         const bool hasAoLevel = optiFineText.find(L"ofAoLevel:") != std::wstring::npos;
-        ofRewritten += L"ofRenderRegions:true\r\n";
+        ofRewritten += L"ofRenderRegions:" + ofRenderRegionsValue + L"\r\n";
+        ofRewritten += L"ofLazyChunkLoading:false\r\n";
         ofRewritten += L"ofSmoothFps:true\r\n";
         ofRewritten += L"ofFastMath:true\r\n";
         if (!hasTrees) ofRewritten += L"ofTrees:0\r\n";
@@ -1407,7 +1423,8 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
         if (!hasAf) ofRewritten += L"ofAfLevel:0\r\n";
         if (!hasAoLevel) ofRewritten += L"ofAoLevel:0.0\r\n";
         if (WriteTextFile(optiFinePath, ofRewritten)) {
-            WriteLog(L"OptiFine perf profile in optionsof.txt: RenderRegions=true SmoothFps=true FastMath=true (forced); Trees/Aa/Af/AoLevel seeded only if absent (user choices preserved)");
+            WriteLogF(L"OptiFine perf profile in optionsof.txt: RenderRegions=%s (%s) LazyChunkLoading=false SmoothFps=true FastMath=true (forced); Trees/Aa/Af/AoLevel seeded only if absent",
+                ofRenderRegionsValue.c_str(), ofRenderRegionsSource.c_str());
         } else {
             WriteLogF(L"Failed to write %s err=%u", optiFinePath.c_str(), GetLastError());
         }
