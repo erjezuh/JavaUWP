@@ -746,8 +746,8 @@ void LogHsErrExcerpt(const std::string& text) {
         lines.push_back(current);
     }
 
-    constexpr size_t kHeaderLines = 32;
-    constexpr size_t kMaxLines = 128;
+    constexpr size_t kHeaderLines = 48;
+    constexpr size_t kMaxLines = 160;
     size_t logged = 0;
 
     // Header covers the exception code, problematic frame, current thread and siginfo.
@@ -781,12 +781,25 @@ void LogHsErrExcerpt(const std::string& text) {
     for (size_t i = nativeAt + 1; i < lines.size() && i < nativeAt + 400; ++i) {
         const size_t start = lines[i].find_first_not_of(" \t");
         if (start == std::string::npos) continue;
-        if (lines[i].compare(start, 11, "Java frames:") == 0) {
+        if (lines[i].compare(start, 11, "Java frames:") == 0 ||
+            lines[i].find("J A V A") != std::string::npos) {
             javaAt = i;
             break;
         }
     }
-    if (javaAt == std::string::npos) return;
+    if (javaAt == std::string::npos) {
+        // Broken unwinder (typical on wild native writes): the section header
+        // can be missing entirely. Dump whatever follows the native frames so
+        // the call site still travels inside mc_launch.log.
+        size_t after = nativeAt + 1;
+        while (after < lines.size() && !lines[after].empty()) ++after;
+        WriteLog(L"hs_err | ... (post-native fallback, Java frames header missing)");
+        for (size_t i = after; i < lines.size() && i < after + 24 && logged < kMaxLines; ++i) {
+            WriteLogF(L"hs_err | %s", a2w(lines[i].c_str()).c_str());
+            ++logged;
+        }
+        return;
+    }
 
     WriteLog(L"hs_err | ... (Java frames section)");
     for (size_t i = javaAt; i < lines.size() && logged < kMaxLines; ++i) {
