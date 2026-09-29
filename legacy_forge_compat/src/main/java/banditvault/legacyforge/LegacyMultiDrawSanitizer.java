@@ -1,5 +1,8 @@
 package banditvault.legacyforge;
 
+import java.util.ArrayList;
+import java.util.List;
+
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.ClassVisitor;
 import org.objectweb.asm.ClassWriter;
@@ -7,19 +10,22 @@ import org.objectweb.asm.MethodVisitor;
 import org.objectweb.asm.Opcodes;
 
 /**
- * Installs the {@link LegacyGlSanitizer} check at the entry of
- * {@code org.lwjgl.opengl.GL14.glMultiDrawArrays(int, IntBuffer, IntBuffer)}.
+ * Replaces {@code org.lwjgl.opengl.GL14.glMultiDrawArrays(int, IntBuffer,
+ * IntBuffer)} with an equivalent loop of {@code glDrawArrays} calls.
  *
- * Why GL14 and not OptiFine's classes: LWJGL's API signature is fixed and
- * public (no obfuscation guessing), the org.lwjgl exclusion has already been
- * removed from LaunchClassLoader for this target (see LegacyForgeCorePlugin),
- * and this single choke point covers every caller - OptiFine's VboRegion,
- * future mods, everything.
+ * Why a full body replacement and not parameter sanitizing: two access
+ * violations inside Mesa's multi-draw path (hs_err confirmed on this device)
+ * survived range validation - the call itself is the crash surface. The GL
+ * spec defines glMultiDrawArrays as equivalent to the sequence of
+ * glDrawArrays calls with shared state, so the replacement renders
+ * identically while only ever entering Mesa through the crash-free
+ * single-draw path. OptiFine's Render Regions keeps its buffer merging
+ * (one VBO bind per region per layer); only the draw submission loops.
  *
- * The insertion is a balanced INVOKESTATIC at method entry: no branches are
- * added, so existing stack map frames stay valid. If the expected method is
- * absent (different LWJGL build) the class is returned unchanged and the
- * transform is a no-op by construction.
+ * The original body is renamed aside (never called) and a tiny replacement is
+ * emitted under the public name - the same rename-aside pattern used by
+ * LegacyWorldRenderGuard. Exact public LWJGL signature, so no obfuscation
+ * guessing; if the method is absent the class is returned unchanged.
  */
 public final class LegacyMultiDrawSanitizer
     implements net.minecraft.launchwrapper.IClassTransformer {
@@ -29,9 +35,10 @@ public final class LegacyMultiDrawSanitizer
     private static final String MULTI_DRAW = "glMultiDrawArrays";
     private static final String MULTI_DRAW_DESC =
         "(ILjava/nio/IntBuffer;Ljava/nio/IntBuffer;)V";
-    private static final String SANITIZER = "banditvault/legacyforge/LegacyGlSanitizer";
-    private static final String SANITIZER_DESC =
-        "(Ljava/nio/IntBuffer;Ljava/nio/IntBuffer;)V";
+    private static final String RENAMED = "bandit$multiDrawArraysBody";
+    private static final String HELPER = "banditvault/legacyforge/LegacyGlSanitizer";
+    private static final String HELPER_DESC =
+        "(ILjava/nio/IntBuffer;Ljava/nio/IntBuffer;)V";
 
     private static boolean matchesClass(String value) {
         return GL14.equals(value) || GL14_DOTTED.equals(value);
@@ -47,49 +54,63 @@ public final class LegacyMultiDrawSanitizer
         }
 
         try {
-            final boolean[] patched = {false};
+            // Captures {access} of the renamed method; the replacement is
+            // emitted in visitEnd().
+            final List<int[]> patchedMeta = new ArrayList<int[]>();
             ClassReader reader = new ClassReader(basicClass);
             ClassWriter writer = new ClassWriter(reader, ClassWriter.COMPUTE_MAXS);
+
             reader.accept(new ClassVisitor(Opcodes.ASM5, writer) {
                 @Override
                 public MethodVisitor visitMethod(
                     int access, String methodName, String descriptor,
                     String signature, String[] exceptions) {
 
-                    MethodVisitor mv = super.visitMethod(
-                        access, methodName, descriptor, signature, exceptions);
-                    if (mv == null
-                        || !MULTI_DRAW.equals(methodName)
+                    if (!MULTI_DRAW.equals(methodName)
                         || !MULTI_DRAW_DESC.equals(descriptor)) {
-                        return mv;
+                        return super.visitMethod(
+                            access, methodName, descriptor, signature, exceptions);
                     }
-                    patched[0] = true;
-                    return new MethodVisitor(Opcodes.ASM5, mv) {
-                        @Override
-                        public void visitCode() {
-                            super.visitCode();
-                            // LegacyGlSanitizer.sanitizeMultiDrawRanges(first, count);
-                            super.visitVarInsn(Opcodes.ALOAD, 1);
-                            super.visitVarInsn(Opcodes.ALOAD, 2);
-                            super.visitMethodInsn(
-                                Opcodes.INVOKESTATIC, SANITIZER,
-                                "sanitizeMultiDrawRanges", SANITIZER_DESC, false);
-                        }
-                    };
+                    patchedMeta.add(new int[] {access});
+                    // Rename the original body aside; the replacement emitted
+                    // in visitEnd() takes over the public name.
+                    return super.visitMethod(
+                        access, RENAMED, descriptor, signature, exceptions);
+                }
+
+                @Override
+                public void visitEnd() {
+                    if (!patchedMeta.isEmpty()) {
+                        final int access = patchedMeta.get(0)[0];
+                        MethodVisitor mv = super.visitMethod(
+                            access, MULTI_DRAW, MULTI_DRAW_DESC, null, null);
+                        mv.visitCode();
+                        // LegacyGlSanitizer.multiDrawAsSingles(mode, first, count);
+                        mv.visitVarInsn(Opcodes.ILOAD, 0);
+                        mv.visitVarInsn(Opcodes.ALOAD, 1);
+                        mv.visitVarInsn(Opcodes.ALOAD, 2);
+                        mv.visitMethodInsn(
+                            Opcodes.INVOKESTATIC, HELPER,
+                            "multiDrawAsSingles", HELPER_DESC, false);
+                        mv.visitInsn(Opcodes.RETURN);
+                        mv.visitMaxs(0, 0);
+                        mv.visitEnd();
+                    }
+                    super.visitEnd();
                 }
             }, 0);
 
-            if (!patched[0]) {
+            if (patchedMeta.isEmpty()) {
                 System.err.println(
                     "[BanditVault] GL14 seen but glMultiDrawArrays(IntBuffer,IntBuffer) not found; leaving unchanged.");
                 return basicClass;
             }
             System.err.println(
-                "[BanditVault] glMultiDrawArrays range sanitizer installed in GL14.");
+                "[BanditVault] glMultiDrawArrays replaced with crash-free glDrawArrays loop.");
             return writer.toByteArray();
         } catch (Throwable ignored) {
             System.err.println(
-                "[BanditVault] GL14 multi-draw sanitizer transform failed: " + ignored);
+                "[BanditVault] GL14 multi-draw replacement transform failed: " + ignored);
             return basicClass;
         }
     }
