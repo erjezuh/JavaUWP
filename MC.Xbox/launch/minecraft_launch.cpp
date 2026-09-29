@@ -1371,13 +1371,11 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
         // visual quality. BUT chunk-loading correctness comes first:
         //   ofLazyChunkLoading:false  FORCED - documented cause of "chunks
         //                         not loading until you look at them"
-        //   ofRenderRegions       OFF BY DEFAULT - crash fix. OptiFine's
-        //                         VboRegion.finishDraw feeds corrupt ranges to
-        //                         glMultiDrawArrays and Mesa crashes with an
-        //                         access violation in libgallium (hs_err
-        //                         confirmed; documented OptiFine bug class).
-        //                         Experimental opt-in: MC_RENDER_REGIONS=1 in
-        //                         mesa_env.txt (known crash risk).
+        //   ofRenderRegions:true  FORCED (sanitized) - the structural draw
+        //                         merger; the main fps correction. Crash-safe
+        //                         via the LegacyGlSanitizer range validator.
+        //                         Kill switch: MC_RENDER_REGIONS=0 in
+        //                         mesa_env.txt.
         //   ofSmoothFps:true, ofFastMath:true  FORCED (no visual cost)
         //   ofTrees:0, ofAaLevel:0, ofAfLevel:0, ofAoLevel:0.0
         //                         seeded ONLY when absent (user choices win)
@@ -1386,20 +1384,19 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
         ReadTextFile(optiFinePath, optiFineText);
         wchar_t rrEnv[8] = {};
         const DWORD rrLen = GetEnvironmentVariableW(L"MC_RENDER_REGIONS", rrEnv, ARRAYSIZE(rrEnv));
-        // Render Regions DISABLED by default: OptiFine's VboRegion.finishDraw()
-        // calls glMultiDrawArrays with corrupt first/count ranges (documented
-        // OptiFine bug class, issues #2779/#7757 and the Ars Nouveau report)
-        // and Mesa dereferences a null object -> EXCEPTION_ACCESS_VIOLATION in
-        // libgallium (hs_err: GL14.nglMultiDrawArrays <- VboRegion.finishDraw).
-        // The vanilla draw path (per-chunk glDrawArrays) is immune. Opt in with
-        // MC_RENDER_REGIONS=1 (experimental; known crash risk until the ranges
-        // are sanitized or OptiFine fixes VboRegion).
-        std::wstring ofRenderRegionsValue = L"false";
-        std::wstring ofRenderRegionsSource = L"default-off (VboRegion/glMultiDrawArrays crash)";
+        // Render Regions: the draw merger (16 chunks -> 1 VBO per layer, one
+        // glMultiDrawArrays per region) is THE correction for the terrain fps
+        // ceiling (cost is proportional to GL call volume through the
+        // Mesa->D3D12 translation). The crash it had is handled by the
+        // LegacyGlSanitizer range validator installed at GL14.glMultiDrawArrays.
+        // Default ON; MC_RENDER_REGIONS=0 in mesa_env.txt disables it instantly
+        // if anything looks wrong (chunks invisible, new crash).
+        std::wstring ofRenderRegionsValue = L"true";
+        std::wstring ofRenderRegionsSource = L"sanitized-default";
         if (rrLen > 0 && rrLen < ARRAYSIZE(rrEnv)) {
             const std::wstring rr(rrEnv);
             if (rr == L"0") { ofRenderRegionsValue = L"false"; ofRenderRegionsSource = L"MC_RENDER_REGIONS=0"; }
-            else if (rr == L"1") { ofRenderRegionsValue = L"true"; ofRenderRegionsSource = L"MC_RENDER_REGIONS=1 (user opt-in, known crash risk)"; }
+            else if (rr == L"1") { ofRenderRegionsValue = L"true"; ofRenderRegionsSource = L"MC_RENDER_REGIONS=1"; }
         }
         std::wstring ofRewritten;
         size_t ofPos = 0;
