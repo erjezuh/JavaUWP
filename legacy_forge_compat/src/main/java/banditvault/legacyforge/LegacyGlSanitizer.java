@@ -59,6 +59,9 @@ public final class LegacyGlSanitizer {
     private static int uploadedQuads;
     private static boolean iboBound;
     private static boolean loggedFirstConversion;
+    private static boolean failureLogged;
+    private static int dispatchTraceLeft = 16;
+    private static boolean multiTraceDone;
 
     private LegacyGlSanitizer() {
     }
@@ -78,15 +81,31 @@ public final class LegacyGlSanitizer {
      * original glDrawArrays (non-quad modes, disabled, or any failure).
      */
     public static boolean dispatchDrawArrays(int mode, int first, int count) {
-        if (!quadsEnabled || mode != GL_QUADS || count < 4) {
-            return false;
+        boolean handled = false;
+        Throwable failure = null;
+        if (quadsEnabled && mode == GL_QUADS && count >= 4) {
+            try {
+                drawQuadsAsTriangles(first, count);
+                handled = true;
+            } catch (Throwable failed) {
+                failure = failed;
+            }
         }
-        try {
-            drawQuadsAsTriangles(first, count);
-            return true;
-        } catch (Throwable ignored) {
-            return false;
+        if (dispatchTraceLeft > 0) {
+            dispatchTraceLeft--;
+            System.err.println(
+                "[BanditVault] draw dispatch: mode=" + mode + " first=" + first
+                + " count=" + count + " -> "
+                + (handled ? "triangles" : "forwarded")
+                + (failure != null ? " (" + failure + ")" : ""));
         }
+        if (failure != null && !failureLogged) {
+            failureLogged = true;
+            System.err.println(
+                "[BanditVault] quads conversion failed, forwarding to original:");
+            failure.printStackTrace();
+        }
+        return handled;
     }
 
     /**
@@ -103,6 +122,13 @@ public final class LegacyGlSanitizer {
             final int firstBase = first.position();
             final int countBase = count.position();
             final int n = Math.min(first.remaining(), count.remaining());
+            if (!multiTraceDone) {
+                multiTraceDone = true;
+                System.err.println(
+                    "[BanditVault] multi-draw seen: ranges=" + n
+                    + " first0=" + (n > 0 ? first.get(firstBase) : -1)
+                    + " count0=" + (n > 0 ? count.get(countBase) : -1));
+            }
             int runStart = -1;
             int runCount = 0;
             for (int i = 0; i <= n; i++) {
