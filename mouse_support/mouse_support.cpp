@@ -502,6 +502,32 @@ MOUSE_SUPPORT_API void MouseSupport_UpdateOverlay(double menuCursorX, double men
         reinterpret_cast<const sockaddr*>(&addr), sizeof(addr));
 }
 
+MOUSE_SUPPORT_API void MouseSupport_SubmitHostPointer(
+    double dipX, double dipY, double dipWidth, double dipHeight,
+    int left, int right, int middle, int x1, int x2, double wheel) {
+    // Native CoreWindow pointer input from the launcher host (USB mouse /
+    // system pointer). Coordinates arrive in window DIPs; consumers work in
+    // the host's render/window pixel space (same space SetHostState uses), so
+    // scale by the last reported host size when the DIP bounds are known.
+    const long long tMicros = NowMicros();
+    AcquireSRWLockExclusive(&g_lock);
+    double scaleX = 1.0;
+    double scaleY = 1.0;
+    if (dipWidth > 1.0 && dipHeight > 1.0 &&
+        g_host.windowWidth > 0 && g_host.windowHeight > 0) {
+        scaleX = (double)g_host.windowWidth / dipWidth;
+        scaleY = (double)g_host.windowHeight / dipHeight;
+    }
+    g_mailbox.submitAbsolute(tMicros, dipX * scaleX, dipY * scaleY, true, wheel);
+    g_mailbox.submitButtonValue(1, left);
+    g_mailbox.submitButtonValue(2, right);
+    g_mailbox.submitButtonValue(4, middle);
+    g_mailbox.submitButtonValue(8, x1);
+    g_mailbox.submitButtonValue(16, x2);
+    ReleaseSRWLockExclusive(&g_lock);
+    InterlockedExchange(&g_lastActivityTick, (LONG)GetTickCount());
+}
+
 MOUSE_SUPPORT_API unsigned int MouseSupport_LastActivityTickMs(void) {
     return (unsigned int)InterlockedCompareExchange(&g_lastActivityTick, 0, 0);
 }

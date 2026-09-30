@@ -31,6 +31,9 @@ public final class LegacyForgeCorePlugin implements IFMLLoadingPlugin {
 
     @Override
     public void injectData(Map<String, Object> data) {
+        // First HTTPS request happens well after coremod setup; repair the
+        // trust store now so skins and session lookups can authenticate.
+        LegacySslFixer.ensure();
         removeLwjglClassLoaderExclusion();
     }
 

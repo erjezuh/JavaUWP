@@ -32,6 +32,12 @@ HttpResult HttpPostStringTimed(
 HttpResult HttpGetBearer(const wchar_t* url, const std::string& token);
 HttpResult HttpGetString(const wchar_t* url);
 
+// GET with one custom header (CurseForge Core API needs x-api-key)
+HttpResult HttpGetStringHeader(
+    const wchar_t* url,
+    const wchar_t* headerName,
+    const std::wstring& headerValue);
+
 // returns the response etag and an empty body for status 304
 HttpResult HttpGetConditionalTimed(
     const wchar_t* url,

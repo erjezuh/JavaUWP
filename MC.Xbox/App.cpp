@@ -16,6 +16,7 @@
 #include <windows.applicationmodel.core.h>
 #include <windows.applicationmodel.h>
 #include <windows.ui.core.h>
+#include <windows.ui.input.h>
 #include <windows.foundation.h>
 
 #include <winrt/base.h>
@@ -65,6 +66,21 @@ using CoreWindowActivatedHandler = ABI::Windows::Foundation::__FITypedEventHandl
 static ComPtr<CoreWindowClosedHandler> g_coreWindowClosedHandler;
 static ComPtr<CoreWindowVisibilityHandler> g_coreWindowVisibilityHandler;
 static ComPtr<CoreWindowActivatedHandler> g_coreWindowActivatedHandler;
+
+// Native USB/system pointer input for launcher UI navigation. The game-side
+// shim reads these events itself; without these handlers the launcher only
+// ever saw the UDP mouse relay and a real mouse could not click the menus.
+using CoreWindowPointerHandler = ABI::Windows::Foundation::__FITypedEventHandler_2_Windows__CUI__CCore__CCoreWindow_Windows__CUI__CCore__CPointerEventArgs_t;
+using CoreWindowWheelHandler = ABI::Windows::Foundation::__FITypedEventHandler_2_Windows__CUI__CCore__CCoreWindow_Windows__CUI__CCore__CMouseWheelChangedEventArgs_t;
+static ComPtr<CoreWindowPointerHandler> g_coreWindowPointerMovedHandler;
+static ComPtr<CoreWindowPointerHandler> g_coreWindowPointerPressedHandler;
+static ComPtr<CoreWindowPointerHandler> g_coreWindowPointerReleasedHandler;
+static ComPtr<CoreWindowWheelHandler> g_coreWindowPointerWheelHandler;
+static EventRegistrationToken g_pointerMovedToken;
+static EventRegistrationToken g_pointerPressedToken;
+static EventRegistrationToken g_pointerReleasedToken;
+static EventRegistrationToken g_pointerWheelToken;
+static bool g_coreWindowPointerHooksInstalled = false;
 static EventRegistrationToken g_coreWindowClosedToken = {};
 static EventRegistrationToken g_coreWindowVisibilityToken = {};
 static EventRegistrationToken g_coreWindowActivatedToken = {};
@@ -164,6 +180,108 @@ static void RegisterLifecycleHandlers(ICoreApplication* coreApp) {
     if (FAILED(hr)) {
         WriteLogF(L"CoreApplication add_LeavingBackground failed hr=0x%08X", hr);
     }
+}
+
+typedef void (*MouseSupportSubmitPointerFn)(
+    double, double, double, double, int, int, int, int, int, double);
+
+static void SubmitHostPointerState(IPointerEventArgs* args, bool wheelEvent) {
+    if (!args) return;
+
+    static MouseSupportSubmitPointerFn submit = nullptr;
+    static bool lookupDone = false;
+    if (!lookupDone) {
+        lookupDone = true;
+        HMODULE module = LoadPackagedLibrary(L"mouse_support.dll", 0);
+        if (module) {
+            submit = reinterpret_cast<MouseSupportSubmitPointerFn>(
+                GetProcAddress(module, "MouseSupport_SubmitHostPointer"));
+        }
+        WriteLogF(L"MouseSupport_SubmitHostPointer %s",
+            submit ? L"resolved" : L"missing");
+    }
+    if (!submit) return;
+
+    ComPtr<ABI::Windows::UI::Input::IPointerPoint> point;
+    if (FAILED(args->get_CurrentPoint(point.GetAddressOf())) || !point) return;
+
+    Point position = {};
+    if (FAILED(point->get_Position(&position))) return;
+
+    double dipWidth = 0.0;
+    double dipHeight = 0.0;
+    if (g_authWindow) {
+        Rect bounds = {};
+        if (SUCCEEDED(g_authWindow->get_Bounds(&bounds))) {
+            dipWidth = bounds.Width;
+            dipHeight = bounds.Height;
+        }
+    }
+
+    int left = 0, right = 0, middle = 0, x1 = 0, x2 = 0;
+    double wheel = 0.0;
+    ComPtr<ABI::Windows::UI::Input::IPointerPointProperties> props;
+    if (SUCCEEDED(point->get_Properties(props.GetAddressOf())) && props) {
+        boolean down = 0;
+        if (SUCCEEDED(props->get_IsLeftButtonPressed(&down))) left = down ? 1 : 0;
+        down = 0;
+        if (SUCCEEDED(props->get_IsRightButtonPressed(&down))) right = down ? 1 : 0;
+        down = 0;
+        if (SUCCEEDED(props->get_IsMiddleButtonPressed(&down))) middle = down ? 1 : 0;
+        down = 0;
+        if (SUCCEEDED(props->get_IsXButton1Pressed(&down))) x1 = down ? 1 : 0;
+        down = 0;
+        if (SUCCEEDED(props->get_IsXButton2Pressed(&down))) x2 = down ? 1 : 0;
+        if (wheelEvent) {
+            INT32 delta = 0;
+            if (SUCCEEDED(props->get_MouseWheelDelta(&delta)) && delta != 0) {
+                wheel = (double)delta / 120.0;
+            }
+        }
+    }
+
+    submit(position.X, position.Y, dipWidth, dipHeight,
+        left, right, middle, x1, x2, wheel);
+}
+
+static void RegisterCoreWindowPointerHandlers(ICoreWindow* window) {
+    if (!window || g_coreWindowPointerHooksInstalled) return;
+
+    g_coreWindowPointerMovedHandler = Callback<CoreWindowPointerHandler>(
+        [](ICoreWindow*, IPointerEventArgs* args) -> HRESULT {
+            SubmitHostPointerState(args, false);
+            return S_OK;
+        });
+
+    g_coreWindowPointerPressedHandler = Callback<CoreWindowPointerHandler>(
+        [](ICoreWindow*, IPointerEventArgs* args) -> HRESULT {
+            SubmitHostPointerState(args, false);
+            return S_OK;
+        });
+
+    g_coreWindowPointerReleasedHandler = Callback<CoreWindowPointerHandler>(
+        [](ICoreWindow*, IPointerEventArgs* args) -> HRESULT {
+            SubmitHostPointerState(args, false);
+            return S_OK;
+        });
+
+    g_coreWindowPointerWheelHandler = Callback<CoreWindowWheelHandler>(
+        [](ICoreWindow*, IMouseWheelChangedEventArgs* args) -> HRESULT {
+            SubmitHostPointerState(args, true);
+            return S_OK;
+        });
+
+    HRESULT hr = window->add_PointerMoved(g_coreWindowPointerMovedHandler.Get(), &g_pointerMovedToken);
+    if (FAILED(hr)) WriteLogF(L"CoreWindow add_PointerMoved failed hr=0x%08X", hr);
+    hr = window->add_PointerPressed(g_coreWindowPointerPressedHandler.Get(), &g_pointerPressedToken);
+    if (FAILED(hr)) WriteLogF(L"CoreWindow add_PointerPressed failed hr=0x%08X", hr);
+    hr = window->add_PointerReleased(g_coreWindowPointerReleasedHandler.Get(), &g_pointerReleasedToken);
+    if (FAILED(hr)) WriteLogF(L"CoreWindow add_PointerReleased failed hr=0x%08X", hr);
+    hr = window->add_MouseWheelChanged(g_coreWindowPointerWheelHandler.Get(), &g_pointerWheelToken);
+    if (FAILED(hr)) WriteLogF(L"CoreWindow add_MouseWheelChanged failed hr=0x%08X", hr);
+
+    g_coreWindowPointerHooksInstalled = true;
+    WriteLog(L"CoreWindow pointer handlers installed (native mouse for launcher UI)");
 }
 
 static void RegisterCoreWindowLifecycleHandlers(ICoreWindow* window) {
@@ -411,6 +529,7 @@ public:
             WriteLogF(L"SetWindow: failed to query ICoreWindowInterop hr=0x%08X", g_windowInteropHr);
         }
         RegisterCoreWindowLifecycleHandlers(window);
+        RegisterCoreWindowPointerHandlers(window);
         PublishCoreWindowProperty(window);
         HRESULT activateHr = window->Activate();
         if (FAILED(activateHr)) {

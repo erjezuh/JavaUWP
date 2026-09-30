@@ -254,6 +254,33 @@ HttpResult HttpGetString(const wchar_t* url) {
 }
 
 
+HttpResult HttpGetStringHeader(
+    const wchar_t* url,
+    const wchar_t* headerName,
+    const std::wstring& headerValue) {
+    HttpResult result;
+    try {
+        using namespace winrt::Windows::Foundation;
+        using namespace winrt::Windows::Web::Http;
+
+        HttpClient client;
+        HttpRequestMessage request(HttpMethod::Get(), winrt::Windows::Foundation::Uri(url));
+        request.Headers().UserAgent().ParseAdd(L"BanditVault-BanditLauncher/1.0");
+        if (headerName && !headerValue.empty()) {
+            request.Headers().TryAppendWithoutValidation(
+                headerName, winrt::to_hstring(headerValue));
+        }
+        HttpResponseMessage response = client.SendRequestAsync(request).get();
+        result.status = static_cast<int>(response.StatusCode());
+        result.body = winrt::to_string(response.Content().ReadAsStringAsync().get());
+    } catch (const winrt::hresult_error& ex) {
+        WriteLogF(L"HTTP GET failed url=%s hr=0x%08X msg=%s",
+            url, static_cast<unsigned int>(ex.code()), ex.message().c_str());
+    }
+    return result;
+}
+
+
 HttpResult HttpGetConditionalTimed(
     const wchar_t* url,
     const std::string& etag,

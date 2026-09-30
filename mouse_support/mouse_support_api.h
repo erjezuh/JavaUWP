@@ -48,6 +48,11 @@ MOUSE_SUPPORT_API void MouseSupport_SetHostState(const MouseSupportHostState* st
 MOUSE_SUPPORT_API void MouseSupport_SendCursorSync(double x, double y);
 MOUSE_SUPPORT_API void MouseSupport_SendWindowCursorSync(double x, double y);
 MOUSE_SUPPORT_API void MouseSupport_UpdateOverlay(double menuCursorX, double menuCursorY, int visible);
+// Native CoreWindow pointer input (launcher host): DIP position + button
+// states + wheel notches; scaled to host window space inside the DLL.
+MOUSE_SUPPORT_API void MouseSupport_SubmitHostPointer(
+    double dipX, double dipY, double dipWidth, double dipHeight,
+    int left, int right, int middle, int x1, int x2, double wheel);
 MOUSE_SUPPORT_API unsigned int MouseSupport_LastActivityTickMs(void);
 MOUSE_SUPPORT_API double MouseSupport_SmoothingMs(void);
 
