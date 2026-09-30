@@ -1,5 +1,7 @@
 package banditvault.legacyforge;
 
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.nio.IntBuffer;
 
 import org.lwjgl.opengl.GL11;
@@ -60,6 +62,7 @@ public final class LegacyGlSanitizer {
     private static boolean iboBound;
     private static boolean loggedFirstConversion;
     private static boolean failureLogged;
+    private static volatile boolean conversionBroken;
     private static int dispatchTraceLeft = 16;
     private static boolean multiTraceDone;
 
@@ -83,12 +86,16 @@ public final class LegacyGlSanitizer {
     public static boolean dispatchDrawArrays(int mode, int first, int count) {
         boolean handled = false;
         Throwable failure = null;
-        if (quadsEnabled && mode == GL_QUADS && count >= 4) {
+        if (quadsEnabled && !conversionBroken && mode == GL_QUADS && count >= 4) {
             try {
                 drawQuadsAsTriangles(first, count);
                 handled = true;
             } catch (Throwable failed) {
                 failure = failed;
+                // The failure is deterministic (buffer/GL setup), so retrying
+                // every draw would cost one exception per call and make fps
+                // worse than plain quads. Fall back permanently after logging.
+                conversionBroken = true;
             }
         }
         if (dispatchTraceLeft > 0) {
@@ -193,7 +200,12 @@ public final class LegacyGlSanitizer {
         }
         // 1.5x headroom so pattern growth is amortized; no doubling overflow.
         int capacity = Math.max(quads + quads / 2, 4096);
-        final IntBuffer grown = IntBuffer.allocate(capacity * 6);
+        // LWJGL 2 requires DIRECT buffers for glBufferData (heap
+        // IntBuffer.allocate throws "IntBuffer is not direct").
+        final IntBuffer grown = ByteBuffer
+            .allocateDirect(capacity * 6 * 4)
+            .order(ByteOrder.nativeOrder())
+            .asIntBuffer();
         for (int q = 0; q < capacity; q++) {
             final int v = q * 4;
             grown.put(v);
@@ -225,14 +237,15 @@ public final class LegacyGlSanitizer {
             uploadedQuads = 0;
             iboBound = false;
         }
-        if (uploadedQuads < quads) {
+        if (uploadedQuads < patternQuads) {
             GL15.glBindBuffer(GL15.GL_ELEMENT_ARRAY_BUFFER, elementBufferId);
             iboBound = true;
-            pattern.limit(quads * 6);
+            // Upload the whole pattern once; draws index a prefix of it.
             pattern.position(0);
+            pattern.limit(patternQuads * 6);
             GL15.glBufferData(
                 GL15.GL_ELEMENT_ARRAY_BUFFER, pattern, GL15.GL_STATIC_DRAW);
-            uploadedQuads = quads;
+            uploadedQuads = patternQuads;
         }
     }
 }
