@@ -736,6 +736,11 @@ Ensure-Dir (Join-Path $gameDir "mods"), (Join-Path $pkg "runtime\bundled-mods")
 if (Test-Path (Join-Path $gameDir "mods")) {
     Copy-Item -Recurse (Join-Path $gameDir "mods\*") (Join-Path $pkg "runtime\bundled-mods\") -Force -ErrorAction SilentlyContinue
 }
+# MakeAppx drops empty directories: keep a marker so the default-target fallback
+# (runtime\bundled-mods) always exists inside the package.
+if (-not (Get-ChildItem -LiteralPath (Join-Path $pkg "runtime\bundled-mods") -File -ErrorAction SilentlyContinue)) {
+    Set-Content -Path (Join-Path $pkg "runtime\bundled-mods\.bandit-empty") -Value "" -NoNewline
+}
 
 Write-Host "Copying natives..."
 Ensure-Dir (Join-Path $pkg "natives")
@@ -966,7 +971,10 @@ if (-not $SkipVersionCompat) {
                 -OutputDir $outDir
         } catch {
             Add-BuildFailure -Stage "Compat mod" -Target $targetId -Reason $_.Exception.Message
-            if (Test-Path $outDir) { Remove-Item -Recurse -Force $outDir }
+            # Keep a marker-only directory so the catalog target stays launchable;
+            # the failure is still reported in the BUILD FAILURES block.
+            Ensure-Dir $outDir
+            Set-Content -Path (Join-Path $outDir ".bandit-empty") -Value "" -NoNewline
         }
         if ($targetId -ne $defaultTargetId) {
             Write-Host "Skipping per-version Fabric controller mod for ${targetId}: not the selected build target"
@@ -991,6 +999,11 @@ if (-not $SkipVersionCompat) {
         $targetId = "$($row.minecraftVersion)-forge-$lv"
         $outDir = Join-Path $versionModsRoot $targetId
         Ensure-Dir $outDir
+        # MakeAppx does not preserve empty directories. Keep a harmless marker in
+        # EVERY per-version bundle so a catalog target is never blocked with
+        # "bundled mods are missing" just because its controller/compat mod was
+        # skipped or failed to build. The launcher skips this file when copying.
+        Set-Content -Path (Join-Path $outDir ".bandit-empty") -Value "" -NoNewline
         if ($ProjectConfig.MinecraftVersion -eq "1.12.2" -and
             $row.minecraftVersion -eq "1.12.2" -and
             $lv -eq $defaultLoaderVersion) {
@@ -1002,12 +1015,6 @@ if (-not $SkipVersionCompat) {
             if ($LASTEXITCODE -ne 0) {
                 throw "Legacy Forge 1.12.2 ZipFS coremod build failed for $targetId"
             }
-        }
-        if ($row.controllerProvider -eq "none") {
-            # MakeAppx does not preserve empty directories. Keep a harmless marker
-            # so the launcher can distinguish an intentionally empty bundled-mods
-            # directory from a missing/unsupported target.
-            Set-Content -Path (Join-Path $outDir ".bandit-empty") -Value "" -NoNewline
         }
 
         if ($targetId -ne $defaultTargetId) {
@@ -1026,7 +1033,8 @@ if (-not $SkipVersionCompat) {
                 -OutputDir $outDir
         } catch {
             Add-BuildFailure -Stage "Forge controller mod" -Target $targetId -Reason $_.Exception.Message
-            if (Test-Path $outDir) { Remove-Item -Recurse -Force $outDir }
+            # Keep the (marker-only) directory so the target stays launchable;
+            # the failure is still reported in the BUILD FAILURES block.
         }
     }
     if (-not $BuildNeoForgeControllers) {

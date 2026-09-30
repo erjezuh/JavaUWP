@@ -48,7 +48,30 @@ $mixinJar = Get-ChildItem -LiteralPath (Join-Path $gameDir "libraries\net\fabric
     Sort-Object FullName -Descending |
     Select-Object -First 1
 if (-not $mixinJar) {
-    throw "Sponge Mixin jar not found in cache; run Fabric cache prep first."
+    # Forge-side Mixin (org.spongepowered:mixin) also provides the compile API.
+    $mixinJar = Get-ChildItem -LiteralPath (Join-Path $gameDir "libraries\org\spongepowered\mixin") -Recurse -Filter "mixin-*.jar" -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -notlike "*sources*" -and $_.Name -notlike "*javadoc*" } |
+        Sort-Object FullName -Descending |
+        Select-Object -First 1
+}
+if (-not $mixinJar) {
+    # Forge-only setups never run the Fabric cache prep. Pull the Mixin API jar
+    # the controller mod compiles against so this target builds standalone.
+    $mixinVersion = $ProjectConfig.MixinVersion
+    $mixinDir = Join-Path $gameDir "libraries\net\fabricmc\sponge-mixin\$mixinVersion"
+    $mixinDest = Join-Path $mixinDir "sponge-mixin-$mixinVersion.jar"
+    if (-not ((Test-Path $mixinDest) -and (Get-Item $mixinDest).Length -gt 100KB)) {
+        Ensure-Dir $mixinDir
+        $mixinUrl = "https://maven.fabricmc.net/net/fabricmc/sponge-mixin/$mixinVersion/sponge-mixin-$mixinVersion.jar"
+        Write-Host "Downloading Mixin API for Forge controller compile: $mixinUrl"
+        Invoke-WebRequest -UseBasicParsing -Uri $mixinUrl -OutFile $mixinDest -TimeoutSec 180
+    }
+    if ((Test-Path $mixinDest) -and (Get-Item $mixinDest).Length -gt 100KB) {
+        $mixinJar = Get-Item $mixinDest
+    }
+}
+if (-not $mixinJar) {
+    throw "Mixin API jar not found: checked fabric sponge-mixin cache, org.spongepowered:mixin, and the maven.fabricmc.net download. Run scripts\setup.ps1 for this target first and check the network."
 }
 
 if (-not (Test-Path $profilePath)) {

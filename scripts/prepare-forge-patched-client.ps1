@@ -130,11 +130,19 @@ Ensure-LibraryByName "net.minecraftforge:binarypatcher:1.1.1" | Out-Null
 Ensure-LibraryByName "net.minecraftforge:forge:${ForgeVersion}:universal" | Out-Null
 if (-not (Test-Path $installerJar)) {
     $installerSrc = Join-Path $root "build\forge-installer.jar"
-    if (-not (Test-Path $installerSrc)) {
-        throw "Forge installer jar missing at $installerSrc"
-    }
     Ensure-Dir (Split-Path $installerJar)
-    Copy-Item $installerSrc $installerJar -Force
+    if (Test-Path $installerSrc) {
+        Copy-Item $installerSrc $installerJar -Force
+    } else {
+        # No manual installer cached: pull it from the Forge maven so this
+        # target prepares standalone on a clean machine.
+        $installerUrl = "https://maven.minecraftforge.net/net/minecraftforge/forge/$ForgeVersion/forge-$ForgeVersion-installer.jar"
+        Write-Host "Downloading $installerUrl"
+        Invoke-WebRequest -UseBasicParsing -Uri $installerUrl -OutFile $installerJar -TimeoutSec 300
+    }
+    if (-not ((Test-Path $installerJar) -and (Get-Item $installerJar).Length -gt 1MB)) {
+        throw "Forge installer jar missing at $installerJar"
+    }
 }
 
 if (-not (Test-Path $binPatch)) {
