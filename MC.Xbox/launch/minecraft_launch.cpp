@@ -1748,14 +1748,14 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
 
     std::vector<std::string> vmOptionStorage;
     vmOptionStorage.reserve(64);
-    // 5120 MB app budget on series s dev mode. Heap+direct stay at 3.5G total,
-    // but the split moves 3G/512M -> 2560M/1024M: chunk render setup
-    // (ChunkRenderDispatcher -> BufferBuilder allocateDirect) exhausted the old
-    // 512M direct cap at world join ("OutOfMemoryError: Direct buffer memory"),
-    // which left the client half-initialized (null player) and crashed it later
-    // in world render / GuiIngameForge.
-    vmOptionStorage.push_back("-Xmx2560M");
-    vmOptionStorage.push_back("-Xms2560M");
+    // 5120 MB app budget on series s dev mode. Heap+direct was 3.5G total
+    // (2560M/1024M) and the heap ran dry on modded packs ("OutOfMemoryError:
+    // Java heap space") while the direct cap sat half used, so the split grows
+    // to 4G total (3072M/1024M): still inside the budget with JVM native and
+    // launcher overhead, chunk render setup keeps its 1024M direct room
+    // (the old 512M cap died at world join with "Direct buffer memory").
+    vmOptionStorage.push_back("-Xmx3072M");
+    vmOptionStorage.push_back("-Xms3072M");
     vmOptionStorage.push_back("-XX:MaxDirectMemorySize=1024M");
 
     // ignoreUnrecognized is JNI_FALSE, so a typo in jvm_args.txt would stop it booting
@@ -1769,7 +1769,7 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
     vmOptionStorage.push_back("-XX:G1HeapRegionSize=32M");
     // hsperfdata is mmapped and rewritten every collection, on console storage that is a frame hitch
     vmOptionStorage.push_back("-XX:+PerfDisableSharedMem");
-    WriteLog(L"JVM heap: -Xmx2560M -Xms2560M -XX:MaxDirectMemorySize=1024M, G1 at 50ms pause target");
+    WriteLog(L"JVM heap: -Xmx3072M -Xms3072M -XX:MaxDirectMemorySize=1024M, G1 at 50ms pause target");
     const bool legacyJava8 = packagedJreRelativeDir == L"jre8";
     if (!legacyJava8) {
         vmOptionStorage.push_back("--enable-native-access=ALL-UNNAMED");

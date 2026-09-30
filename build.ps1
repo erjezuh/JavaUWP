@@ -1646,6 +1646,16 @@ function Build-SecureJarHandlerUwpPatch {
 Write-Host "Copying JRE..."
 $xboxSecurityProperties = Join-Path $root "xbox_security.properties"
 Copy-Item $xboxSecurityProperties (Join-Path $pkg "xbox_security.properties") -Force
+# CurseForge API key is never committed to git (public repo). Set
+# MC_CURSEFORGE_API_KEY in the shell before building and the packaged
+# launcher picks the bundled curseforge_api_key.txt up from its exe dir.
+$cfApiKey = [Environment]::GetEnvironmentVariable("MC_CURSEFORGE_API_KEY", "Process")
+if ($cfApiKey -and $cfApiKey.Trim().Length -gt 0) {
+    Set-Content -LiteralPath (Join-Path $pkg "curseforge_api_key.txt") -Value $cfApiKey.Trim() -NoNewline -Encoding Ascii
+    Write-Host "Bundled CurseForge API key into package (curseforge_api_key.txt)"
+} else {
+    Write-Host "MC_CURSEFORGE_API_KEY not set; CurseForge browsing needs a key file at runtime"
+}
 Copy-PackagedJre -JavaHome $jreSrc -PackageRelativeDir "jre" -SecurityPropertiesPath $xboxSecurityProperties
 $isLegacyForge122Build = $McVersion -eq "1.12.2" -and $Loader.ToLowerInvariant() -eq "forge"
 try {

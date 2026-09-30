@@ -902,6 +902,24 @@ static std::wstring CurseForgeApiKey(const std::wstring& runtimeRoot) {
             key = a2w(line.c_str());
         }
     }
+    if (key.empty()) {
+        // build.ps1 bundles curseforge_api_key.txt next to the launcher exe
+        // when MC_CURSEFORGE_API_KEY was set at build time (the key never
+        // touches git); LocalState file and env var still override it.
+        wchar_t exePath[MAX_PATH] = {};
+        if (GetModuleFileNameW(nullptr, exePath, MAX_PATH) > 0) {
+            std::wstring exeDir(exePath);
+            const size_t slash = exeDir.find_last_of(L"\\/");
+            if (slash != std::wstring::npos) {
+                exeDir.resize(slash);
+            }
+            std::ifstream f(exeDir + L"\\curseforge_api_key.txt");
+            std::string line;
+            if (f && std::getline(f, line)) {
+                key = a2w(line.c_str());
+            }
+        }
+    }
     while (!key.empty() && iswspace(key.back())) key.pop_back();
     while (!key.empty() && iswspace(key.front())) key.erase(key.begin());
     return key;
