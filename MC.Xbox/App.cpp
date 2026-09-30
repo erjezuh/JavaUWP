@@ -205,13 +205,13 @@ static void SubmitHostPointerState(IPointerEventArgs* args, bool wheelEvent) {
     ComPtr<ABI::Windows::UI::Input::IPointerPoint> point;
     if (FAILED(args->get_CurrentPoint(point.GetAddressOf())) || !point) return;
 
-    Point position = {};
+    ABI::Windows::Foundation::Point position = {};
     if (FAILED(point->get_Position(&position))) return;
 
     double dipWidth = 0.0;
     double dipHeight = 0.0;
     if (g_authWindow) {
-        Rect bounds = {};
+        ABI::Windows::Foundation::Rect bounds = {};
         if (SUCCEEDED(g_authWindow->get_Bounds(&bounds))) {
             dipWidth = bounds.Width;
             dipHeight = bounds.Height;
@@ -267,7 +267,13 @@ static void RegisterCoreWindowPointerHandlers(ICoreWindow* window) {
 
     g_coreWindowPointerWheelHandler = Callback<CoreWindowWheelHandler>(
         [](ICoreWindow*, IMouseWheelChangedEventArgs* args) -> HRESULT {
-            SubmitHostPointerState(args, true);
+            // QueryInterface instead of an implicit upcast so the handler
+            // compiles regardless of how the SDK declares the wheel-args
+            // inheritance chain.
+            ComPtr<IPointerEventArgs> base;
+            if (args && SUCCEEDED(args->QueryInterface(IID_PPV_ARGS(&base)))) {
+                SubmitHostPointerState(base.Get(), true);
+            }
             return S_OK;
         });
 
