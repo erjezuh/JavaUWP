@@ -268,7 +268,7 @@ HttpResult HttpGetStringHeader(
         request.Headers().UserAgent().ParseAdd(L"BanditVault-BanditLauncher/1.0");
         if (headerName && !headerValue.empty()) {
             request.Headers().TryAppendWithoutValidation(
-                headerName, winrt::to_hstring(headerValue));
+                headerName, winrt::hstring(headerValue.c_str()));
         }
         HttpResponseMessage response = client.SendRequestAsync(request).get();
         result.status = static_cast<int>(response.StatusCode());

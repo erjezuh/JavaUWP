@@ -71,11 +71,12 @@ static ComPtr<CoreWindowActivatedHandler> g_coreWindowActivatedHandler;
 // shim reads these events itself; without these handlers the launcher only
 // ever saw the UDP mouse relay and a real mouse could not click the menus.
 using CoreWindowPointerHandler = ABI::Windows::Foundation::__FITypedEventHandler_2_Windows__CUI__CCore__CCoreWindow_Windows__CUI__CCore__CPointerEventArgs_t;
-using CoreWindowWheelHandler = ABI::Windows::Foundation::__FITypedEventHandler_2_Windows__CUI__CCore__CCoreWindow_Windows__CUI__CCore__CMouseWheelChangedEventArgs_t;
+// CoreWindow.PointerWheelChanged delivers IPointerEventArgs like every other
+// pointer event; Windows.UI.Core has no MouseWheelChangedEventArgs type.
 static ComPtr<CoreWindowPointerHandler> g_coreWindowPointerMovedHandler;
 static ComPtr<CoreWindowPointerHandler> g_coreWindowPointerPressedHandler;
 static ComPtr<CoreWindowPointerHandler> g_coreWindowPointerReleasedHandler;
-static ComPtr<CoreWindowWheelHandler> g_coreWindowPointerWheelHandler;
+static ComPtr<CoreWindowPointerHandler> g_coreWindowPointerWheelHandler;
 static EventRegistrationToken g_pointerMovedToken;
 static EventRegistrationToken g_pointerPressedToken;
 static EventRegistrationToken g_pointerReleasedToken;
@@ -265,15 +266,9 @@ static void RegisterCoreWindowPointerHandlers(ICoreWindow* window) {
             return S_OK;
         });
 
-    g_coreWindowPointerWheelHandler = Callback<CoreWindowWheelHandler>(
-        [](ICoreWindow*, IMouseWheelChangedEventArgs* args) -> HRESULT {
-            // QueryInterface instead of an implicit upcast so the handler
-            // compiles regardless of how the SDK declares the wheel-args
-            // inheritance chain.
-            ComPtr<IPointerEventArgs> base;
-            if (args && SUCCEEDED(args->QueryInterface(IID_PPV_ARGS(&base)))) {
-                SubmitHostPointerState(base.Get(), true);
-            }
+    g_coreWindowPointerWheelHandler = Callback<CoreWindowPointerHandler>(
+        [](ICoreWindow*, IPointerEventArgs* args) -> HRESULT {
+            if (args) SubmitHostPointerState(args, true);
             return S_OK;
         });
 
@@ -283,8 +278,8 @@ static void RegisterCoreWindowPointerHandlers(ICoreWindow* window) {
     if (FAILED(hr)) WriteLogF(L"CoreWindow add_PointerPressed failed hr=0x%08X", hr);
     hr = window->add_PointerReleased(g_coreWindowPointerReleasedHandler.Get(), &g_pointerReleasedToken);
     if (FAILED(hr)) WriteLogF(L"CoreWindow add_PointerReleased failed hr=0x%08X", hr);
-    hr = window->add_MouseWheelChanged(g_coreWindowPointerWheelHandler.Get(), &g_pointerWheelToken);
-    if (FAILED(hr)) WriteLogF(L"CoreWindow add_MouseWheelChanged failed hr=0x%08X", hr);
+    hr = window->add_PointerWheelChanged(g_coreWindowPointerWheelHandler.Get(), &g_pointerWheelToken);
+    if (FAILED(hr)) WriteLogF(L"CoreWindow add_PointerWheelChanged failed hr=0x%08X", hr);
 
     g_coreWindowPointerHooksInstalled = true;
     WriteLog(L"CoreWindow pointer handlers installed (native mouse for launcher UI)");
