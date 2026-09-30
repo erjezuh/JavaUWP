@@ -1133,7 +1133,7 @@ static bool InstallCurseForgeProjectById(
                 continue;
             }
 
-            std::wstring sha1;
+            std::string sha1;
             if (file.HasKey(L"hashes") &&
                 file.GetNamedValue(L"hashes").ValueType() == JsonValueType::Array) {
                 JsonArray hashes = file.GetNamedArray(L"hashes");
@@ -1142,7 +1142,7 @@ static bool InstallCurseForgeProjectById(
                     if (hashValue.ValueType() != JsonValueType::Object) continue;
                     JsonObject hash = hashValue.GetObject();
                     if (JsonIntOrZero(hash, L"algo") == 1) {
-                        sha1 = JsonStringOrEmpty(hash, L"value");
+                        sha1 = w2a(JsonStringOrEmpty(hash, L"value"));
                     }
                 }
             }
