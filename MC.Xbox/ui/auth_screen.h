@@ -663,10 +663,23 @@ public:
                     DrawText(state.modsCards[i].description.c_str(), captionFormat_.Get(),
                         D2D1::RectF(textLeft, card.top + 44.0f, textRight, card.bottom - 40.0f),
                         muted.Get());
-                    if (!state.modsCards[i].status.empty()) {
-                        DrawText(state.modsCards[i].status.c_str(), smallMid_.Get(),
-                            D2D1::RectF(textLeft, card.bottom - 40.0f, textRight, card.bottom - 6.0f),
-                            state.modsCards[i].installed ? accent.Get() : muted.Get());
+                    {
+                        const wchar_t* source = L"";
+                        if (state.selectedModsTab != 0) {
+                            source = state.modsCards[i].projectId.rfind(L"curse:", 0) == 0
+                                ? L"CurseForge" : L"Modrinth";
+                        }
+                        std::wstring statusLine;
+                        if (source[0]) statusLine = source;
+                        if (!state.modsCards[i].status.empty()) {
+                            if (!statusLine.empty()) statusLine += L"  \u00b7  ";
+                            statusLine += state.modsCards[i].status;
+                        }
+                        if (!statusLine.empty()) {
+                            DrawText(statusLine.c_str(), smallMid_.Get(),
+                                D2D1::RectF(textLeft, card.bottom - 40.0f, textRight, card.bottom - 6.0f),
+                                state.modsCards[i].installed ? accent.Get() : muted.Get());
+                        }
                     }
                 }
             }

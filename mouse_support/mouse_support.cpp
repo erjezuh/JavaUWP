@@ -40,6 +40,10 @@ bool g_haveStatusAddr = false;
 volatile LONG g_started = 0;
 volatile LONG g_shutdown = 0;
 volatile LONG g_lastActivityTick = 0;
+volatile LONG g_lastHostPointerTickMs = 0;
+double g_hostPointerLastX = 0.0;
+double g_hostPointerLastY = 0.0;
+bool g_hostPointerHaveLast = false;
 HANDLE g_receiveThread = nullptr;
 
 int g_pendingMode = -1;
@@ -518,7 +522,23 @@ MOUSE_SUPPORT_API void MouseSupport_SubmitHostPointer(
         scaleX = (double)g_host.windowWidth / dipWidth;
         scaleY = (double)g_host.windowHeight / dipHeight;
     }
-    g_mailbox.submitAbsolute(tMicros, dipX * scaleX, dipY * scaleY, true, wheel);
+    const double px = dipX * scaleX;
+    const double py = dipY * scaleY;
+    if (g_host.cursorMode == kCursorModeDisabled) {
+        // Grabbed gameplay consumes deltas; an absolute report every event
+        // would fight the MouseDevice/GameInput delta sources and reset the
+        // virtual look position. Convert to deltas like the relay does.
+        if (g_hostPointerHaveLast) {
+            g_mailbox.submitRelative(tMicros, px - g_hostPointerLastX,
+                py - g_hostPointerLastY, wheel);
+        }
+        g_hostPointerLastX = px;
+        g_hostPointerLastY = py;
+        g_hostPointerHaveLast = true;
+    } else {
+        g_mailbox.submitAbsolute(tMicros, px, py, true, wheel);
+        g_hostPointerHaveLast = false;
+    }
     g_mailbox.submitButtonValue(1, left);
     g_mailbox.submitButtonValue(2, right);
     g_mailbox.submitButtonValue(4, middle);
@@ -526,10 +546,15 @@ MOUSE_SUPPORT_API void MouseSupport_SubmitHostPointer(
     g_mailbox.submitButtonValue(16, x2);
     ReleaseSRWLockExclusive(&g_lock);
     InterlockedExchange(&g_lastActivityTick, (LONG)GetTickCount());
+    InterlockedExchange(&g_lastHostPointerTickMs, (LONG)GetTickCount());
 }
 
 MOUSE_SUPPORT_API unsigned int MouseSupport_LastActivityTickMs(void) {
     return (unsigned int)InterlockedCompareExchange(&g_lastActivityTick, 0, 0);
+}
+
+MOUSE_SUPPORT_API unsigned int MouseSupport_HostPointerTickMs(void) {
+    return (unsigned int)InterlockedCompareExchange(&g_lastHostPointerTickMs, 0, 0);
 }
 
 MOUSE_SUPPORT_API double MouseSupport_SmoothingMs(void) {

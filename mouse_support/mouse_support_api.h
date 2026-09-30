@@ -54,6 +54,9 @@ MOUSE_SUPPORT_API void MouseSupport_SubmitHostPointer(
     double dipX, double dipY, double dipWidth, double dipHeight,
     int left, int right, int middle, int x1, int x2, double wheel);
 MOUSE_SUPPORT_API unsigned int MouseSupport_LastActivityTickMs(void);
+// Tick of the last native host pointer report (USB mouse / system pointer via
+// MouseSupport_SubmitHostPointer only; the UDP relay does not touch it).
+MOUSE_SUPPORT_API unsigned int MouseSupport_HostPointerTickMs(void);
 MOUSE_SUPPORT_API double MouseSupport_SmoothingMs(void);
 
 #ifdef __cplusplus

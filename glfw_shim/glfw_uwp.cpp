@@ -2412,6 +2412,14 @@ static bool MouseCompanionActive() {
     if (last == 0) return false;
     return (DWORD)(GetTickCount() - (DWORD)last) <= kMouseCompanionTimeoutMs;
 }
+// True while the native host pointer (USB mouse / system pointer reported by
+// the launcher) is steering. The system cursor is already visible for it, so
+// the GL cursor overlay must stay hidden or the user sees two cursors at once.
+static bool HostPointerFresh() {
+    const unsigned int last = MouseSupport_HostPointerTickMs();
+    if (last == 0) return false;
+    return (DWORD)(GetTickCount() - (DWORD)last) <= kMouseCompanionTimeoutMs;
+}
 static void FlushMouseButtonsForDeactivate() {
     for (int i = 0; i < (int)sizeof(g_mouse_state); ++i) {
         if (g_mouse_state[i]) {
@@ -2436,6 +2444,11 @@ static void PushMouseHostState() {
 static void DrainRemoteMouseInput() {
     MouseSupportFrame frame;
     if (!MouseSupport_PollFrame(&frame)) return;
+    // While the game-side CoreWindow pointer hooks are actively steering the
+    // cursor, mailbox copies of the same physical events would apply every
+    // position twice: the cursor races between two spots and the menu sees
+    // doubled clicks/wheel until it falls apart.
+    if (AbsolutePointerFresh()) return;
 
     bool activity = false;
     if (frame.hasAbsolute) {
@@ -4078,7 +4091,8 @@ extern "C" __declspec(dllexport) void glfwSwapBuffers(GLFWwindow*) {
     }
     if (MouseCompanionActive() &&
         g_cursorMode == GLFW_CURSOR_NORMAL &&
-        CurrentCursorInputOwner() == CursorInputOwnerRelay) {
+        CurrentCursorInputOwner() == CursorInputOwnerRelay &&
+        !HostPointerFresh()) {
         bandit_cursor::Draw();
     }
     if (wglb::Active()) {
