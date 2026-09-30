@@ -31,6 +31,7 @@ std::wstring ProfilesRoot(const std::wstring& runtimeRoot);
 std::wstring ProfileDir(const std::wstring& runtimeRoot, const std::wstring& id);
 std::wstring ProfileGameDir(const std::wstring& runtimeRoot, const std::wstring& id);
 std::wstring ProfileModsDir(const std::wstring& runtimeRoot, const std::wstring& id);
+std::wstring ProfileContentDir(const std::wstring& runtimeRoot, const std::wstring& id, const std::wstring& folder);
 std::wstring MakeTargetId(const std::wstring& minecraftVersion, const std::wstring& loader, const std::wstring& loaderVersion);
 
 LaunchTarget DefaultLaunchTarget();

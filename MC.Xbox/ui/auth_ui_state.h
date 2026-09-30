@@ -28,6 +28,8 @@ struct AuthUiState {
     bool showModsPage = false;
     int selectedMenuIndex = 0;
     int selectedModsTab = 0;
+    // 0 = both engines, 1 = Modrinth only, 2 = CurseForge only.
+    int modsSearchSource = 0;
     int selectedModIndex = 0;
     int modsFocus = 0;
     int modsScrollRow = 0;

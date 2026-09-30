@@ -269,6 +269,42 @@ if (-not $nativeDlls) {
     throw "No native DLLs were prepared under $nativesDir."
 }
 
+# --- OpenAL Soft ------------------------------------------------------------
+# LWJGL 2 ships Creative's OpenAL wrapper, which only forwards to a vendor ICD
+# that does not exist on Xbox/UWP: Minecraft's sound engine then fails to open
+# any audio device and the game is completely silent. Replace the natives with
+# OpenAL Soft, a standalone WASAPI implementation of the same OpenAL API.
+try {
+    $alsoftVersion = "1.23.1"
+    $alsoftZip = Join-Path $toolsDir ("openal-soft-" + $alsoftVersion + "-bin.zip")
+    $alsoftUrl = "https://openal-soft.org/openal-binaries/openal-soft-" + $alsoftVersion + "-bin.zip"
+    Save-RemoteFile -Uri $alsoftUrl -Path $alsoftZip
+    $alsoftRoot = Join-Path $toolsDir ("openal-soft-" + $alsoftVersion)
+    $alsoftMarker = Join-Path $alsoftRoot ".extracted"
+    if (-not (Test-Path $alsoftMarker)) {
+        Expand-Archive -LiteralPath $alsoftZip -DestinationPath $alsoftRoot -Force
+        New-Item -ItemType File -Path $alsoftMarker -Force | Out-Null
+    }
+    $softDlls = @(Get-ChildItem -LiteralPath $alsoftRoot -Recurse -Filter "soft_oal.dll" -ErrorAction SilentlyContinue)
+    $replaced = 0
+    foreach ($dll in $softDlls) {
+        if ($dll.FullName -match 'Win64') {
+            Copy-Item -LiteralPath $dll.FullName -Destination (Join-Path $nativesDir "OpenAL64.dll") -Force
+            Write-Host "OpenAL Soft installed as OpenAL64.dll (game audio)"
+            $replaced++
+        } elseif ($dll.FullName -match 'Win32') {
+            Copy-Item -LiteralPath $dll.FullName -Destination (Join-Path $nativesDir "OpenAL32.dll") -Force
+            Write-Host "OpenAL Soft installed as OpenAL32.dll (game audio)"
+            $replaced++
+        }
+    }
+    if ($replaced -eq 0) {
+        Write-Warning "soft_oal.dll not found inside $alsoftZip; game audio may not work."
+    }
+} catch {
+    Write-Warning "OpenAL Soft install failed ($($_.Exception.Message)); game audio may not work."
+}
+
 function Ensure-LegacyVc2010Runtime {
     $vcDir = Join-Path (Get-ConfigPath "CacheDir") "legacy-vc2010-x64"
     $vcExe = Join-Path $toolsDir "vcredist_x64-vc2010.exe"

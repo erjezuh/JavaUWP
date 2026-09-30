@@ -59,6 +59,7 @@ std::wstring ProfileDir(const std::wstring& runtimeRoot, const std::wstring& id)
 std::wstring ProfileGameDir(const std::wstring& runtimeRoot, const std::wstring& id) { return ProfileDir(runtimeRoot, id) + L"\\game"; }
 std::wstring LegacyProfileModsDir(const std::wstring& runtimeRoot, const std::wstring& id) { return ProfileDir(runtimeRoot, id) + L"\\mods"; }
 std::wstring ProfileModsDir(const std::wstring& runtimeRoot, const std::wstring& id) { return ProfileGameDir(runtimeRoot, id) + L"\\mods"; }
+std::wstring ProfileContentDir(const std::wstring& runtimeRoot, const std::wstring& id, const std::wstring& folder) { return ProfileGameDir(runtimeRoot, id) + L"\\" + folder; }
 std::wstring ProfilesJsonPath(const std::wstring& runtimeRoot) { return ProfilesRoot(runtimeRoot) + L"\\profiles.json"; }
 std::wstring LegacyProfilesManifestPath(const std::wstring& runtimeRoot) { return ProfilesRoot(runtimeRoot) + L"\\profiles.txt"; }
 std::wstring ActiveProfilePath(const std::wstring& runtimeRoot) { return ProfilesRoot(runtimeRoot) + L"\\active.txt"; }

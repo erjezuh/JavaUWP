@@ -65,6 +65,9 @@ public final class LegacyGlSanitizer {
     private static volatile boolean conversionBroken;
     private static int dispatchTraceLeft = 16;
     private static boolean multiTraceDone;
+    private static volatile boolean shadersActive;
+    private static long shadersRefreshNanos;
+    private static java.lang.reflect.Field shaderPackLoadedField;
 
     private LegacyGlSanitizer() {
     }
@@ -76,6 +79,40 @@ public final class LegacyGlSanitizer {
         } catch (Throwable ignored) {
             return defaultValue;
         }
+    }
+
+    /**
+     * True while an OptiFine shader pack is loaded. Shaders bind their own
+     * element buffers and issue client-side glDrawElements; a leftover static
+     * pattern IBO from this class would be interpreted as an index offset and
+     * renders black geometry with GL_INVALID_OPERATION (1282) spam. While a
+     * pack is active the pattern IBO is unbound after every converted draw.
+     * Polled at most once a second; reflection failure means "not active".
+     */
+    private static boolean shadersPackLoaded() {
+        final long now = System.nanoTime();
+        if (now - shadersRefreshNanos < 1000000000L) {
+            return shadersActive;
+        }
+        shadersRefreshNanos = now;
+        boolean loaded = false;
+        try {
+            if (shaderPackLoadedField == null) {
+                final Class<?> cls = Class.forName("shadersmod.client.Shaders", false,
+                    LegacyGlSanitizer.class.getClassLoader());
+                shaderPackLoadedField = cls.getField("shaderPackLoaded");
+            }
+            loaded = shaderPackLoadedField.getBoolean(null);
+        } catch (Throwable ignored) {
+            loaded = false;
+        }
+        if (loaded != shadersActive) {
+            shadersActive = loaded;
+            System.err.println(
+                "[BanditVault] OptiFine shaders active=" + loaded
+                + " (per-draw IBO unbind " + (loaded ? "enabled" : "disabled") + ")");
+        }
+        return loaded;
     }
 
     /**
@@ -188,7 +225,7 @@ public final class LegacyGlSanitizer {
         }
         GL32.glDrawElementsBaseVertex(
             GL11.GL_TRIANGLES, quads * 6, GL11.GL_UNSIGNED_INT, 0L, first);
-        if (unbindEachDraw) {
+        if (unbindEachDraw || shadersPackLoaded()) {
             GL15.glBindBuffer(GL15.GL_ELEMENT_ARRAY_BUFFER, 0);
             iboBound = false;
         }

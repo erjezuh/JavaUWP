@@ -99,11 +99,31 @@ static std::wstring ModIconCachePath(const std::wstring& runtimeRoot, const std:
     return runtimeRoot + L"\\mod-icons\\" + SafeFileName(projectId) + L".img";
 }
 
+// 0 = mod, 1 = shader pack, 2 = resource pack (see ModCard::contentKind).
+static int ContentKindOf(const char* projectType) {
+    if (projectType) {
+        if (std::string(projectType) == "shader") return 1;
+        if (std::string(projectType) == "resourcepack") return 2;
+    }
+    return 0;
+}
+
+static const wchar_t* ContentFolderForKind(int kind) {
+    if (kind == 1) return L"shaderpacks";
+    if (kind == 2) return L"resourcepacks";
+    return L"mods";
+}
+
 static std::wstring BuildModrinthSearchUrl(const char* index, int limit, int offset, const std::wstring& query, const char* projectType, const std::string& gameVersion, const std::string& loaderId) {
     std::string facets = std::string("[[\"project_type:") + projectType + "\"]";
-    if (!loaderId.empty()) facets += ",[\"categories:" + loaderId + "\"]";
+    // Shader packs and resource packs carry no Forge/Fabric category on
+    // Modrinth; filtering by loader would return zero hits.
+    const bool byLoader = projectType && std::string(projectType) != "shader" &&
+        std::string(projectType) != "resourcepack";
+    if (byLoader && !loaderId.empty()) facets += ",[\"categories:" + loaderId + "\"]";
     facets += ",[\"versions:" + gameVersion + "\"]";
-    facets += ",[\"client_side:required\",\"client_side:optional\"]]";
+    if (byLoader) facets += ",[\"client_side:required\",\"client_side:optional\"]";
+    facets += "]";
     std::wstring url = L"https://api.modrinth.com/v2/search?limit=" +
         std::to_wstring(limit) +
         L"&offset=" + std::to_wstring(offset) +
@@ -372,6 +392,7 @@ static bool FetchModrinthMods(const std::wstring& runtimeRoot, const char* index
 
             ModCard card;
             card.isModpack = modpack;
+            card.contentKind = ContentKindOf(projectType);
             card.projectId = JsonStringOrEmpty(hit, L"project_id");
             card.slug = JsonStringOrEmpty(hit, L"slug");
             card.title = JsonStringOrEmpty(hit, L"title");
@@ -969,15 +990,17 @@ static bool FetchCurseForgeMods(
         return false;
     }
 
+    const int kind = ContentKindOf(projectType);
+    const int classId = kind == 1 ? 6552 : (kind == 2 ? 12 : 6); // shaders / resource packs / mods
     std::wstring url =
-        L"https://api.curseforge.com/v1/mods/search?gameId=432&classId=6"
-        L"&sortField=2&sortOrder=desc";
+        L"https://api.curseforge.com/v1/mods/search?gameId=432&classId=" +
+        std::to_wstring(classId) + L"&sortField=2&sortOrder=desc";
     url += L"&index=" + std::to_wstring(offset < 0 ? 0 : offset);
     url += L"&pageSize=" + std::to_wstring(limit <= 0 ? 20 : limit);
     if (!gameVersion.empty()) {
         url += L"&gameVersion=" + a2w(FormUrlEncode(gameVersion).c_str());
     }
-    const int loaderType = CurseForgeLoaderType(loaderId);
+    const int loaderType = kind == 0 ? CurseForgeLoaderType(loaderId) : 0;
     if (loaderType != 0) {
         url += L"&modLoaderType=" + std::to_wstring(loaderType);
     }
@@ -1014,6 +1037,7 @@ static bool FetchCurseForgeMods(
             if (modId <= 0) continue;
             ModCard card;
             card.projectId = L"curse:" + std::to_wstring(modId);
+            card.contentKind = kind;
             card.slug = JsonStringOrEmpty(hit, L"slug");
             card.title = JsonStringOrEmpty(hit, L"name");
             card.description = JsonStringOrEmpty(hit, L"summary");
@@ -1021,6 +1045,15 @@ static bool FetchCurseForgeMods(
                 hit.GetNamedValue(L"logo").ValueType() == JsonValueType::Object) {
                 JsonObject logo = hit.GetNamedObject(L"logo");
                 card.iconUrl = JsonStringOrEmpty(logo, L"thumbnailUrl");
+                if (card.iconUrl.empty()) card.iconUrl = JsonStringOrEmpty(logo, L"url");
+            }
+            if (!card.iconUrl.empty()) {
+                // Without an icon cache path the icon worker never downloads
+                // the logo and the card renders photo-less.
+                card.iconPath = ModIconCachePath(runtimeRoot, card.projectId);
+            }
+            if (card.description.empty()) {
+                card.description = L"CurseForge project for Minecraft " + a2w(gameVersion.c_str());
             }
             card.status = std::to_wstring(JsonIntOrZero(hit, L"downloadCount")) + L" downloads";
             out.push_back(std::move(card));
@@ -1067,7 +1100,8 @@ static bool InstallCurseForgeProjectById(
     if (!gameVersion.empty()) {
         url += L"&gameVersion=" + a2w(FormUrlEncode(gameVersion).c_str());
     }
-    const int loaderType = CurseForgeLoaderType(loaderId);
+    const int contentKind = topMeta ? topMeta->contentKind : 0;
+    const int loaderType = contentKind == 0 ? CurseForgeLoaderType(loaderId) : 0;
     if (loaderType != 0) {
         url += L"&modLoaderType=" + std::to_wstring(loaderType);
     }
@@ -1100,8 +1134,9 @@ static bool InstallCurseForgeProjectById(
             JsonObject file = value.GetObject();
             const std::wstring fileName = JsonStringOrEmpty(file, L"fileName");
             const std::wstring lowerName = ToLowerW(fileName);
+            const wchar_t* wantedExt = contentKind == 0 ? L".jar" : L".zip";
             if (lowerName.size() < 5 ||
-                lowerName.compare(lowerName.size() - 4, 4, L".jar") != 0) {
+                lowerName.compare(lowerName.size() - 4, 4, wantedExt) != 0) {
                 continue;
             }
 
@@ -1525,10 +1560,15 @@ static void StartInstallJob(const ModCard& card, const std::wstring& runtimeRoot
                 } else {
                     std::vector<std::wstring> installed;
                     WriteLogF(L"Installing mod '%s' target=%s into profile %s", copy.title.c_str(), targetCopy.targetId.c_str(), active.c_str());
+                    const std::wstring contentDir =
+                        ProfileContentDir(rootCopy, active, ContentFolderForKind(copy.contentKind));
                     if (IsCurseForgeCard(copy)) {
-                        ok = InstallCurseForgeProject(copy, rootCopy, ProfileModsDir(rootCopy, active), installed, err, gameVersion, loaderId);
+                        ok = InstallCurseForgeProject(copy, rootCopy, contentDir, installed, err, gameVersion, loaderId);
                     } else {
-                        ok = InstallModrinthProject(copy, rootCopy, ProfileModsDir(rootCopy, active), installed, err, gameVersion, loaderId, loaderVersion);
+                        // Shader/resource pack versions carry no Forge loader
+                        // tag; only mods need the loader filter.
+                        const std::string kindLoaderId = copy.contentKind == 0 ? loaderId : std::string();
+                        ok = InstallModrinthProject(copy, rootCopy, contentDir, installed, err, gameVersion, kindLoaderId, loaderVersion);
                     }
                     SetInstallStatus(ok
                         ? (installed.empty() ? L"Already installed" : L"Installed " + std::to_wstring(installed.size()) + L" file(s)")
@@ -1843,27 +1883,46 @@ static void LoadModsTab(AuthUiState& state, const std::wstring& runtimeRoot, con
         return;
     }
 
-    const char* projectType = state.selectedModsTab == 4 ? "modpack" : "mod";
+    const char* projectType = "mod";
+    if (state.selectedModsTab == 4) projectType = "modpack";
+    else if (state.selectedModsTab == 5) projectType = "shader";
+    else if (state.selectedModsTab == 6) projectType = "resourcepack";
     const char* index = !query.empty()
         ? "relevance"
-        : ((state.selectedModsTab == 1 || state.selectedModsTab == 4) ? "downloads" : "newest");
+        : ((state.selectedModsTab == 1 || state.selectedModsTab >= 4) ? "downloads" : "newest");
     const LaunchTarget modsTarget = CurrentModsTarget(state);
     const std::string gameVersion = w2a(modsTarget.minecraftVersion);
     const std::string loaderId = ModrinthLoaderId(modsTarget.loader);
+    const bool useModrinth = state.modsSearchSource != 2;
+    const bool useCurseForge = state.modsSearchSource != 1;
     std::wstring error;
     int total = 0;
-    bool got = FetchModrinthMods(runtimeRoot, index, query, 0, kModPageSize, state.modsCards, total, error, projectType, gameVersion, loaderId);
-    if (!got) {
-        state.status = error.empty() ? L"Could not load Modrinth" : error;
-        state.isError = true;
-        return;
+    if (useModrinth) {
+        const bool got = FetchModrinthMods(runtimeRoot, index, query, 0, kModPageSize, state.modsCards, total, error, projectType, gameVersion, loaderId);
+        if (!got) {
+            state.status = error.empty() ? L"Could not load Modrinth" : error;
+            state.isError = true;
+            return;
+        }
     }
 
     // CurseForge results append after Modrinth when an API key is configured;
     // without one the browser is plain Modrinth like before.
-    if (CurseForgeApiKey(runtimeRoot).empty()) {
+    if (!useCurseForge) {
+        WriteLog(L"CurseForge disabled by search-engine switch");
+    } else if (CurseForgeApiKey(runtimeRoot).empty()) {
+        if (!useModrinth) {
+            state.status = L"CurseForge API key missing (curseforge_api_key.txt)";
+            state.isError = true;
+            return;
+        }
         WriteLog(L"CurseForge API key not configured; Modrinth-only browsing");
     } else if (std::string(projectType) == "modpack") {
+        if (!useModrinth) {
+            state.status = L"CurseForge modpacks are not supported yet";
+            state.isError = true;
+            return;
+        }
         WriteLog(L"CurseForge skipped: modpack tab stays on Modrinth packs");
     } else {
         std::wstring cfError;
@@ -1873,6 +1932,11 @@ static void LoadModsTab(AuthUiState& state, const std::wstring& runtimeRoot, con
             total += cfTotal;
             WriteLogF(L"CurseForge added hits total=%d", cfTotal);
         } else {
+            if (!useModrinth) {
+                state.status = cfError.empty() ? L"Could not load CurseForge" : cfError;
+                state.isError = true;
+                return;
+            }
             WriteLogF(L"CurseForge search failed: %s", cfError.c_str());
         }
     }
@@ -1880,9 +1944,17 @@ static void LoadModsTab(AuthUiState& state, const std::wstring& runtimeRoot, con
     state.modsTotalHits = total;
     state.modsExhausted = static_cast<int>(state.modsCards.size()) >= total;
     QueueModIcons(state.modsCards);
-    state.status = state.modsCards.empty()
-        ? (state.selectedModsTab == 4 ? L"No modpacks found" : L"No mods found")
-        : std::to_wstring(state.modsCards.size()) + L" of " + std::to_wstring(total);
+    if (!state.modsCards.empty()) {
+        state.status = std::to_wstring(state.modsCards.size()) + L" of " + std::to_wstring(total);
+    } else if (state.selectedModsTab == 4) {
+        state.status = L"No modpacks found";
+    } else if (state.selectedModsTab == 5) {
+        state.status = L"No shader packs found";
+    } else if (state.selectedModsTab == 6) {
+        state.status = L"No resource packs found";
+    } else {
+        state.status = L"No mods found";
+    }
 }
 
 static winrt::Windows::UI::Core::CoreWindow g_modsCharWindow{nullptr};
@@ -2218,12 +2290,17 @@ void ShowModsPage(
     };
 
     auto loadMore = [&]() {
-        const bool browseTab = state.selectedModsTab == 1 || state.selectedModsTab == 2 || state.selectedModsTab == 4;
+        const bool browseTab = state.selectedModsTab == 1 || state.selectedModsTab == 2 || state.selectedModsTab >= 4;
         if (state.modsExhausted || !browseTab) return;
-        const char* projectType = state.selectedModsTab == 4 ? "modpack" : "mod";
+        const char* projectType = "mod";
+        if (state.selectedModsTab == 4) projectType = "modpack";
+        else if (state.selectedModsTab == 5) projectType = "shader";
+        else if (state.selectedModsTab == 6) projectType = "resourcepack";
         const char* index = !state.modsSearchQuery.empty()
             ? "relevance"
-            : ((state.selectedModsTab == 1 || state.selectedModsTab == 4) ? "downloads" : "newest");
+            : ((state.selectedModsTab == 1 || state.selectedModsTab >= 4) ? "downloads" : "newest");
+        const bool useModrinth = state.modsSearchSource != 2;
+        const bool useCurseForge = state.modsSearchSource != 1;
         const int before = static_cast<int>(state.modsCards.size());
         state.status = L"Loading more...";
         RenderAuth(renderer, state);
@@ -2233,12 +2310,13 @@ void ShowModsPage(
         const std::string moreLoaderId = ModrinthLoaderId(moreTarget.loader);
         int total = state.modsTotalHits;
         std::wstring error;
-        if (!FetchModrinthMods(runtimeRoot, index, state.modsSearchQuery, before, kModPageSize, state.modsCards, total, error, projectType, moreGameVersion, moreLoaderId)) {
+        if (useModrinth &&
+            !FetchModrinthMods(runtimeRoot, index, state.modsSearchQuery, before, kModPageSize, state.modsCards, total, error, projectType, moreGameVersion, moreLoaderId)) {
             state.modsExhausted = true;
             return;
         }
         // keep paging CurseForge with its own offset so both sources grow
-        if (!CurseForgeApiKey(runtimeRoot).empty() && std::string(projectType) != "modpack") {
+        if (useCurseForge && !CurseForgeApiKey(runtimeRoot).empty() && std::string(projectType) != "modpack") {
             const int cfBefore = CountCurseForgeCards(state.modsCards);
             std::wstring cfError;
             int cfTotal = 0;
@@ -2459,7 +2537,7 @@ void ShowModsPage(
                         state.isError = false;
                         return;
                     }
-                    if (hid >= launchhit::kTabBase && hid < launchhit::kTabBase + 5) {
+                    if (hid >= launchhit::kTabBase && hid < launchhit::kTabBase + 7) {
                         const int tabIndex = hid - launchhit::kTabBase;
                         state.modsHoverTab = tabIndex;
                         if (apply) state.modsFocus = 0;
@@ -2480,6 +2558,16 @@ void ShowModsPage(
                     } else if (hid == launchhit::kSearch) {
                         if (apply) state.modsFocus = 1;
                         if (clicked) clickActivate = true;
+                    } else if (hid == launchhit::kSearchSource) {
+                        if (clicked) {
+                            state.modsSearchSource = (state.modsSearchSource + 1) % 3;
+                            WriteLogF(L"Search engine switch -> %d (0=both 1=modrinth 2=curseforge)",
+                                state.modsSearchSource);
+                            LoadModsTab(state, runtimeRoot, userModsDir);
+                            loadedQuery = state.modsSearchQuery;
+                            state.selectedModIndex = 0;
+                            state.modsScrollRow = 0;
+                        }
                     } else if (hid >= launchhit::kCardBase && hid < launchhit::kTargetItemBase) {
                         const int cardIndex = hid - launchhit::kCardBase;
                         if (apply && cardIndex >= 0 && cardIndex < count) {
@@ -2700,7 +2788,7 @@ void ShowModsPage(
                 state.modsScrollRow = nextScroll;
                 if (wheelNotches < 0 && state.modsScrollRow >= maxScrollRow &&
                     !state.modsExhausted &&
-                    (state.selectedModsTab == 1 || state.selectedModsTab == 2 || state.selectedModsTab == 4)) {
+                    (state.selectedModsTab == 1 || state.selectedModsTab == 2 || state.selectedModsTab >= 4)) {
                     loadMore();
                 }
             }
@@ -2708,12 +2796,12 @@ void ShowModsPage(
 
         if (state.modsFocus == 0) {
             if (upDown && !upWasDown) {
-                state.selectedModsTab = (state.selectedModsTab + 4) % 5;
+                state.selectedModsTab = (state.selectedModsTab + 6) % 7;
                 LoadModsTab(state, runtimeRoot, userModsDir);
                 loadedQuery = state.modsSearchQuery;
             }
             if (downDown && !downWasDown) {
-                state.selectedModsTab = (state.selectedModsTab + 1) % 5;
+                state.selectedModsTab = (state.selectedModsTab + 1) % 7;
                 LoadModsTab(state, runtimeRoot, userModsDir);
                 loadedQuery = state.modsSearchQuery;
             }
@@ -2817,7 +2905,7 @@ void ShowModsPage(
                 state.selectedModIndex = (std::max)(state.selectedModIndex - step, 0);
             }
 
-            if (!state.modsExhausted && (state.selectedModsTab == 1 || state.selectedModsTab == 2 || state.selectedModsTab == 4) && count > 0 &&
+            if (!state.modsExhausted && (state.selectedModsTab == 1 || state.selectedModsTab == 2 || state.selectedModsTab >= 4) && count > 0 &&
                 ((downDown && !downWasDown) || (pageDownDown && !pageDownWasDown))) {
                 const int lastRow = (count - 1) / 2;
                 if (state.selectedModIndex / 2 >= lastRow) {

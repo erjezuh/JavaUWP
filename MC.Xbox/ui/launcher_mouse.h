@@ -39,6 +39,7 @@ constexpr int kBack = 1;
 constexpr int kTarget = 2;
 constexpr int kSearch = 3;
 constexpr int kDetailInstall = 4;
+constexpr int kSearchSource = 5;
 constexpr int kProfilePlay = 10;
 constexpr int kProfileDelete = 11;
 constexpr int kProfileController = 12;

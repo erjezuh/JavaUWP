@@ -521,13 +521,13 @@ public:
             const float top = frame.top + 34.0f;
             const float buttonH = 58.0f;
             const float buttonGap = 22.0f;
-            const wchar_t* tabs[] = { L"Profiles", L"Popular", L"Latest", L"Recommended", L"Modpacks" };
+            const wchar_t* tabs[] = { L"Profiles", L"Popular", L"Latest", L"Recommended", L"Modpacks", L"Shaders", L"Resource Packs" };
 
             const D2D1_RECT_F modsBack = DrawBackChip(left, top, surfaceFill.Get(), softEdge.Get(), muted.Get());
             DrawText(L"Mods", titleFormat_.Get(), D2D1::RectF(modsBack.right + 16.0f, top, tabsRight, top + 48.0f), white.Get());
 
-            const wchar_t* tabIcons[] = { L"\uE8B7", L"\uE735", L"\uE823", L"\uEB52", L"\uE7B8" };
-            for (int i = 0; i < 5; ++i) {
+            const wchar_t* tabIcons[] = { L"\uE8B7", L"\uE735", L"\uE823", L"\uEB52", L"\uE7B8", L"\uE706", L"\uE8A9" };
+            for (int i = 0; i < 7; ++i) {
                 const float y = top + 76.0f + i * (buttonH + buttonGap);
                 const D2D1_RECT_F tab = D2D1::RectF(left, y, tabsRight, y + buttonH);
                 RegisterHit(launchhit::kTabBase + i, tab);
@@ -588,7 +588,8 @@ public:
                     targetFocused ? accent.Get() : muted.Get());
             }
 
-            const D2D1_RECT_F search = D2D1::RectF(inner.left, targetBox.bottom + 10.0f, inner.right, targetBox.bottom + 10.0f + searchH);
+            const float engineW = 210.0f;
+            const D2D1_RECT_F search = D2D1::RectF(inner.left, targetBox.bottom + 10.0f, inner.right - engineW - 10.0f, targetBox.bottom + 10.0f + searchH);
             RegisterHit(launchhit::kSearch, search);
             const bool searchFocused = state.modsFocus == 1;
             if (searchFocused) GlowSelect(search, 12.0f);
@@ -597,12 +598,29 @@ public:
             DrawIcon(L"\uE721", D2D1::RectF(search.left + 8.0f, search.top, search.left + 40.0f, search.bottom), searchFocused ? accent.Get() : muted.Get());
             {
                 const bool placeholder = state.modsSearchQuery.empty() && !state.modsSearchEditing;
-                const wchar_t* hint = state.selectedModsTab == 4 ? L"Search modpacks" : L"Search mods";
+                const wchar_t* hint = L"Search mods";
+                if (state.selectedModsTab == 4) hint = L"Search modpacks";
+                else if (state.selectedModsTab == 5) hint = L"Search shader packs";
+                else if (state.selectedModsTab == 6) hint = L"Search resource packs";
                 std::wstring shown = placeholder ? std::wstring(hint) : state.modsSearchQuery;
                 if (state.modsSearchEditing) shown += L"_";
                 DrawText(shown.c_str(), smallMid_.Get(),
                     D2D1::RectF(search.left + 44.0f, search.top, search.right - 12.0f, search.bottom),
                     placeholder ? muted.Get() : white.Get());
+            }
+
+            {
+                const D2D1_RECT_F engineBox = D2D1::RectF(search.right + 10.0f, search.top, inner.right, search.bottom);
+                RegisterHit(launchhit::kSearchSource, engineBox);
+                FillRound(engineBox, panel.Get(), 12.0f);
+                StrokeRound(engineBox, softEdge.Get(), 12.0f, 1.0f);
+                DrawIcon(L"\uE774", D2D1::RectF(engineBox.left + 8.0f, engineBox.top, engineBox.left + 40.0f, engineBox.bottom), accent.Get());
+                const wchar_t* engine = L"Both";
+                if (state.modsSearchSource == 1) engine = L"Modrinth";
+                else if (state.modsSearchSource == 2) engine = L"CurseForge";
+                DrawText(engine, smallMid_.Get(),
+                    D2D1::RectF(engineBox.left + 44.0f, engineBox.top, engineBox.right - 12.0f, engineBox.bottom),
+                    white.Get());
             }
 
             const float gridTop = search.bottom + 16.0f;
@@ -696,7 +714,9 @@ public:
             if (state.modsCards.empty()) {
                 const std::wstring emptyText = state.selectedModsTab == 0
                     ? L"No installed mods"
-                    : (state.selectedModsTab == 4 ? L"No modpacks found" : L"No mods found");
+                    : (state.selectedModsTab == 4 ? L"No modpacks found"
+                        : (state.selectedModsTab == 5 ? L"No shader packs found"
+                            : (state.selectedModsTab == 6 ? L"No resource packs found" : L"No mods found")));
                 DrawText(emptyText.c_str(), bodyFormat_.Get(),
                     D2D1::RectF(inner.left + 8.0f, gridTop + 8.0f, inner.right - 8.0f, gridTop + 70.0f),
                     muted.Get());

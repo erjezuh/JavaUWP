@@ -13,4 +13,7 @@ struct ModCard {
     std::wstring status;
     bool installed = false;
     bool isModpack = false;
+    // 0 = mod (game/mods), 1 = shader pack (game/shaderpacks),
+    // 2 = resource pack (game/resourcepacks).
+    int contentKind = 0;
 };
