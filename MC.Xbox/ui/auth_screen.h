@@ -62,66 +62,13 @@ public:
         renderWidthPx_ = ScaleToPixels(width_, displayScale_, 1280);
         renderHeightPx_ = ScaleToPixels(height_, displayScale_, 720);
 
-        const UINT flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
-        D3D_FEATURE_LEVEL levels[] = {
-            D3D_FEATURE_LEVEL_11_1,
-            D3D_FEATURE_LEVEL_11_0,
-            D3D_FEATURE_LEVEL_10_1,
-            D3D_FEATURE_LEVEL_10_0
-        };
         D3D_FEATURE_LEVEL level = D3D_FEATURE_LEVEL_11_0;
-        HRESULT hr = E_FAIL;
-        const bool preferWarp = false;
-        const D3D_DRIVER_TYPE driverOrder[] = {
-            preferWarp ? D3D_DRIVER_TYPE_WARP : D3D_DRIVER_TYPE_HARDWARE,
-            preferWarp ? D3D_DRIVER_TYPE_HARDWARE : D3D_DRIVER_TYPE_WARP
-        };
-        for (D3D_DRIVER_TYPE driverType : driverOrder) {
-            hr = D3D11CreateDevice(
-                nullptr,
-                driverType,
-                nullptr,
-                flags,
-                levels,
-                ARRAYSIZE(levels),
-                D3D11_SDK_VERSION,
-                d3dDevice_.ReleaseAndGetAddressOf(),
-                &level,
-                d3dContext_.ReleaseAndGetAddressOf());
-            if (SUCCEEDED(hr)) {
-                d3dDriverType_ = driverType;
-                break;
-            }
-            WriteLogF(L"Auth screen D3D11CreateDevice %s failed hr=0x%08X",
-                DriverTypeName(driverType), hr);
-        }
-        if (FAILED(hr)) {
-            WriteLogF(L"Auth screen D3D11CreateDevice failed for all drivers hr=0x%08X", hr);
-            return false;
-        }
-
-        hr = D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, d2dFactory_.GetAddressOf());
-        if (FAILED(hr)) {
-            WriteLogF(L"Auth screen D2D factory failed hr=0x%08X", hr);
-            return false;
-        }
+        if (!CreateDeviceResources(false, level)) return false;
 
         ComPtr<IDXGIDevice> dxgiDevice;
-        hr = d3dDevice_.As(&dxgiDevice);
+        HRESULT hr = d3dDevice_.As(&dxgiDevice);
         if (FAILED(hr)) {
             WriteLogF(L"Auth screen IDXGIDevice query failed hr=0x%08X", hr);
-            return false;
-        }
-
-        hr = d2dFactory_->CreateDevice(dxgiDevice.Get(), d2dDevice_.GetAddressOf());
-        if (FAILED(hr)) {
-            WriteLogF(L"Auth screen D2D device failed hr=0x%08X", hr);
-            return false;
-        }
-
-        hr = d2dDevice_->CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE, d2dContext_.GetAddressOf());
-        if (FAILED(hr)) {
-            WriteLogF(L"Auth screen D2D context failed hr=0x%08X", hr);
             return false;
         }
 
@@ -165,33 +112,82 @@ public:
 
         if (!CreateTargetBitmap()) return false;
 
-        hr = DWriteCreateFactory(
-            DWRITE_FACTORY_TYPE_SHARED,
-            __uuidof(IDWriteFactory),
-            reinterpret_cast<IUnknown**>(dwriteFactory_.GetAddressOf()));
-        if (FAILED(hr)) {
-            WriteLogF(L"Auth screen DWrite factory failed hr=0x%08X", hr);
-            return false;
-        }
-
-        hr = CoCreateInstance(
-            CLSID_WICImagingFactory,
-            nullptr,
-            CLSCTX_INPROC_SERVER,
-            IID_PPV_ARGS(wicFactory_.GetAddressOf()));
-        if (FAILED(hr)) {
-            WriteLogF(L"Auth screen WIC factory failed hr=0x%08X", hr);
-        }
-
-        CreateTextFormats();
         WriteLogF(L"Auth screen initialized %.0fx%.0f view, %ux%u backbuffer, scale=%.3f driver=%s featureLevel=0x%X",
             width_, height_, renderWidthPx_, renderHeightPx_, displayScale_,
             DriverTypeName(d3dDriverType_), static_cast<unsigned int>(level));
         return true;
     }
 
+    // renders into a bitmap for SaveFramePng, tools\ui-preview uses it to check layouts without an appx build
+    bool InitializeOffscreen(float viewW, float viewH, float scale) {
+        width_ = viewW;
+        height_ = viewH;
+        displayScale_ = scale > 0.0f ? scale : 1.0f;
+        renderWidthPx_ = ScaleToPixels(width_, displayScale_, 1280);
+        renderHeightPx_ = ScaleToPixels(height_, displayScale_, 720);
+
+        D3D_FEATURE_LEVEL level = D3D_FEATURE_LEVEL_11_0;
+        if (!CreateDeviceResources(true, level)) return false;
+
+        const float dpi = 96.0f * displayScale_;
+        const D2D1_BITMAP_PROPERTIES1 props = D2D1::BitmapProperties1(
+            D2D1_BITMAP_OPTIONS_TARGET,
+            D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_IGNORE),
+            dpi,
+            dpi);
+        const HRESULT hr = d2dContext_->CreateBitmap(
+            D2D1::SizeU(renderWidthPx_, renderHeightPx_), nullptr, 0, &props, targetBitmap_.GetAddressOf());
+        if (FAILED(hr)) {
+            WriteLogF(L"Auth screen offscreen target failed hr=0x%08X", hr);
+            return false;
+        }
+        d2dContext_->SetTarget(targetBitmap_.Get());
+        return true;
+    }
+
+    bool SaveFramePng(const std::wstring& path) {
+        if (!targetBitmap_ || !wicFactory_) return false;
+
+        const D2D1_BITMAP_PROPERTIES1 readProps = D2D1::BitmapProperties1(
+            D2D1_BITMAP_OPTIONS_CPU_READ | D2D1_BITMAP_OPTIONS_CANNOT_DRAW,
+            D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_IGNORE));
+        ComPtr<ID2D1Bitmap1> readable;
+        HRESULT hr = d2dContext_->CreateBitmap(
+            D2D1::SizeU(renderWidthPx_, renderHeightPx_), nullptr, 0, &readProps, readable.GetAddressOf());
+        if (FAILED(hr)) return false;
+        hr = readable->CopyFromBitmap(nullptr, targetBitmap_.Get(), nullptr);
+        if (FAILED(hr)) return false;
+
+        D2D1_MAPPED_RECT mapped = {};
+        hr = readable->Map(D2D1_MAP_OPTIONS_READ, &mapped);
+        if (FAILED(hr)) return false;
+
+        ComPtr<IWICBitmap> pixels;
+        ComPtr<IWICStream> stream;
+        ComPtr<IWICBitmapEncoder> encoder;
+        ComPtr<IWICBitmapFrameEncode> frame;
+        // the png encoder picks its own format, usually 24bpp. WritePixels would read this 32bpp
+        // buffer as 24bpp and smear every pixel, WriteSource converts
+        WICPixelFormatGUID format = GUID_WICPixelFormat32bppBGR;
+        hr = wicFactory_->CreateBitmapFromMemory(renderWidthPx_, renderHeightPx_, GUID_WICPixelFormat32bppBGR,
+            mapped.pitch, mapped.pitch * renderHeightPx_, mapped.bits, pixels.GetAddressOf());
+        if (SUCCEEDED(hr)) hr = wicFactory_->CreateStream(stream.GetAddressOf());
+        if (SUCCEEDED(hr)) hr = stream->InitializeFromFilename(path.c_str(), GENERIC_WRITE);
+        if (SUCCEEDED(hr)) hr = wicFactory_->CreateEncoder(GUID_ContainerFormatPng, nullptr, encoder.GetAddressOf());
+        if (SUCCEEDED(hr)) hr = encoder->Initialize(stream.Get(), WICBitmapEncoderNoCache);
+        if (SUCCEEDED(hr)) hr = encoder->CreateNewFrame(frame.GetAddressOf(), nullptr);
+        if (SUCCEEDED(hr)) hr = frame->Initialize(nullptr);
+        if (SUCCEEDED(hr)) hr = frame->SetSize(renderWidthPx_, renderHeightPx_);
+        if (SUCCEEDED(hr)) hr = frame->SetPixelFormat(&format);
+        if (SUCCEEDED(hr)) hr = frame->WriteSource(pixels.Get(), nullptr);
+        if (SUCCEEDED(hr)) hr = frame->Commit();
+        if (SUCCEEDED(hr)) hr = encoder->Commit();
+        readable->Unmap();
+        return SUCCEEDED(hr);
+    }
+
     void Render(const AuthUiState& state) {
-        if (!d2dContext_ || !swapChain_) return;
+        if (!d2dContext_ || !targetBitmap_) return;
         if (!EnsureRenderTargetSize()) return;
 
         mainMenuRectCount_ = 0;
@@ -248,6 +244,7 @@ public:
             if (FAILED(hr)) {
                 WriteLogF(L"Auth screen EndDraw failed hr=0x%08X", hr);
             }
+            if (!swapChain_) return;
             hr = swapChain_->Present(1, 0);
             if (FAILED(hr)) {
                 WriteLogF(L"Auth screen Present failed hr=0x%08X", hr);
@@ -1254,6 +1251,90 @@ private:
         WriteLogF(L"Auth screen resized %.0fx%.0f view, %ux%u backbuffer, scale=%.3f",
             width_, height_, renderWidthPx_, renderHeightPx_, displayScale_);
         return CreateTargetBitmap();
+    }
+
+    bool CreateDeviceResources(bool preferWarp, D3D_FEATURE_LEVEL& level) {
+        const UINT flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
+        D3D_FEATURE_LEVEL levels[] = {
+            D3D_FEATURE_LEVEL_11_1,
+            D3D_FEATURE_LEVEL_11_0,
+            D3D_FEATURE_LEVEL_10_1,
+            D3D_FEATURE_LEVEL_10_0
+        };
+        HRESULT hr = E_FAIL;
+        const D3D_DRIVER_TYPE driverOrder[] = {
+            preferWarp ? D3D_DRIVER_TYPE_WARP : D3D_DRIVER_TYPE_HARDWARE,
+            preferWarp ? D3D_DRIVER_TYPE_HARDWARE : D3D_DRIVER_TYPE_WARP
+        };
+        for (D3D_DRIVER_TYPE driverType : driverOrder) {
+            hr = D3D11CreateDevice(
+                nullptr,
+                driverType,
+                nullptr,
+                flags,
+                levels,
+                ARRAYSIZE(levels),
+                D3D11_SDK_VERSION,
+                d3dDevice_.ReleaseAndGetAddressOf(),
+                &level,
+                d3dContext_.ReleaseAndGetAddressOf());
+            if (SUCCEEDED(hr)) {
+                d3dDriverType_ = driverType;
+                break;
+            }
+            WriteLogF(L"Auth screen D3D11CreateDevice %s failed hr=0x%08X",
+                DriverTypeName(driverType), hr);
+        }
+        if (FAILED(hr)) {
+            WriteLogF(L"Auth screen D3D11CreateDevice failed for all drivers hr=0x%08X", hr);
+            return false;
+        }
+
+        hr = D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, d2dFactory_.GetAddressOf());
+        if (FAILED(hr)) {
+            WriteLogF(L"Auth screen D2D factory failed hr=0x%08X", hr);
+            return false;
+        }
+
+        ComPtr<IDXGIDevice> dxgiDevice;
+        hr = d3dDevice_.As(&dxgiDevice);
+        if (FAILED(hr)) {
+            WriteLogF(L"Auth screen IDXGIDevice query failed hr=0x%08X", hr);
+            return false;
+        }
+
+        hr = d2dFactory_->CreateDevice(dxgiDevice.Get(), d2dDevice_.GetAddressOf());
+        if (FAILED(hr)) {
+            WriteLogF(L"Auth screen D2D device failed hr=0x%08X", hr);
+            return false;
+        }
+
+        hr = d2dDevice_->CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE, d2dContext_.GetAddressOf());
+        if (FAILED(hr)) {
+            WriteLogF(L"Auth screen D2D context failed hr=0x%08X", hr);
+            return false;
+        }
+
+        hr = DWriteCreateFactory(
+            DWRITE_FACTORY_TYPE_SHARED,
+            __uuidof(IDWriteFactory),
+            reinterpret_cast<IUnknown**>(dwriteFactory_.GetAddressOf()));
+        if (FAILED(hr)) {
+            WriteLogF(L"Auth screen DWrite factory failed hr=0x%08X", hr);
+            return false;
+        }
+
+        hr = CoCreateInstance(
+            CLSID_WICImagingFactory,
+            nullptr,
+            CLSCTX_INPROC_SERVER,
+            IID_PPV_ARGS(wicFactory_.GetAddressOf()));
+        if (FAILED(hr)) {
+            WriteLogF(L"Auth screen WIC factory failed hr=0x%08X", hr);
+        }
+
+        CreateTextFormats();
+        return true;
     }
 
     bool CreateTargetBitmap() {
