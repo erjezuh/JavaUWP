@@ -52,7 +52,7 @@ try {
         $dllPath = Join-Path $OutputDir "$($t.Name).dll"
         $objPath = Join-Path $OutputDir "$($t.Name).obj"
         Write-Host "Building $($t.Name).dll (mod-compat stand-in)..."
-        & $tools.ClExe $t.Source /LD /EHsc /std:c++17 $CommonClFlags /O2 /GL /Gw /MT /DNDEBUG /D_UNICODE /DUNICODE /D_WIN32_WINNT=0x0A00 /I"$sdkRoot\Include\$sdkVer\um" /Fo"$objPath" `
+        & $tools.ClExe $t.Source /LD /EHsc /std:c++17 $CommonClFlags /O2 /GL /Gw /MT /DNDEBUG /D_UNICODE /DUNICODE /D_WIN32_WINNT=0x0A00 /I"$sdkRoot\Include\$sdkVer\um" /DEF:"$PSScriptRoot\$($t.Name).def" /Fo"$objPath" `
             /link /LTCG /OUT:"$dllPath" /MACHINE:X64 @($t.Libs)
         if ($LASTEXITCODE -ne 0) { throw "$($t.Name) compat build FAILED" }
         Write-Host "$($t.Name).dll built OK -> $dllPath"

@@ -1,0 +1,22 @@
+LIBRARY ole32
+EXPORTS
+    CoTaskMemAlloc=CompatCoTaskMemAlloc
+    CoTaskMemRealloc=CompatCoTaskMemRealloc
+    CoTaskMemFree=CompatCoTaskMemFree
+    CoCreateGuid=CompatCoCreateGuid
+    StringFromGUID2=CompatStringFromGUID2
+    CLSIDFromString=CompatCLSIDFromString
+    IIDFromString=CompatIIDFromString
+    StringFromCLSID=CompatStringFromCLSID
+    StringFromIID=CompatStringFromIID
+    CoInitializeEx=CompatCoInitializeEx
+    CoInitialize=CompatCoInitialize
+    CoUninitialize=CompatCoUninitialize
+    CoGetClassObject=CompatCoGetClassObject
+    CoCreateInstance=CompatCoCreateInstance
+    IsEqualGUID=CompatIsEqualGUID
+    IsEqualCLSID=CompatIsEqualCLSID
+    IsEqualIID=CompatIsEqualIID
+    CoFreeUnusedLibraries=CompatCoFreeUnusedLibraries
+    CoFreeUnusedLibrariesEx=CompatCoFreeUnusedLibrariesEx
+    CoGetCurrentProcess=CompatCoGetCurrentProcess

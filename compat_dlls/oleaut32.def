@@ -1,0 +1,13 @@
+LIBRARY oleaut32
+EXPORTS
+    SysAllocStringLen=CompatSysAllocStringLen
+    SysAllocString=CompatSysAllocString
+    SysAllocStringByteLen=CompatSysAllocStringByteLen
+    SysFreeString=CompatSysFreeString
+    SysStringLen=CompatSysStringLen
+    SysStringByteLen=CompatSysStringByteLen
+    VariantInit=CompatVariantInit
+    VariantClear=CompatVariantClear
+    VariantCopy=CompatVariantCopy
+    VariantChangeType=CompatVariantChangeType
+    VariantChangeTypeEx=CompatVariantChangeTypeEx

@@ -2,6 +2,9 @@
 // Same role as ole32.cpp: staged only when the system DLL cannot be loaded.
 // Implements the BSTR string family and basic VARIANT handling (the surface
 // JNA's W32API/Platform helpers use); anything else fails cleanly.
+//
+// Implementations use Compat* names (oleaut32.def exports the real ones) to
+// stay clear of the SDK's dllimport declarations in oleauto.h.
 
 #include <windows.h>
 
@@ -35,7 +38,6 @@ struct ComVariant {
 
 static_assert(sizeof(ComVariant) == 16, "VARIANT layout");
 
-const unsigned short kVtEmpty = 0;
 const unsigned short kVtBstr = 8;
 
 // BSTR allocation: [DWORD byte-length][UTF-16 data][NUL wchar], returned
@@ -46,7 +48,7 @@ struct BstrPrefix {
 
 } // namespace
 
-extern "C" __declspec(dllexport) wchar_t* WINAPI SysAllocStringLen(const wchar_t* strIn, UINT ui) {
+extern "C" wchar_t* CompatSysAllocStringLen(const wchar_t* strIn, UINT ui) {
     const size_t bytes = static_cast<size_t>(ui) * sizeof(wchar_t);
     char* raw = static_cast<char*>(HeapAlloc(GetProcessHeap(), 0,
         sizeof(BstrPrefix) + bytes + sizeof(wchar_t)));
@@ -59,11 +61,11 @@ extern "C" __declspec(dllexport) wchar_t* WINAPI SysAllocStringLen(const wchar_t
     return data;
 }
 
-extern "C" __declspec(dllexport) wchar_t* WINAPI SysAllocString(const wchar_t* strIn) {
-    return SysAllocStringLen(strIn, strIn ? static_cast<UINT>(wcslen(strIn)) : 0);
+extern "C" wchar_t* CompatSysAllocString(const wchar_t* strIn) {
+    return CompatSysAllocStringLen(strIn, strIn ? static_cast<UINT>(wcslen(strIn)) : 0);
 }
 
-extern "C" __declspec(dllexport) wchar_t* WINAPI SysAllocStringByteLen(LPCSTR strIn, UINT ui) {
+extern "C" wchar_t* CompatSysAllocStringByteLen(LPCSTR strIn, UINT ui) {
     char* raw = static_cast<char*>(HeapAlloc(GetProcessHeap(), 0,
         sizeof(BstrPrefix) + ui + sizeof(wchar_t)));
     if (!raw) return nullptr;
@@ -75,51 +77,52 @@ extern "C" __declspec(dllexport) wchar_t* WINAPI SysAllocStringByteLen(LPCSTR st
     return data;
 }
 
-extern "C" __declspec(dllexport) void WINAPI SysFreeString(wchar_t* bstr) {
+extern "C" void CompatSysFreeString(wchar_t* bstr) {
     if (!bstr) return;
     char* raw = reinterpret_cast<char*>(bstr) - sizeof(BstrPrefix);
     HeapFree(GetProcessHeap(), 0, raw);
 }
 
-extern "C" __declspec(dllexport) UINT WINAPI SysStringLen(wchar_t* bstr) {
+extern "C" UINT CompatSysStringLen(wchar_t* bstr) {
     if (!bstr) return 0;
     const BstrPrefix* prefix = reinterpret_cast<const BstrPrefix*>(
         reinterpret_cast<const char*>(bstr) - sizeof(BstrPrefix));
     return static_cast<UINT>(prefix->byteLen / sizeof(wchar_t));
 }
 
-extern "C" __declspec(dllexport) UINT WINAPI SysStringByteLen(wchar_t* bstr) {
+extern "C" UINT CompatSysStringByteLen(wchar_t* bstr) {
     if (!bstr) return 0;
     const BstrPrefix* prefix = reinterpret_cast<const BstrPrefix*>(
         reinterpret_cast<const char*>(bstr) - sizeof(BstrPrefix));
     return prefix->byteLen;
 }
 
-extern "C" __declspec(dllexport) void WINAPI VariantInit(ComVariant* pvarg) {
+extern "C" void CompatVariantInit(ComVariant* pvarg) {
     if (pvarg) memset(pvarg, 0, sizeof(ComVariant));
 }
 
-extern "C" __declspec(dllexport) HRESULT WINAPI VariantClear(ComVariant* pvarg) {
+extern "C" HRESULT CompatVariantClear(ComVariant* pvarg) {
     if (!pvarg) return kInvalidArgument;
     if (pvarg->vt == kVtBstr && pvarg->u.bstrVal) {
-        SysFreeString(pvarg->u.bstrVal);
+        CompatSysFreeString(pvarg->u.bstrVal);
     }
     memset(pvarg, 0, sizeof(ComVariant));
     return S_OK;
 }
 
-extern "C" __declspec(dllexport) HRESULT WINAPI VariantCopy(ComVariant* pdst, const ComVariant* psrc) {
+extern "C" HRESULT CompatVariantCopy(ComVariant* pdst, const ComVariant* psrc) {
     if (!pdst || !psrc) return kInvalidArgument;
-    VariantClear(pdst);
+    CompatVariantClear(pdst);
     *pdst = *psrc;
     if (psrc->vt == kVtBstr && psrc->u.bstrVal) {
-        pdst->u.bstrVal = SysAllocStringLen(psrc->u.bstrVal, SysStringLen(const_cast<wchar_t*>(psrc->u.bstrVal)));
+        pdst->u.bstrVal = CompatSysAllocStringLen(psrc->u.bstrVal,
+            CompatSysStringLen(const_cast<wchar_t*>(psrc->u.bstrVal)));
         if (!pdst->u.bstrVal) return kOutOfMemory;
     }
     return S_OK;
 }
 
-extern "C" __declspec(dllexport) HRESULT WINAPI VariantChangeType(
+extern "C" HRESULT CompatVariantChangeType(
     ComVariant* pdst, const ComVariant* psrc, unsigned short, unsigned short vt) {
     (void)pdst; (void)psrc; (void)vt;
     // Conversions beyond identity are not provided; callers see a clean
@@ -127,7 +130,7 @@ extern "C" __declspec(dllexport) HRESULT WINAPI VariantChangeType(
     return kTypeMismatch;
 }
 
-extern "C" __declspec(dllexport) HRESULT WINAPI VariantChangeTypeEx(
+extern "C" HRESULT CompatVariantChangeTypeEx(
     ComVariant* pdst, const ComVariant* psrc, unsigned long, unsigned short, unsigned short vt) {
     (void)pdst; (void)psrc; (void)vt;
     return kTypeMismatch;

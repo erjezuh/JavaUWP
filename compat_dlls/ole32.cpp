@@ -9,6 +9,10 @@
 // Strategy: implement the trivial pieces directly (memory, GUIDs) and forward
 // COM activation to combase.dll dynamically when the console provides it;
 // otherwise return clean COM failures instead of crashing.
+//
+// IMPORTANT: the SDK (combaseapi.h) declares the real Co*/String* entry points
+// as dllimport, so the implementations use Compat* names and ole32.def maps
+// the exported names onto them.
 
 #include <windows.h>
 #include <bcrypt.h>
@@ -38,12 +42,12 @@ const HRESULT kOutOfMemory = static_cast<HRESULT>(0x8007000E);        // E_OUTOF
 
 } // namespace
 
-extern "C" __declspec(dllexport) void* WINAPI CoTaskMemAlloc(SIZE_T cb) {
+extern "C" void* CompatCoTaskMemAlloc(SIZE_T cb) {
     return HeapAlloc(GetProcessHeap(), 0, cb ? cb : 1);
 }
 
-extern "C" __declspec(dllexport) void* WINAPI CoTaskMemRealloc(void* pv, SIZE_T cb) {
-    if (!pv) return CoTaskMemAlloc(cb);
+extern "C" void* CompatCoTaskMemRealloc(void* pv, SIZE_T cb) {
+    if (!pv) return CompatCoTaskMemAlloc(cb);
     if (cb == 0) {
         HeapFree(GetProcessHeap(), 0, pv);
         return nullptr;
@@ -51,11 +55,11 @@ extern "C" __declspec(dllexport) void* WINAPI CoTaskMemRealloc(void* pv, SIZE_T 
     return HeapReAlloc(GetProcessHeap(), 0, pv, cb);
 }
 
-extern "C" __declspec(dllexport) void WINAPI CoTaskMemFree(void* pv) {
+extern "C" void CompatCoTaskMemFree(void* pv) {
     if (pv) HeapFree(GetProcessHeap(), 0, pv);
 }
 
-extern "C" __declspec(dllexport) HRESULT WINAPI CoCreateGuid(GUID* pguid) {
+extern "C" HRESULT CompatCoCreateGuid(GUID* pguid) {
     if (!pguid) return kInvalidArgument;
     using Fn = HRESULT(WINAPI*)(GUID*);
     if (Fn real = CombaseProc<Fn>("CoCreateGuid")) {
@@ -71,7 +75,7 @@ extern "C" __declspec(dllexport) HRESULT WINAPI CoCreateGuid(GUID* pguid) {
     return S_OK;
 }
 
-extern "C" __declspec(dllexport) int WINAPI StringFromGUID2(const GUID* pguid, wchar_t* out, int cchMax) {
+extern "C" int CompatStringFromGUID2(const GUID* pguid, wchar_t* out, int cchMax) {
     if (!pguid || !out || cchMax < 39) return 0;
     swprintf_s(out, cchMax,
         L"{%08X-%04X-%04X-%02X%02X-%02X%02X%02X%02X%02X%02X}",
@@ -100,56 +104,55 @@ static bool ParseGuidText(const wchar_t* s, GUID* pguid) {
     return true;
 }
 
-extern "C" __declspec(dllexport) HRESULT WINAPI CLSIDFromString(const wchar_t* str, GUID* pguid) {
+extern "C" HRESULT CompatCLSIDFromString(const wchar_t* str, GUID* pguid) {
     if (!ParseGuidText(str, pguid)) return kInvalidArgument;
     return S_OK;
 }
 
-extern "C" __declspec(dllexport) HRESULT WINAPI IIDFromString(const wchar_t* str, GUID* piid) {
-    return CLSIDFromString(str, piid);
+extern "C" HRESULT CompatIIDFromString(const wchar_t* str, GUID* piid) {
+    return CompatCLSIDFromString(str, piid);
 }
 
-extern "C" __declspec(dllexport) HRESULT WINAPI StringFromCLSID(const GUID* pguid, wchar_t** ppsz) {
+extern "C" HRESULT CompatStringFromCLSID(const GUID* pguid, wchar_t** ppsz) {
     if (!ppsz) return kInvalidArgument;
     *ppsz = nullptr;
-    wchar_t* out = static_cast<wchar_t*>(CoTaskMemAlloc(39 * sizeof(wchar_t)));
+    wchar_t* out = static_cast<wchar_t*>(CompatCoTaskMemAlloc(39 * sizeof(wchar_t)));
     if (!out) return kOutOfMemory;
-    if (!StringFromGUID2(pguid, out, 39)) {
-        CoTaskMemFree(out);
+    if (!CompatStringFromGUID2(pguid, out, 39)) {
+        CompatCoTaskMemFree(out);
         return kInvalidArgument;
     }
     *ppsz = out;
     return S_OK;
 }
 
-extern "C" __declspec(dllexport) HRESULT WINAPI StringFromIID(const GUID* piid, wchar_t** ppsz) {
-    return StringFromCLSID(piid, ppsz);
+extern "C" HRESULT CompatStringFromIID(const GUID* piid, wchar_t** ppsz) {
+    return CompatStringFromCLSID(piid, ppsz);
 }
 
-extern "C" __declspec(dllexport) HRESULT WINAPI CoInitializeEx(void* pvReserved, DWORD dwCoInit) {
+extern "C" HRESULT CompatCoInitializeEx(void* pvReserved, DWORD dwCoInit) {
     using Fn = HRESULT(WINAPI*)(void*, DWORD);
     if (Fn real = CombaseProc<Fn>("RoInitialize")) {
-        // RoInitialize only accepts single-threaded/multi-threaded styles and
-        // returns S_FALSE/S_OK/RPC_E_CHANGED_MODE like CoInitializeEx for the
-        // cases mods use.
+        // RoInitialize accepts single/multi-threaded styles and answers
+        // S_OK/S_FALSE/RPC_E_CHANGED_MODE like CoInitializeEx for the cases
+        // mods use.
         const DWORD mapped = (dwCoInit & 0x2) ? 1 /* multi-threaded */ : 0;
-        const HRESULT hr = real(mapped);
-        return hr;
+        return real(mapped);
     }
     (void)pvReserved;
     return S_OK;
 }
 
-extern "C" __declspec(dllexport) HRESULT WINAPI CoInitialize(void* pvReserved) {
-    return CoInitializeEx(pvReserved, 0x2);
+extern "C" HRESULT CompatCoInitialize(void* pvReserved) {
+    return CompatCoInitializeEx(pvReserved, 0x2);
 }
 
-extern "C" __declspec(dllexport) void WINAPI CoUninitialize() {
+extern "C" void CompatCoUninitialize() {
     using Fn = void(WINAPI*)();
     if (Fn real = CombaseProc<Fn>("RoUninitialize")) real();
 }
 
-extern "C" __declspec(dllexport) HRESULT WINAPI CoGetClassObject(
+extern "C" HRESULT CompatCoGetClassObject(
     const GUID* rclsid, DWORD dwClsContext, void* pvReserved, const GUID* riid, void** ppv) {
     using Fn = HRESULT(WINAPI*)(const GUID*, DWORD, void*, const GUID*, void**);
     if (Fn real = CombaseProc<Fn>("CoGetClassObject")) {
@@ -160,7 +163,7 @@ extern "C" __declspec(dllexport) HRESULT WINAPI CoGetClassObject(
     return kClassNotRegistered;
 }
 
-extern "C" __declspec(dllexport) HRESULT WINAPI CoCreateInstance(
+extern "C" HRESULT CompatCoCreateInstance(
     const GUID* rclsid, void* pUnkOuter, DWORD dwClsContext, const GUID* riid, void** ppv) {
     using Fn = HRESULT(WINAPI*)(const GUID*, void*, DWORD, const GUID*, void**);
     if (Fn real = CombaseProc<Fn>("CoCreateInstance")) {
@@ -170,28 +173,28 @@ extern "C" __declspec(dllexport) HRESULT WINAPI CoCreateInstance(
     return kClassNotRegistered;
 }
 
-extern "C" __declspec(dllexport) int WINAPI IsEqualGUID(const GUID* a, const GUID* b) {
+extern "C" int CompatIsEqualGUID(const GUID* a, const GUID* b) {
     if (!a || !b) return 0;
     return memcmp(a, b, sizeof(GUID)) == 0;
 }
 
-extern "C" __declspec(dllexport) int WINAPI IsEqualCLSID(const GUID* a, const GUID* b) {
-    return IsEqualGUID(a, b);
+extern "C" int CompatIsEqualCLSID(const GUID* a, const GUID* b) {
+    return CompatIsEqualGUID(a, b);
 }
 
-extern "C" __declspec(dllexport) int WINAPI IsEqualIID(const GUID* a, const GUID* b) {
-    return IsEqualGUID(a, b);
+extern "C" int CompatIsEqualIID(const GUID* a, const GUID* b) {
+    return CompatIsEqualGUID(a, b);
 }
 
-extern "C" __declspec(dllexport) HRESULT WINAPI CoFreeUnusedLibraries() {
+extern "C" HRESULT CompatCoFreeUnusedLibraries() {
     return S_OK;
 }
 
-extern "C" __declspec(dllexport) HRESULT WINAPI CoFreeUnusedLibrariesEx(DWORD, DWORD) {
+extern "C" HRESULT CompatCoFreeUnusedLibrariesEx(DWORD, DWORD) {
     return S_OK;
 }
 
-extern "C" __declspec(dllexport) DWORD WINAPI CoGetCurrentProcess() {
+extern "C" DWORD CompatCoGetCurrentProcess() {
     return GetCurrentProcessId();
 }
 
