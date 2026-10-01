@@ -1845,6 +1845,22 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
         ? jreDir + L"\\lib\\security"
         : jreDir + L"\\conf\\security";
     vmOptionStorage.push_back("-Djava.security.properties=" + w2a(fwd(javaSecurityDir + L"\\xbox.properties")));
+    // Deterministic HTTPS trust store (skins, session profile lookup): point at
+    // the packaged cacerts explicitly so a stray jssecacerts cannot shadow it.
+    // Runtime repair (LegacySslFixer on 1.12.2) can still override these.
+    {
+        const std::wstring cacertsCandidates[] = {
+            jreDir + L"\\lib\\security\\cacerts",
+            jreDir + L"\\conf\\security\\cacerts",
+        };
+        for (const std::wstring& cacerts : cacertsCandidates) {
+            if (GetFileAttributesW(cacerts.c_str()) != INVALID_FILE_ATTRIBUTES) {
+                vmOptionStorage.push_back("-Djavax.net.ssl.trustStore=" + w2a(fwd(cacerts)));
+                WriteLogF(L"HTTPS trust store pinned: %s", cacerts.c_str());
+                break;
+            }
+        }
+    }
     if (legacyJava8) {
         WriteLog(L"Java security properties loaded as an additive override for legacy Java 8");
     }

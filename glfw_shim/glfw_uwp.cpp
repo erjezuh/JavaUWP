@@ -516,6 +516,10 @@ static EventRegistrationToken g_mouseMovedToken = {};
 static int g_mouse_log_count = 0;
 static int g_menu_abs_log_count = 0;
 static unsigned char g_mouse_state[8] = {};
+// Per-button source mark: 1 = last change came from the companion relay.
+// Only relay-sourced buttons may be force-released when the relay goes quiet;
+// faking releases for host (USB) buttons mid-hold breaks mining/walking.
+static unsigned char g_mouse_button_relay[8] = {};
 static ComPtr<CoreWindowPointerHandler> g_pointerCaptureLostHandler;
 static EventRegistrationToken g_pointerCaptureLostToken = {};
 static ComPtr<CoreWindowPointerHandler> g_pointerEnteredHandler;
@@ -2270,7 +2274,10 @@ static double CurrentPointerScaleY() {
 static void DispatchCursorEnter(bool entered) {
     if (g_cursor_inside == entered) return;
     g_cursor_inside = entered;
-    if (g_cursorenter_cb && MouseCompanionActive()) {
+    // Game callbacks must fire for EVERY real event source (USB/host pointer,
+    // companion relay, controller bridge). Gating them on companion activity
+    // froze GLFW games (1.20.1+) whenever input paused for >3s.
+    if (g_cursorenter_cb) {
         g_cursorenter_cb((GLFWwindow*)&g_fake_window, entered ? GLFW_TRUE : GLFW_FALSE);
     }
 }
@@ -2299,7 +2306,7 @@ static void DispatchCursorPosInternal(double x, double y, bool updateOverlayPosi
     }
 
     DispatchCursorEnter(true);
-    if (g_cursorpos_cb && MouseCompanionActive()) {
+    if (g_cursorpos_cb) {
         g_cursorpos_cb((GLFWwindow*)&g_fake_window, g_cursor_x, g_cursor_y);
     }
 }
@@ -2406,7 +2413,9 @@ static void DispatchMouseWindowAbsolute(double x, double y) {
     }
 }
 static void FireRemoteMouseButtonCallback(int button, int action) {
-    if (g_mousebutton_cb && MouseCompanionActive()) {
+    // Unconditional: menus in GLFW games (1.20.1+) are click-driven and were
+    // dead for USB/host mice whenever the companion relay had been idle.
+    if (g_mousebutton_cb) {
         const int mods = CurrentGlfwMods();
         g_mousebutton_cb((GLFWwindow*)&g_fake_window, button, action, mods);
     }
@@ -2417,6 +2426,7 @@ static void SetRemoteMouseButtonState(int button, int action) {
     if (g_mouse_state[button] == state) return;
 
     g_mouse_state[button] = state;
+    g_mouse_button_relay[button] = 1;
     FireRemoteMouseButtonCallback(button, action);
 }
 static void SetMouseButtonState(int button, int action, bool fireCallback) {
@@ -2425,6 +2435,7 @@ static void SetMouseButtonState(int button, int action, bool fireCallback) {
     if (g_mouse_state[button] == state) return;
 
     g_mouse_state[button] = state;
+    g_mouse_button_relay[button] = 0;
     if (fireCallback) {
         FireRemoteMouseButtonCallback(button, state);
     }
@@ -2449,9 +2460,13 @@ static bool HostPointerFresh() {
     return (DWORD)(GetTickCount() - (DWORD)last) <= kMouseCompanionTimeoutMs;
 }
 static void FlushMouseButtonsForDeactivate() {
+    // Only relay-sourced buttons: the companion disappearing mid-hold is a
+    // real release, but host (USB/controller) buttons must keep their true
+    // state — faking a release here stopped mining/walking after ~3s of hold.
     for (int i = 0; i < (int)sizeof(g_mouse_state); ++i) {
-        if (g_mouse_state[i]) {
+        if (g_mouse_state[i] && g_mouse_button_relay[i]) {
             g_mouse_state[i] = GLFW_RELEASE;
+            g_mouse_button_relay[i] = 0;
             if (g_mousebutton_cb) {
                 g_mousebutton_cb((GLFWwindow*)&g_fake_window, i, GLFW_RELEASE, CurrentGlfwMods());
             }
@@ -2494,7 +2509,7 @@ static void DrainRemoteMouseInput() {
     if (frame.wheel != 0.0) {
         AccumulateLegacyScroll(0.0, frame.wheel);
     }
-    if (frame.wheel != 0.0 && g_scroll_cb && MouseCompanionActive()) {
+    if (frame.wheel != 0.0 && g_scroll_cb) {
         g_scroll_cb((GLFWwindow*)&g_fake_window, 0.0, frame.wheel);
         activity = true;
     }
@@ -2690,7 +2705,7 @@ static void HandlePointerEvent(IPointerEventArgs* args, PointerDispatchKind kind
             if (SUCCEEDED(props->get_MouseWheelDelta(&wheelDelta)) && wheelDelta != 0) {
                 const double offset = (double)wheelDelta / 120.0;
                 AccumulateLegacyScroll(horizontal ? offset : 0.0, horizontal ? 0.0 : offset);
-                if (g_scroll_cb && MouseCompanionActive()) {
+                if (g_scroll_cb) {
                     g_scroll_cb((GLFWwindow*)&g_fake_window, horizontal ? offset : 0.0, horizontal ? 0.0 : offset);
                 }
             }
@@ -2825,7 +2840,7 @@ static void PollGameInputMouse() {
     if (wheelX || wheelY) {
         AccumulateLegacyScroll((double)wheelX / 120.0, (double)wheelY / 120.0);
     }
-    if ((wheelX || wheelY) && g_scroll_cb && MouseCompanionActive()) {
+    if ((wheelX || wheelY) && g_scroll_cb) {
         g_scroll_cb((GLFWwindow*)&g_fake_window, (double)wheelX, (double)wheelY);
     }
 
