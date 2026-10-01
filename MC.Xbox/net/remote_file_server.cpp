@@ -2,6 +2,8 @@
 
 #include "http_client.h"
 #include "launcher_common.h"
+#include "manual_downloads.h"
+#include "mod_source.h"
 #include "modpack_io.h"
 #include "profiles.h"
 #include "world_io.h"
@@ -434,12 +436,16 @@ private:
 
     bool Authorized(const std::string& query, const std::string& body) const {
         if (QueryValue(query, "pin") == pin_) return true;
-        return body.find("name=\"pin\"\r\n\r\n" + pin_) != std::string::npos;
+        // multipart uploads carry the pin as a part, plain forms as an urlencoded field
+        if (body.find("name=\"pin\"\r\n\r\n" + pin_) != std::string::npos) return true;
+        return !pin_.empty() && FormFieldValue(body, "pin") == pin_;
     }
 
     static bool SuppliedPin(const std::string& query, const std::string& body) {
         if (!QueryValue(query, "pin").empty()) return true;
-        return body.find("name=\"pin\"\r\n\r\n") != std::string::npos;
+        if (body.find("name=\"pin\"\r\n\r\n") != std::string::npos) return true;
+        if (body.compare(0, 4, "pin=") == 0) return true;
+        return body.find("&pin=") != std::string::npos;
     }
 
     static std::string FormatPeer(unsigned long peer) {
@@ -579,6 +585,12 @@ private:
             HandleModpackUpload(s, headers, body);
         } else if (method == "POST" && path == "/export-pack") {
             HandleExportPack(s, body);
+        } else if (method == "GET" && path == "/set-curseforge-key") {
+            ServeCurseForgeKeyPage(s, query);
+        } else if (method == "POST" && path == "/set-curseforge-key") {
+            HandleSetCurseForgeKey(s, body);
+        } else if (method == "POST" && path == "/clear-manual-downloads") {
+            HandleClearManualDownloads(s, body);
         } else if (method == "POST" && path == "/export-world") {
             HandleExportWorld(s, body);
         } else if (method == "POST" && path == "/upload-world") {
@@ -754,15 +766,104 @@ private:
 
     std::string ModpackImportHtml(const std::wstring& profileId) {
         std::ostringstream out;
-        out << "<section class=\"panel\"><h3>Import Modrinth pack</h3>"
+        out << "<section class=\"panel\"><h3>Import modpack</h3>"
             << "<form method=\"post\" action=\"/upload-modpack\" enctype=\"multipart/form-data\">"
             << "<input type=\"hidden\" name=\"pin\" value=\"" << pin_ << "\">"
             << "<input type=\"hidden\" name=\"profile\" value=\"" << HtmlEscape(profileId) << "\">"
-            << "<div class=\"field\"><label for=\"modpackfile\">Modrinth .mrpack</label>"
-            << "<div class=\"upload\"><input id=\"modpackfile\" type=\"file\" name=\"file\" accept=\".mrpack\"><button>Import pack</button></div></div>"
+            << "<div class=\"field\"><label for=\"modpackfile\">Modrinth .mrpack or CurseForge .zip</label>"
+            << "<div class=\"upload\"><input id=\"modpackfile\" type=\"file\" name=\"file\" accept=\".mrpack,.zip\"><button>Import pack</button></div></div>"
             << "</form>"
-            << "<p class=\"muted\">Installs into the selected profile. Large packs can take several minutes.</p></section>";
+            << "<p class=\"muted\">Installs into the selected profile. Large packs can take several minutes. "
+            << "A CurseForge pack needs an API key set below.</p></section>";
         return out.str();
+    }
+
+    std::string ManualDownloadsHtml(const std::wstring& profileId) {
+        const std::vector<ManualDownload> pending = PendingManualDownloads(runtimeRoot_, profileId);
+        if (pending.empty()) return std::string();
+
+        std::ostringstream out;
+        out << "<section class=\"panel\"><h3>Manual downloads ("
+            << pending.size() << ")</h3>"
+            << "<p class=\"muted\">These mods block third party launchers, so CurseForge will not serve them to the Xbox. "
+            << "Open each link on this PC, download the jar, then drop it into Upload mod above. "
+            << "A row disappears once its jar lands in the profile.</p><div class=\"world-list\">";
+        for (const ManualDownload& item : pending) {
+            out << "<div class=\"world-card\"><div><strong>" << HtmlEscape(item.fileName) << "</strong>"
+                << "<div class=\"muted\">Missing from this profile</div></div><div class=\"world-actions\">"
+                << "<a class=\"button secondary\" href=\"" << HtmlEscape(item.url)
+                << "\" target=\"_blank\" rel=\"noopener noreferrer\">Get it on CurseForge</a></div></div>";
+        }
+        out << "</div><div class=\"toolbar\" style=\"margin-top:12px\">"
+            << "<form method=\"post\" action=\"/clear-manual-downloads\">"
+            << "<input type=\"hidden\" name=\"pin\" value=\"" << pin_ << "\">"
+            << "<input type=\"hidden\" name=\"profile\" value=\"" << HtmlEscape(profileId) << "\">"
+            << "<button class=\"secondary\">Forget this list</button></form></div></section>";
+        return out.str();
+    }
+
+    void HandleClearManualDownloads(SOCKET s, const std::string& body) {
+        if (!Authorized("", body)) {
+            SendHttpResponse(s, 401, "Unauthorized", "text/html; charset=utf-8", Layout("Unauthorized", "<h1>Unauthorized</h1>"));
+            return;
+        }
+        const std::wstring profileId = a2w(FormFieldValue(body, "profile").c_str());
+        ClearManualDownloads(profileId);
+        SendHttpResponse(s, 200, "OK", "text/html; charset=utf-8",
+            Layout("List cleared", "<h1>List cleared</h1><p><a href=\"" + UrlWithPin("/") + "\">Back to the dashboard</a></p>"));
+    }
+
+    std::string CurseForgeKeyHtml() {
+        std::ostringstream out;
+        const std::wstring hint = modsource::CurseForgeKeyHint();
+        out << "<section class=\"panel\"><h3>CurseForge API key</h3>"
+            << "<p class=\"muted\">CurseForge will not let a launcher ship its own key, so browsing and "
+            << "downloading from CurseForge needs one of yours. Make a free Core API key at "
+            << "<code>console.curseforge.com</code> and paste it here.</p>";
+        if (hint.empty()) {
+            out << "<p class=\"muted\">No key is set. CurseForge is unavailable until one is.</p>";
+        } else {
+            out << "<p class=\"muted\">A key is saved (" << HtmlEscape(hint) << ").</p>";
+        }
+        out << "<form method=\"post\" action=\"/set-curseforge-key\">"
+            << "<input type=\"hidden\" name=\"pin\" value=\"" << pin_ << "\">"
+            << "<div class=\"field\"><label for=\"cfkey\">API key</label>"
+            << "<input id=\"cfkey\" name=\"key\" type=\"password\" autocomplete=\"off\" spellcheck=\"false\" placeholder=\"paste key\"></div>"
+            << "<div class=\"toolbar\"><button>Save key</button></div></form>"
+            << "<form method=\"post\" action=\"/set-curseforge-key\" style=\"margin-top:8px\">"
+            << "<input type=\"hidden\" name=\"pin\" value=\"" << pin_ << "\">"
+            << "<input type=\"hidden\" name=\"key\" value=\"\">"
+            << "<button class=\"secondary\">Clear key</button></form></section>";
+        return out.str();
+    }
+
+    void ServeCurseForgeKeyPage(SOCKET s, const std::string& query) {
+        if (!Authorized(query, "")) {
+            SendHttpResponse(s, 401, "Unauthorized", "text/html; charset=utf-8", Layout("Unauthorized", "<h1>Unauthorized</h1>"));
+            return;
+        }
+        std::ostringstream body;
+        body << "<main><div class=\"top\"><div><h1>CurseForge API key</h1>"
+            << "<div class=\"muted\">The key is saved on the Xbox and never leaves it except as a request header.</div></div>"
+            << "<div class=\"hero-actions\"><a class=\"pill\" href=\"" << UrlWithPin("/") << "\">Back to dashboard</a></div></div>"
+            << "<div class=\"content\">" << CurseForgeKeyHtml() << "</div></main>";
+        SendHttpResponse(s, 200, "OK", "text/html; charset=utf-8", Layout("CurseForge API key", body.str()));
+    }
+
+    void HandleSetCurseForgeKey(SOCKET s, const std::string& body) {
+        if (!Authorized("", body)) {
+            SendHttpResponse(s, 401, "Unauthorized", "text/html; charset=utf-8", Layout("Unauthorized", "<h1>Unauthorized</h1>"));
+            return;
+        }
+        const std::string key = FormFieldValue(body, "key");
+        if (!modsource::SetCurseForgeKey(key)) {
+            SendHttpResponse(s, 500, "Internal Server Error", "text/html; charset=utf-8",
+                Layout("Key not saved", "<h1>Key not saved</h1><p>The key could not be written to storage.</p>"));
+            return;
+        }
+        const std::string title = key.empty() ? "Key cleared" : "Key saved";
+        SendHttpResponse(s, 200, "OK", "text/html; charset=utf-8",
+            Layout(title, "<h1>" + title + "</h1><p><a href=\"" + UrlWithPin("/") + "\">Back to the dashboard</a></p>"));
     }
 
     void HandleExportWorld(SOCKET s, const std::string& body) {
@@ -1061,6 +1162,8 @@ private:
             << "</form></section>"
             << ExportPackHtml(profileId)
             << ModpackImportHtml(profileId)
+            << ManualDownloadsHtml(profileId)
+            << CurseForgeKeyHtml()
             << "</div></section>"
             << "<section class=\"section\"><div class=\"section-head\"><div><h2>Browse folders</h2>"
             << "<p class=\"section-note\">Inspect files directly when you need more than the quick actions above.</p></div></div><div class=\"tiles\">"

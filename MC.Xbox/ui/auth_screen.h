@@ -527,8 +527,31 @@ public:
             DrawText(L"Mods", titleFormat_.Get(), D2D1::RectF(modsBack.right + 16.0f, top, tabsRight, top + 48.0f), white.Get());
 
             const wchar_t* tabIcons[] = { L"\uE8B7", L"\uE735", L"\uE823", L"\uEB52", L"\uE7B8" };
+
+            const float sourceH = 44.0f;
+            const float sourceY = top + 72.0f;
+            {
+                const float segW = (tabsRight - left - 8.0f) * 0.5f;
+                for (int i = 0; i < 2; ++i) {
+                    const float x = left + i * (segW + 8.0f);
+                    const D2D1_RECT_F seg = D2D1::RectF(x, sourceY, x + segW, sourceY + sourceH);
+                    RegisterHit(launchhit::kSourceBase + i, seg);
+                    const bool active = (i == 1) == (state.modsSource == ModSource::CurseForge);
+                    const bool focused = state.modsFocus == 4 && active;
+                    const bool hovered = i == state.modsHoverSource;
+                    if (focused || hovered) GlowSelect(seg, 10.0f);
+                    FillRound(seg, active ? accentSoft.Get() : surfaceFill.Get(), 10.0f);
+                    StrokeRound(seg, (active || focused || hovered) ? accent.Get() : softEdge.Get(), 10.0f,
+                        focused ? 3.0f : (active ? 2.0f : 1.0f));
+                    DrawText(i == 0 ? L"Modrinth" : L"CurseForge", smallMid_.Get(),
+                        D2D1::RectF(seg.left + 8.0f, seg.top, seg.right - 6.0f, seg.bottom),
+                        (active || focused || hovered) ? accent.Get() : white.Get());
+                }
+            }
+
+            const float tabsTop = sourceY + sourceH + 16.0f;
             for (int i = 0; i < 5; ++i) {
-                const float y = top + 76.0f + i * (buttonH + buttonGap);
+                const float y = tabsTop + i * (buttonH + buttonGap);
                 const D2D1_RECT_F tab = D2D1::RectF(left, y, tabsRight, y + buttonH);
                 RegisterHit(launchhit::kTabBase + i, tab);
                 const bool selected = i == state.selectedModsTab && state.modsFocus == 0;
@@ -545,7 +568,7 @@ public:
             }
 
             {
-                const float infoY = top + 76.0f + 5 * (buttonH + buttonGap) + 8.0f;
+                const float infoY = tabsTop + 5 * (buttonH + buttonGap) + 8.0f;
                 const D2D1_RECT_F infoBox = D2D1::RectF(left, infoY, tabsRight, infoY + 74.0f);
                 FillRound(infoBox, surfaceFill.Get(), 12.0f);
                 StrokeRound(infoBox, softEdge.Get(), 12.0f, 1.0f);
@@ -780,6 +803,35 @@ public:
                     D2D1::RectF(row.left + 22.0f, row.top + 44.0f, right - 22.0f, row.bottom - 8.0f),
                     muted.Get());
                 RegisterHit(launchhit::kSettingsRowBase + 1, row);
+                rowY = row.bottom + 18.0f;
+            }
+
+            {
+                const D2D1_RECT_F row = D2D1::RectF(left, rowY, right, rowY + rowH);
+                const bool sel = state.settingsSelected == 2;
+                if (sel) GlowSelect(row, 12.0f);
+                FillRound(row, sel ? accentSoft.Get() : surfaceFill.Get(), 12.0f);
+                StrokeRound(row, sel ? accent.Get() : softEdge.Get(), 12.0f, sel ? 3.0f : 1.0f);
+                DrawText(L"Mod download source", bodyMid_.Get(),
+                    D2D1::RectF(row.left + 22.0f, row.top + 10.0f, right - 170.0f, row.top + 44.0f),
+                    sel ? accent.Get() : white.Get());
+                const bool curseForge = state.settingsModSource == ModSource::CurseForge;
+                const std::wstring sub = curseForge
+                    ? (state.settingsCurseForgeKeyHint.empty()
+                        ? std::wstring(L"No API key set. Add one in Remote Files or CurseForge stays empty.")
+                        : L"API key saved (" + state.settingsCurseForgeKeyHint + L").")
+                    : std::wstring(L"Modrinth needs no key. Switch to CurseForge to browse there instead.");
+                DrawText(sub.c_str(), smallFormat_.Get(),
+                    D2D1::RectF(row.left + 22.0f, row.top + 44.0f, right - 170.0f, row.bottom - 8.0f),
+                    muted.Get());
+
+                const D2D1_RECT_F pill = D2D1::RectF(right - 152.0f, row.top + 22.0f, right - 22.0f, row.bottom - 22.0f);
+                FillRound(pill, curseForge ? accent.Get() : panel.Get(), 10.0f);
+                StrokeRound(pill, curseForge ? accent.Get() : softEdge.Get(), 10.0f, 1.5f);
+                DrawText(curseForge ? L"CurseForge" : L"Modrinth", bodyMid_.Get(), pill,
+                    curseForge ? black.Get() : white.Get());
+
+                RegisterHit(launchhit::kSettingsRowBase + 2, row);
                 rowY = row.bottom + 18.0f;
             }
 

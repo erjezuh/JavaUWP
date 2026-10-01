@@ -1,6 +1,8 @@
 #include "modpack_io.h"
 
 #include "launcher_common.h"
+#include "curseforge.h"
+#include "manual_downloads.h"
 #include "mod_defaults.h"
 #include "mods_browser.h"
 #include "profiles.h"
@@ -80,8 +82,11 @@ bool InstallModpackFromFile(
     const std::wstring& mrpackPath,
     const std::wstring& runtimeRoot,
     const std::wstring& profileId,
-    std::wstring& error) {
+    std::wstring& error,
+    std::wstring* skippedNote,
+    const ModpackProgressFactory& progressFor) {
     error.clear();
+    if (skippedNote) skippedNote->clear();
     if (profileId == kVanillaProfileId) {
         error = L"Vanilla is read-only. Pick or create a profile first.";
         return false;
@@ -112,28 +117,33 @@ bool InstallModpackFromFile(
         return false;
     }
 
-    std::string indexJson;
-    {
-        const int idx = mz_zip_reader_locate_file(&zip, "modrinth.index.json", nullptr, 0);
-        if (idx < 0) {
-            mz_zip_reader_end(&zip);
-            error = L"Pack is missing modrinth.index.json";
-            return false;
-        }
-        size_t outSize = 0;
-        void* p = mz_zip_reader_extract_to_heap(&zip, static_cast<mz_uint>(idx), &outSize, 0);
-        if (!p) {
-            mz_zip_reader_end(&zip);
-            error = L"Could not read pack index";
-            return false;
-        }
-        indexJson.assign(static_cast<const char*>(p), outSize);
-        mz_free(p);
-    }
-
-    struct PackFile { std::wstring path; std::wstring url; std::string sha1; unsigned long long size = 0; };
+    struct PackFile { std::wstring path; std::wstring url; std::string sha1; unsigned long long size = 0; bool curseForge = false; };
     std::vector<PackFile> jobs;
     int skipped = 0;
+    int blockedCount = 0;
+    std::wstring blockedNames;
+    std::vector<curseforge::FileRef> blockedRefs;
+
+    auto readZipText = [&](const char* entry, std::string& out) {
+        const int idx = mz_zip_reader_locate_file(&zip, entry, nullptr, 0);
+        if (idx < 0) return false;
+        size_t outSize = 0;
+        void* p = mz_zip_reader_extract_to_heap(&zip, static_cast<mz_uint>(idx), &outSize, 0);
+        if (!p) return false;
+        out.assign(static_cast<const char*>(p), outSize);
+        mz_free(p);
+        return true;
+    };
+
+    std::string indexJson;
+    std::string manifestJson;
+    if (!readZipText("modrinth.index.json", indexJson) && !readZipText("manifest.json", manifestJson)) {
+        mz_zip_reader_end(&zip);
+        error = L"Pack has no modrinth.index.json or manifest.json";
+        return false;
+    }
+
+    if (!indexJson.empty()) {
     try {
         JsonObject root = JsonObject::Parse(winrt::to_hstring(indexJson));
         JsonArray files{ nullptr };
@@ -183,6 +193,63 @@ bool InstallModpackFromFile(
         error = L"Could not parse pack index";
         return false;
     }
+    }
+
+    if (!manifestJson.empty()) {
+        std::vector<long long> fileIds;
+        try {
+            JsonObject root = JsonObject::Parse(winrt::to_hstring(manifestJson));
+            if (root.HasKey(L"files") && root.GetNamedValue(L"files").ValueType() == JsonValueType::Array) {
+                JsonArray arr = root.GetNamedArray(L"files");
+                for (uint32_t i = 0; i < arr.Size(); ++i) {
+                    if (arr.GetAt(i).ValueType() != JsonValueType::Object) continue;
+                    JsonObject fo = arr.GetAt(i).GetObject();
+                    if (!fo.HasKey(L"fileID") || fo.GetNamedValue(L"fileID").ValueType() != JsonValueType::Number) continue;
+                    const long long fileId = static_cast<long long>(fo.GetNamedNumber(L"fileID"));
+                    if (fileId > 0) fileIds.push_back(fileId);
+                }
+            }
+        } catch (const winrt::hresult_error&) {
+            mz_zip_reader_end(&zip);
+            error = L"Could not parse pack manifest";
+            return false;
+        }
+
+        // a curseforge manifest carries ids only, so every entry needs resolving before download
+        std::vector<curseforge::FileRef> refs;
+        std::wstring resolveError;
+        if (progressFor) {
+            progressFor(L"Looking up " + std::to_wstring(fileIds.size()) + L" files on CurseForge", 0)(0);
+        }
+        if (!curseforge::ResolveFilesById(fileIds, refs, resolveError)) {
+            mz_zip_reader_end(&zip);
+            error = resolveError.empty() ? L"Could not resolve this pack on CurseForge" : resolveError;
+            return false;
+        }
+
+        for (const curseforge::FileRef& ref : refs) {
+            if (IsBlockedModFileName(ref.fileName)) {
+                WriteLogF(L"Skipping blocked modpack file: %s", ref.fileName.c_str());
+                ++skipped;
+                continue;
+            }
+            if (ref.distributionBlocked) {
+                if (!blockedNames.empty()) blockedNames += L", ";
+                blockedNames += ref.fileName;
+                ++blockedCount;
+                blockedRefs.push_back(ref);
+                WriteLogF(L"Pack file blocks third party download: %s", ref.fileName.c_str());
+                continue;
+            }
+            PackFile job;
+            job.path = L"mods/" + ref.fileName;
+            job.url = ref.downloadUrl;
+            job.sha1 = ref.sha1;
+            job.size = ref.fileSize;
+            job.curseForge = true;
+            jobs.push_back(job);
+        }
+    }
 
     std::wstring firstError;
     int done = 0;
@@ -191,6 +258,10 @@ bool InstallModpackFromFile(
         const size_t bslash = job.path.find_last_of(L"/\\");
         const std::wstring base = bslash == std::wstring::npos ? job.path : job.path.substr(bslash + 1);
         WriteLogF(L"Modpack install file %d/%zu: %s", done + 1, jobs.size(), base.c_str());
+        const std::wstring progressLabel =
+            L"[" + std::to_wstring(done + 1) + L"/" + std::to_wstring(jobs.size()) + L"] " + base;
+        const auto fileProgress = progressFor ? progressFor(progressLabel, job.size) : nullptr;
+        if (fileProgress) fileProgress(0);
         if (!job.sha1.empty() && FileMatchesSha1(dest, job.sha1)) {
             ++done;
             continue;
@@ -200,8 +271,15 @@ bool InstallModpackFromFile(
         DeleteFileW(tmp.c_str());
         bool fileOk = false;
         if (!job.url.empty()) {
-            fileOk = DownloadUrlToFile(job.url, tmp, nullptr) &&
-                (job.sha1.empty() || FileMatchesSha1(tmp, job.sha1));
+            bool fetched = false;
+            if (job.curseForge) {
+                curseforge::FileRef ref;
+                ref.downloadUrl = job.url;
+                fetched = curseforge::DownloadFile(ref, tmp, fileProgress);
+            } else {
+                fetched = DownloadUrlToFile(job.url, tmp, fileProgress);
+            }
+            fileOk = fetched && (job.sha1.empty() || FileMatchesSha1(tmp, job.sha1));
         } else {
             std::string relA = w2a(job.path);
             std::replace(relA.begin(), relA.end(), '\\', '/');
@@ -264,6 +342,41 @@ bool InstallModpackFromFile(
     PurgeBlockedModsFromDir(runtimeRoot, userModsDir);
 
     WriteLogF(L"Modpack import done: %d indexed files, %d blocked", done, skipped);
+    if (!blockedRefs.empty()) {
+        std::vector<long long> modIds;
+        for (const curseforge::FileRef& ref : blockedRefs) modIds.push_back(ref.modId);
+
+        std::vector<std::pair<long long, std::wstring>> webUrls;
+        std::wstring urlError;
+        curseforge::ResolveModWebUrls(modIds, webUrls, urlError);
+
+        std::vector<ManualDownload> manual;
+        for (const curseforge::FileRef& ref : blockedRefs) {
+            ManualDownload item;
+            item.fileName = ref.fileName;
+            item.modName = ref.fileName;
+            for (const auto& entry : webUrls) {
+                if (entry.first != ref.modId) continue;
+                // the per file page is the one with a working download button on it
+                item.url = entry.second + L"/download/" + std::to_wstring(ref.fileId);
+                break;
+            }
+            if (item.url.empty()) item.url = L"https://www.curseforge.com/minecraft/search?search=" + ref.fileName;
+            manual.push_back(item);
+        }
+        RecordManualDownloads(profileId, manual);
+    }
+    if (!blockedNames.empty()) {
+        const std::wstring note = std::to_wstring(blockedCount) +
+            (blockedCount == 1 ? L" mod could not be downloaded" : L" mods could not be downloaded") +
+            L" because their authors block third party launchers. Open Remote Files, the Manual downloads panel has a link for each one.";
+        WriteLogF(L"Modpack skipped %d blocked files", blockedCount);
+        if (skippedNote) {
+            *skippedNote = note;
+        } else if (firstError.empty()) {
+            firstError = note;
+        }
+    }
     if (jobs.empty() && firstError.empty()) {
         error = L"Pack had no installable client files";
         return false;

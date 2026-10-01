@@ -575,10 +575,20 @@ static std::wstring BuildRedirectUrl(const std::wstring& currentUrl, const std::
     return scheme + L"://" + host + path + location;
 }
 
-bool DownloadUrlToFile(
+static bool HostMatchesSuffix(const std::wstring& host, const std::wstring& suffix) {
+    if (suffix.empty()) return false;
+    const std::wstring h = ToLowerW(host);
+    const std::wstring s = ToLowerW(suffix);
+    if (h.size() < s.size()) return false;
+    return h.compare(h.size() - s.size(), s.size(), s) == 0;
+}
+
+bool DownloadUrlToFileWithHeaders(
     const std::wstring& url,
     const std::wstring& destination,
-    const std::function<void(unsigned long long)>& progressCallback) {
+    const std::function<void(unsigned long long)>& progressCallback,
+    const std::wstring& extraHeaders,
+    const std::wstring& headerHostSuffix) {
     std::wstring currentUrl = url;
 
     for (int redirect = 0; redirect < 6; ++redirect) {
@@ -636,10 +646,12 @@ bool DownloadUrlToFile(
             return false;
         }
 
+        const bool sendHeaders =
+            !extraHeaders.empty() && HostMatchesSuffix(host, headerHostSuffix);
         BOOL sent = WinHttpSendRequest(
             request,
-            WINHTTP_NO_ADDITIONAL_HEADERS,
-            0,
+            sendHeaders ? extraHeaders.c_str() : WINHTTP_NO_ADDITIONAL_HEADERS,
+            sendHeaders ? static_cast<DWORD>(-1) : 0,
             WINHTTP_NO_REQUEST_DATA,
             0,
             0,
@@ -744,6 +756,13 @@ bool DownloadUrlToFile(
 
     WriteLogF(L"Too many redirects url=%s", url.c_str());
     return false;
+}
+
+bool DownloadUrlToFile(
+    const std::wstring& url,
+    const std::wstring& destination,
+    const std::function<void(unsigned long long)>& progressCallback) {
+    return DownloadUrlToFileWithHeaders(url, destination, progressCallback, L"", L"");
 }
 
 bool EnsureRuntimeDownloads(
