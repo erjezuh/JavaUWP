@@ -7,6 +7,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdarg.h>
+#include <stdlib.h>
 #include <string.h>
 #include <roapi.h>
 #include <wrl.h>
@@ -347,6 +348,33 @@ static std::atomic<unsigned long long> g_presented_frames{ 0 };
 
 extern "C" __declspec(dllexport) unsigned long long BanditShimPresentedFrames(void) {
     return g_presented_frames.load(std::memory_order_relaxed);
+}
+
+// Present benchmark for EVERY game version (the Java-side sampler only runs
+// on the legacy 1.12.2 bridge). Logs fps into glfw_uwp.log so performance
+// regressions are visible in logs the user already shares.
+static void ShimLog(const char* fmt, ...);
+static void NotePresentedFrame() {
+    g_presented_frames.fetch_add(1, std::memory_order_relaxed);
+    static unsigned long long s_windowStartMs = 0;
+    static unsigned long long s_windowFrames = 0;
+    static int s_samples = 0;
+    ++s_windowFrames;
+    const unsigned long long now = GetTickCount64();
+    if (s_windowStartMs == 0) {
+        s_windowStartMs = now;
+        return;
+    }
+    const unsigned long long windowMs = (s_samples == 0) ? 15000ull : 30000ull;
+    if (now - s_windowStartMs >= windowMs) {
+        const unsigned long long elapsed = now - s_windowStartMs;
+        const unsigned long long fps = (s_windowFrames * 1000ull) / (elapsed ? elapsed : 1ull);
+        ShimLog("Presented frames benchmark: %llu fps (frames=%llu, window=%llums, sample=%d)",
+            fps, g_presented_frames.load(std::memory_order_relaxed), elapsed, s_samples + 1);
+        s_windowStartMs = now;
+        s_windowFrames = 0;
+        ++s_samples;
+    }
 }
 
 static int g_poll_log_count = 0;
@@ -4096,17 +4124,33 @@ extern "C" __declspec(dllexport) void glfwSwapBuffers(GLFWwindow*) {
         bandit_cursor::Draw();
     }
     if (wglb::Active()) {
-        if (wglb::Swap()) g_presented_frames.fetch_add(1, std::memory_order_relaxed);
+        if (wglb::Swap()) NotePresentedFrame();
         return;
     }
     if (!p_eglSwapBuffers || g_eglDisplay == EGL_NO_DISPLAY || g_eglSurface == EGL_NO_SURFACE) return;
     if (!p_eglSwapBuffers(g_eglDisplay, g_eglSurface)) {
         ReportEglError("eglSwapBuffers");
     } else {
-        g_presented_frames.fetch_add(1, std::memory_order_relaxed);
+        NotePresentedFrame();
     }
 }
 extern "C" __declspec(dllexport) void glfwSwapInterval(int i) {
+    // MC_swap_interval kill switch: force an interval regardless of what the
+    // game requests (MC with Max Framerate=VSync calls this with 1).
+    wchar_t forced[16] = {};
+    if (GetEnvironmentVariableW(L"MC_SWAP_INTERVAL", forced, 15) > 0 && forced[0]) {
+        const int v = _wtoi(forced);
+        if (v != i) {
+            ShimLog("glfwSwapInterval(%d) forced to %d by MC_SWAP_INTERVAL", i, v);
+            i = v;
+        }
+    } else {
+        static int g_swap_interval_log_count = 0;
+        if (g_swap_interval_log_count < 8) {
+            ++g_swap_interval_log_count;
+            ShimLog("glfwSwapInterval(%d) (vsync request from game)", i);
+        }
+    }
     if (wglb::Active()) { wglb::SetSwapInterval(i); return; }
     if (p_eglSwapInterval && g_eglDisplay != EGL_NO_DISPLAY) {
         p_eglSwapInterval(g_eglDisplay, i);
