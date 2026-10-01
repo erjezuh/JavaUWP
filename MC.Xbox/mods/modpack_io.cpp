@@ -295,10 +295,9 @@ bool InstallModpackFromFile(
                 item.fileName = ref.fileName;
                 item.modName = info && !info->name.empty() ? info->name : ref.fileName;
                 item.folder = ContentFolder(kind);
-                // the per file page is the one with a working download button on it
-                item.url = info
-                    ? info->websiteUrl + L"/download/" + std::to_wstring(ref.fileId)
-                    : L"https://www.curseforge.com/minecraft/search?search=" + a2w(FormUrlEncode(w2a(ref.fileName)).c_str());
+                // the website's own download link, one click in the user's browser saves the file
+                item.url = L"https://www.curseforge.com/api/v1/mods/" + std::to_wstring(ref.modId) +
+                    L"/files/" + std::to_wstring(ref.fileId) + L"/download";
                 manual.push_back(item);
                 ++blockedCount;
                 WriteLogF(L"Pack file blocks third party download: %s", ref.fileName.c_str());

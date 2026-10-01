@@ -607,6 +607,8 @@ input,select{min-height:42px;min-width:0;max-width:100%;padding:8px 12px;backgro
             HandleSetCurseForgeKey(s, body);
         } else if (method == "POST" && path == "/clear-manual-downloads") {
             HandleClearManualDownloads(s, body);
+        } else if (method == "POST" && path == "/upload-manual-download") {
+            HandleManualDownloadUpload(s, query, headers, body);
         } else if (method == "POST" && path == "/export-world") {
             HandleExportWorld(s, body);
         } else if (method == "POST" && path == "/upload-world") {
@@ -789,8 +791,9 @@ input,select{min-height:42px;min-width:0;max-width:100%;padding:8px 12px;backgro
         std::ostringstream out;
         out << "<section class=\"panel\"><h3>Manual downloads ("
             << pending.size() << ")</h3>"
-            << "<p class=\"muted\">These files block third party launchers, so CurseForge will not serve them to the Xbox. "
-            << "Download each one from its link and put it in the folder shown, mods through Add a mod and packs through the file browser. "
+            << "<p class=\"muted\">These files block third party launchers, so the Xbox cannot fetch them. "
+            << "Each Download link saves the file on this computer in one click. "
+            << "Then upload them all at once below and each goes into the right folder. "
             << "A row disappears once its file lands in the profile.</p><div class=\"world-list\">";
         for (const ManualDownload& item : pending) {
             // url comes from the api or a tsv on disk, only https goes in an href next to the pin
@@ -800,13 +803,32 @@ input,select{min-height:42px;min-width:0;max-width:100%;padding:8px 12px;backgro
                 << "<div class=\"muted\">" << HtmlEscape(item.fileName) << " goes in " << HtmlEscape(item.folder)
                 << "</div></div><div class=\"world-actions\">"
                 << "<a class=\"button secondary\" href=\"" << HtmlEscape(href)
-                << "\" target=\"_blank\" rel=\"noopener noreferrer\">Get it on CurseForge</a></div></div>";
+                << "\" target=\"_blank\" rel=\"noopener noreferrer\">Download</a></div></div>";
         }
         out << "</div><div class=\"toolbar\" style=\"margin-top:12px\">"
+            << "<label class=\"button\" for=\"manualfiles\">Upload downloaded files</label>"
+            << "<input id=\"manualfiles\" type=\"file\" multiple hidden data-url=\""
+            << UrlWithPinProfile("/upload-manual-download", profileId) << "\" onchange=\"uploadManual(this)\">"
+            << "<span class=\"muted\" id=\"manualstatus\" role=\"status\"></span>"
             << "<form method=\"post\" action=\"/clear-manual-downloads\">"
             << "<input type=\"hidden\" name=\"pin\" value=\"" << pin_ << "\">"
             << "<input type=\"hidden\" name=\"profile\" value=\"" << HtmlEscape(profileId) << "\">"
-            << "<button class=\"secondary\">Forget this list</button></form></div></section>";
+            << "<button class=\"secondary\">Forget this list</button></form></div></section>"
+            << R"RFMD(<script>
+async function uploadManual(input){
+ const status=document.getElementById('manualstatus');
+ const files=Array.from(input.files);
+ let placed=0,skipped=[];
+ for(let i=0;i<files.length;i++){
+  status.textContent='Uploading '+(i+1)+' of '+files.length;
+  const form=new FormData();form.append('file',files[i]);
+  const res=await fetch(input.dataset.url,{method:'POST',body:form}).catch(()=>null);
+  if(res&&res.ok)placed++;else skipped.push(files[i].name);
+ }
+ status.textContent=placed+' placed'+(skipped.length?', not on the list: '+skipped.join(', '):'');
+ if(!skipped.length)location.reload();
+}
+</script>)RFMD";
         return out.str();
     }
 
@@ -1088,6 +1110,44 @@ input,select{min-height:42px;min-width:0;max-width:100%;padding:8px 12px;backgro
                 "<div class=\"top\"><h1>Import complete</h1><a class=\"pill\" href=\"/?pin=" + pin_ + "\">Files home</a></div>"
                 "<p>Installed <strong>" + HtmlEscape(name) + "</strong> into profile <strong>" + HtmlEscape(profile.name) + "</strong>.</p>" +
                 (installNote.empty() ? std::string() : "<p class=\"muted\">" + HtmlEscape(installNote) + "</p>")));
+    }
+
+    // only names on the pending list are taken, and they go to the folder the pack recorded
+    void HandleManualDownloadUpload(SOCKET s, const std::string& query, const std::map<std::string, std::string>& headers, const std::string& body) {
+        const std::wstring profileId = NormalizeProfileId(QueryValue(query, "profile"));
+        std::wstring name;
+        std::vector<unsigned char> data;
+        if (!ExtractMultipartFile(headers, body, name, data)) {
+            SendHttpResponse(s, 400, "Bad Request", "text/plain; charset=utf-8", "No file was received.");
+            return;
+        }
+
+        const std::vector<ManualDownload> pending = PendingManualDownloads(runtimeRoot_, profileId);
+        const auto match = std::find_if(pending.begin(), pending.end(), [&name](const ManualDownload& item) {
+            return _wcsicmp(SafeFileName(item.fileName).c_str(), name.c_str()) == 0;
+        });
+        if (match == pending.end()) {
+            SendHttpResponse(s, 400, "Bad Request", "text/plain; charset=utf-8", "Not on this profile's list.");
+            return;
+        }
+
+        const std::wstring folder = ProfileGameDir(runtimeRoot_, profileId) + L"\\" + match->folder;
+        EnsureDirectoryTree(folder);
+        const std::wstring path = folder + L"\\" + SafeFileName(match->fileName);
+        FILE* f = nullptr;
+        if (_wfopen_s(&f, path.c_str(), L"wb") != 0 || !f) {
+            SendHttpResponse(s, 500, "Internal Server Error", "text/plain; charset=utf-8", "Could not save the file.");
+            return;
+        }
+        const bool wrote = fwrite(data.data(), 1, data.size(), f) == data.size();
+        fclose(f);
+        if (!wrote) {
+            DeleteFileW(path.c_str());
+            SendHttpResponse(s, 500, "Internal Server Error", "text/plain; charset=utf-8", "Could not finish writing the file.");
+            return;
+        }
+        WriteLogF(L"Manual download uploaded: %s bytes=%zu", path.c_str(), data.size());
+        SendHttpResponse(s, 200, "OK", "text/plain; charset=utf-8", w2a(match->folder));
     }
 
     std::string WorldsSectionHtml(const std::vector<std::wstring>& saves, const std::wstring& profileId) {
