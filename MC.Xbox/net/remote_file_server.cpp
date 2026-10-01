@@ -1037,10 +1037,9 @@ input,select{min-height:42px;min-width:0;max-width:100%;padding:8px 12px;backgro
             return;
         }
 
-        const std::wstring lower = ToLowerW(name);
-        if (lower.size() < 7 || lower.substr(lower.size() - 7) != L".mrpack") {
+        if (!EndsWithInsensitive(name, L".mrpack") && !EndsWithInsensitive(name, L".zip")) {
             SendHttpResponse(s, 400, "Bad Request", "text/html; charset=utf-8",
-                Layout("Import failed", "<h1>Import failed</h1><p>Upload a Modrinth .mrpack file.</p>"));
+                Layout("Import failed", "<h1>Import failed</h1><p>Upload a Modrinth .mrpack or a CurseForge .zip.</p>"));
             return;
         }
 
@@ -1074,7 +1073,8 @@ input,select{min-height:42px;min-width:0;max-width:100%;padding:8px 12px;backgro
 
         WriteLogF(L"Remote modpack upload saved: %s bytes=%zu", path.c_str(), data.size());
         std::wstring installError;
-        const bool ok = InstallModpackFromFile(path, runtimeRoot_, active, installError);
+        std::wstring installNote;
+        const bool ok = InstallModpackFromFile(path, runtimeRoot_, active, installError, &installNote);
         DeleteFileW(path.c_str());
         if (!ok) {
             SendHttpResponse(s, 500, "Internal Server Error", "text/html; charset=utf-8",
@@ -1086,7 +1086,8 @@ input,select{min-height:42px;min-width:0;max-width:100%;padding:8px 12px;backgro
         SendHttpResponse(s, 200, "OK", "text/html; charset=utf-8",
             Layout("Import complete",
                 "<div class=\"top\"><h1>Import complete</h1><a class=\"pill\" href=\"/?pin=" + pin_ + "\">Files home</a></div>"
-                "<p>Installed <strong>" + HtmlEscape(name) + "</strong> into profile <strong>" + HtmlEscape(profile.name) + "</strong>.</p>"));
+                "<p>Installed <strong>" + HtmlEscape(name) + "</strong> into profile <strong>" + HtmlEscape(profile.name) + "</strong>.</p>" +
+                (installNote.empty() ? std::string() : "<p class=\"muted\">" + HtmlEscape(installNote) + "</p>")));
     }
 
     std::string WorldsSectionHtml(const std::vector<std::wstring>& saves, const std::wstring& profileId) {

@@ -436,13 +436,7 @@ bool InstallModpackFromFile(
             (unsupportedCount == 1 ? L" file is" : L" files are") +
             L" content the launcher does not install, like worlds or data packs.";
     }
-    if (!note.empty()) {
-        if (skippedNote) {
-            *skippedNote = note;
-        } else if (firstError.empty()) {
-            firstError = note;
-        }
-    }
+    if (skippedNote) *skippedNote = note;
     if (jobs.empty() && firstError.empty()) {
         error = note.empty() ? L"Pack had no installable client files" : note;
         return false;
