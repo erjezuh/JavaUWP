@@ -752,6 +752,15 @@ if (-not (Get-ChildItem -LiteralPath (Join-Path $pkg "runtime\bundled-mods") -Fi
     Set-Content -Path (Join-Path $pkg "runtime\bundled-mods\.bandit-empty") -Value "" -NoNewline
 }
 
+if ($legacyForge1122Advertised) {
+    Write-Host "=== Preparing legacy Forge 1.12.2 cache ==="
+    & (Join-Path $root "scripts\setup.ps1") `
+        -MinecraftVersion "1.12.2" `
+        -Loader "forge" `
+        -LoaderVersion $legacyForgeRow.loaderVersion `
+        -AssetIndex "1"
+    if ($LASTEXITCODE -ne 0) { throw "Legacy Forge 1.12.2 setup failed" }
+}
 Write-Host "Copying natives..."
 Ensure-Dir (Join-Path $pkg "natives")
 Copy-Item (Join-Path $nativesSourceDir "*.dll") (Join-Path $pkg "natives\") -Force
@@ -762,6 +771,13 @@ if ($legacyForge1122Advertised) {
     # "Can't find dependent libraries" from Java does not tell us which
     # transitive DLL is missing, so make the package self-contained and emit
     # the actual import table during the build.
+    # The legacy natives live in their own per-version cache (natives-1.12.2,
+    # populated by the legacy setup above); copy them beside the modern ones.
+    $legacyNativesCache = Join-Path (Get-ConfigPath "CacheDir") "natives-1.12.2"
+    if (Test-Path $legacyNativesCache) {
+        Copy-Item (Join-Path $legacyNativesCache "*.dll") (Join-Path $pkg "natives\") -Force
+        Write-Host "Legacy natives copied from $legacyNativesCache"
+    }
     $legacyNativeNames = @(
         "lwjgl64.dll",
         "lwjgl.dll",
@@ -966,15 +982,6 @@ if (-not $SkipVersionManifests) {
     Write-Host "Skipping extra per-version manifests (-SkipVersionManifests)"
 }
 
-if ($legacyForge1122Advertised) {
-    Write-Host "=== Preparing legacy Forge 1.12.2 cache ==="
-    & (Join-Path $root "scripts\setup.ps1") `
-        -MinecraftVersion "1.12.2" `
-        -Loader "forge" `
-        -LoaderVersion $legacyForgeRow.loaderVersion `
-        -AssetIndex "1"
-    if ($LASTEXITCODE -ne 0) { throw "Legacy Forge 1.12.2 setup failed" }
-}
 if (-not $SkipVersionCompat) {
     $versionModsRoot = Join-Path $pkg "runtime\version-mods"
     Ensure-Dir $versionModsRoot
