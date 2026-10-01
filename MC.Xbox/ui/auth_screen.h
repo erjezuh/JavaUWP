@@ -780,7 +780,7 @@ public:
                 const D2D1_RECT_F pill = D2D1::RectF(right - 132.0f, row.top + 22.0f, right - 22.0f, row.bottom - 22.0f);
                 FillRound(pill, state.settingsReportingOn ? accent.Get() : panel.Get(), 10.0f);
                 StrokeRound(pill, state.settingsReportingOn ? accent.Get() : softEdge.Get(), 10.0f, 1.5f);
-                DrawText(state.settingsReportingOn ? L"On" : L"Off", bodyMid_.Get(), pill,
+                DrawText(state.settingsReportingOn ? L"On" : L"Off", pillFormat_.Get(), pill,
                     state.settingsReportingOn ? black.Get() : muted.Get());
 
                 RegisterHit(launchhit::kSettingsRowBase + 0, row);
@@ -825,7 +825,7 @@ public:
                 const D2D1_RECT_F pill = D2D1::RectF(right - 152.0f, row.top + 22.0f, right - 22.0f, row.bottom - 22.0f);
                 FillRound(pill, curseForge ? accent.Get() : panel.Get(), 10.0f);
                 StrokeRound(pill, curseForge ? accent.Get() : softEdge.Get(), 10.0f, 1.5f);
-                DrawText(curseForge ? L"CurseForge" : L"Modrinth", bodyMid_.Get(), pill,
+                DrawText(curseForge ? L"CurseForge" : L"Modrinth", pillFormat_.Get(), pill,
                     curseForge ? black.Get() : white.Get());
 
                 RegisterHit(launchhit::kSettingsRowBase + 2, row);
@@ -1164,6 +1164,7 @@ private:
     ComPtr<IDWriteTextFormat> captionFormat_;
     ComPtr<IDWriteTextFormat> bodyMid_;
     ComPtr<IDWriteTextFormat> smallMid_;
+    ComPtr<IDWriteTextFormat> pillFormat_;
     ComPtr<IDWriteTextFormat> iconFormat_;
     ComPtr<IDWriteTextFormat> iconLgFormat_;
     std::map<std::wstring, ComPtr<ID2D1Bitmap1>> bitmapCache_;
@@ -1424,6 +1425,14 @@ private:
             mf->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
             mf->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
             mf->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
+        }
+        dwriteFactory_->CreateTextFormat(
+            L"Segoe UI", nullptr, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_FONT_STYLE_NORMAL,
+            DWRITE_FONT_STRETCH_NORMAL, 22.0f, L"en-US", pillFormat_.GetAddressOf());
+        if (pillFormat_) {
+            pillFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+            pillFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+            pillFormat_->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
         }
         for (IDWriteTextFormat* icf : { iconFormat_.Get(), iconLgFormat_.Get() }) {
             if (!icf) continue;
