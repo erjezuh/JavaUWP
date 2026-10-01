@@ -20,9 +20,26 @@
 
 using namespace winrt::Windows::Data::Json;
 
+// pack paths come from the archive, so anything that could climb out of the game dir is refused.
+// win32 drops trailing dots and spaces from a segment, so ".. " and "..." count as climbing too
+static bool IsSafePackRelativePath(const std::wstring& rel) {
+    if (rel.empty() || rel[0] == L'\\' || rel.find(L':') != std::wstring::npos) return false;
+    size_t start = 0;
+    while (true) {
+        const size_t sep = rel.find(L'\\', start);
+        const std::wstring segment = rel.substr(start, sep == std::wstring::npos ? std::wstring::npos : sep - start);
+        const size_t kept = segment.find_last_not_of(L". ");
+        if (!segment.empty() && segment != L"." && kept == std::wstring::npos) return false;
+        if (sep == std::wstring::npos) return true;
+        start = sep + 1;
+    }
+}
+
+// empty when the path is unsafe, callers skip the entry
 static std::wstring ModpackDestForRelative(const std::wstring& relRaw, const std::wstring& gameDir, const std::wstring& userModsDir) {
     std::wstring rel = relRaw;
     std::replace(rel.begin(), rel.end(), L'/', L'\\');
+    if (!IsSafePackRelativePath(rel)) return std::wstring();
     const std::wstring lower = ToLowerW(rel);
     const size_t slash = rel.find_last_of(L'\\');
     const std::wstring base = slash == std::wstring::npos ? rel : rel.substr(slash + 1);
@@ -266,6 +283,11 @@ bool InstallModpackFromFile(
     int done = 0;
     for (const PackFile& job : jobs) {
         const std::wstring dest = ModpackDestForRelative(job.path, gameDir, userModsDir);
+        if (dest.empty()) {
+            WriteLogF(L"Refusing pack file outside the game dir: %s", job.path.c_str());
+            ++skipped;
+            continue;
+        }
         const size_t bslash = job.path.find_last_of(L"/\\");
         const std::wstring base = bslash == std::wstring::npos ? job.path : job.path.substr(bslash + 1);
         WriteLogF(L"Modpack install file %d/%zu: %s", done + 1, jobs.size(), base.c_str());
@@ -335,6 +357,11 @@ bool InstallModpackFromFile(
         if (relA.empty()) continue;
         const std::wstring rel = a2w(relA.c_str());
         const std::wstring dest = ModpackDestForRelative(rel, gameDir, userModsDir);
+        if (dest.empty()) {
+            WriteLogF(L"Refusing pack override outside the game dir: %s", rel.c_str());
+            ++skipped;
+            continue;
+        }
         const size_t slash = dest.find_last_of(L'\\');
         const std::wstring base = slash == std::wstring::npos ? dest : dest.substr(slash + 1);
         if (ToLowerW(dest).find(ToLowerW(userModsDir)) == 0 && IsBlockedModFileName(base)) {
