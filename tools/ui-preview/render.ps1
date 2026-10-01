@@ -25,6 +25,8 @@ $work = Join-Path $root "staging\build\ui-preview"
 Ensure-Dir $work
 if (-not $OutDir) { $OutDir = Join-Path $root ".local\ui-preview" }
 Ensure-Dir $OutDir
+# a renamed scene would otherwise leave its old png looking current
+Remove-Item (Join-Path $OutDir "*.png") -ErrorAction SilentlyContinue
 
 $env:INCLUDE = "$mcBuildDir;$($tools.MsvcRoot)\include;${sdkRoot}Include\$sdkVer\ucrt;${sdkRoot}Include\$sdkVer\shared;${sdkRoot}Include\$sdkVer\um;${sdkRoot}Include\$sdkVer\winrt;${sdkRoot}Include\$sdkVer\cppwinrt;$jreSrc\include;$jreSrc\include\win32"
 $env:LIB = "$($tools.MsvcRoot)\lib\x64;${sdkRoot}Lib\$sdkVer\ucrt\x64;${sdkRoot}Lib\$sdkVer\um\x64"
@@ -43,6 +45,11 @@ try {
 finally {
     Pop-Location
 }
+
+# the main menu draws these from Assets\screenshots next to the exe, the same as the package
+$screenshotTarget = Join-Path $work "Assets\screenshots"
+Ensure-Dir $screenshotTarget
+Copy-Item -Force (Join-Path $root "MC.Xbox\Assets\screenshots\*.png") $screenshotTarget
 
 & (Join-Path $work "ui_preview.exe") $OutDir
 if ($LASTEXITCODE -ne 0) { throw "ui preview render failed" }

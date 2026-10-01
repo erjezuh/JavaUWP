@@ -3,6 +3,7 @@
 #include <objbase.h>
 
 #include <cstdio>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -10,6 +11,11 @@
 void ProcessAuthUiEvents() {}
 
 namespace {
+
+struct Scene {
+    std::wstring name;
+    std::function<AuthUiState()> build;
+};
 
 ModCard Card(ContentKind kind, const wchar_t* title, const wchar_t* description, const wchar_t* status) {
     ModCard card;
@@ -55,32 +61,190 @@ std::vector<ModCard> CardsFor(int tab) {
     }
 }
 
-AuthUiState ModsPage(int tab) {
+LaunchTarget Target(const wchar_t* mc, const wchar_t* loader, const wchar_t* loaderVersion) {
+    LaunchTarget target;
+    target.minecraftVersion = mc;
+    target.loader = loader;
+    target.loaderVersion = loaderVersion;
+    target.targetId = std::wstring(mc) + L"-" + loader + L"-" + loaderVersion;
+    target.displayName = std::wstring(mc) + L" " + loader;
+    return target;
+}
+
+AuthUiState Screen() {
     AuthUiState state;
     state.showDeviceCode = false;
+    state.title = L"Bandit Launcher";
+    return state;
+}
+
+AuthUiState ModsPage(int tab) {
+    AuthUiState state = Screen();
     state.showModsPage = true;
     state.selectedModsTab = tab;
-    state.modsFocus = 0;
     state.activeProfileName = L"Survival";
-
-    LaunchTarget target;
-    target.targetId = L"1.21.11-fabric-0.19.3";
-    target.displayName = L"1.21.11 Fabric";
-    target.minecraftVersion = L"1.21.11";
-    target.loader = L"fabric";
-    target.loaderVersion = L"0.19.3";
-    state.modsTargets = { target };
-    state.modsBrowseTargetId = target.targetId;
-
+    state.modsTargets = {
+        Target(L"1.21.11", L"fabric", L"0.19.3"),
+        Target(L"1.21.11", L"neoforge", L"21.11.20"),
+        Target(L"1.21.1", L"fabric", L"0.19.3"),
+        Target(L"1.20.1", L"forge", L"47.4.0"),
+        Target(L"26.2", L"fabric", L"0.19.3"),
+    };
+    state.modsBrowseTargetId = state.modsTargets.front().targetId;
     state.modsCards = CardsFor(tab);
     state.status = std::to_wstring(state.modsCards.size()) + L" of 1812";
     return state;
 }
 
-std::wstring Slug(const wchar_t* label) {
-    std::wstring out;
-    for (const wchar_t* c = label; *c; ++c) out += *c == L' ' ? L'-' : static_cast<wchar_t>(towlower(*c));
-    return out;
+AuthUiState Detail(int tab) {
+    AuthUiState state = ModsPage(tab);
+    state.modsDetailOpen = true;
+    state.modsDetailCard = state.modsCards.front();
+    state.modsDetailMeta = L"Decoration, Utility  -  " + state.modsDetailCard.status;
+    state.modsDetailBody = L"About\nA sample description so the body text has something to wrap.";
+    return state;
+}
+
+AuthUiState Settings(bool reporting, ModSource source, const wchar_t* keyHint, const wchar_t* note, bool configured) {
+    AuthUiState state = Screen();
+    state.showSettings = true;
+    state.settingsReportingOn = reporting;
+    state.settingsConfigured = configured;
+    state.settingsInstallId = L"Reporting id 7f3c9a12-4be0-4c51-9d2e-0a61b5e8c3f4";
+    state.settingsModSource = source;
+    state.settingsCurseForgeKeyHint = keyHint;
+    state.settingsNote = note;
+    return state;
+}
+
+AuthUiState Crash(bool details, bool consent) {
+    AuthUiState state = Screen();
+    state.showCrashScreen = true;
+    state.crashHeadline = L"Minecraft crashed while loading mods";
+    state.crashSuspectLine = L"Likely cause: sodium-fabric-0.6.13+mc1.21.11.jar\nMixin apply failed for net.minecraft.client.render.WorldRenderer";
+    state.crashTrace =
+        L"java.lang.RuntimeException: Mixin transformation of net.minecraft.class_761 failed\n"
+        L"\tat net.fabricmc.loader.impl.launch.knot.KnotClassDelegate.getPostMixinClassByteArray(KnotClassDelegate.java:427)\n"
+        L"\tat net.fabricmc.loader.impl.launch.knot.KnotClassDelegate.tryLoadClass(KnotClassDelegate.java:323)\n"
+        L"Caused by: org.spongepowered.asm.mixin.throwables.MixinApplyError\n";
+    state.crashConsentPayload = L"fingerprint 3f9a1c22b8e04d71\nphase mod_load\nloader fabric 0.19.3\n" + state.crashTrace;
+    state.crashDetailsOpen = details;
+    state.crashAskConsent = consent;
+    state.crashButtonCount = consent ? 3 : 2;
+    state.crashFootnote = consent ? L"" : L"Reported automatically. Turn reporting off in Settings.";
+    return state;
+}
+
+std::vector<Scene> Scenes() {
+    std::vector<Scene> scenes;
+
+    scenes.push_back({ L"signin-device-code", [] {
+        AuthUiState state;
+        state.userCode = L"QXR7-2KWM";
+        state.verificationUri = L"microsoft.com/link";
+        state.status = L"Waiting for you to sign in";
+        state.secondsRemaining = 842;
+        state.qr = GenerateLoginQrMatrix("https://www.microsoft.com/link?otc=QXR7-2KWM");
+        return state;
+    } });
+    scenes.push_back({ L"signin-loading", [] {
+        AuthUiState state = Screen();
+        state.status = L"Downloading Minecraft 1.21.11 libraries";
+        state.detail = L"412 of 980 files, 188 MB";
+        state.progress = 0.42f;
+        return state;
+    } });
+    scenes.push_back({ L"signin-launch-log", [] {
+        AuthUiState state = Screen();
+        state.status = L"Starting Minecraft";
+        state.detail = L"1.21.11 Fabric 0.19.3, profile Survival";
+        state.showLaunchLog = true;
+        state.animation = 0.3f;
+        state.launchLogText =
+            L"[19:47:13] JNI_CreateJavaVM ok\n[19:47:14] Loading Minecraft 1.21.11 with Fabric Loader 0.19.3\n"
+            L"[19:47:16] Loading 14 mods\n[19:47:21] Mixins applied\n[19:47:24] Backend library: LWJGL version 3.3.3";
+        return state;
+    } });
+
+    scenes.push_back({ L"main-menu", [] {
+        AuthUiState state = Screen();
+        state.showMainMenu = true;
+        state.title = L"Steve";
+        state.status = L"Ready to play 1.21.11 Fabric";
+        state.detail = L"Profile Survival, 12 mods";
+        return state;
+    } });
+    scenes.push_back({ L"remote-files", [] {
+        AuthUiState state = Screen();
+        state.showRemoteFiles = true;
+        state.status = L"http://192.168.1.50:8080";
+        state.detail = L"PIN 705143";
+        return state;
+    } });
+
+    scenes.push_back({ L"settings-modrinth", [] { return Settings(true, ModSource::Modrinth, L"", L"", true); } });
+    scenes.push_back({ L"settings-curseforge-no-key", [] { return Settings(false, ModSource::CurseForge, L"", L"", true); } });
+    scenes.push_back({ L"settings-curseforge-key", [] {
+        return Settings(true, ModSource::CurseForge, L"ends 9f2a", L"Mod source set to CurseForge", true);
+    } });
+    scenes.push_back({ L"settings-unconfigured", [] { return Settings(false, ModSource::Modrinth, L"", L"", false); } });
+
+    scenes.push_back({ L"crash-summary", [] { return Crash(false, false); } });
+    scenes.push_back({ L"crash-details", [] { return Crash(true, false); } });
+    scenes.push_back({ L"crash-consent", [] { return Crash(false, true); } });
+
+    for (int tab = 0; tab < modstab::kCount; ++tab) {
+        std::wstring label = ModsTabAt(tab).label;
+        for (wchar_t& c : label) c = c == L' ' ? L'-' : static_cast<wchar_t>(towlower(c));
+        scenes.push_back({ L"mods-" + std::to_wstring(tab) + L"-" + label, [tab] { return ModsPage(tab); } });
+    }
+    scenes.push_back({ L"mods-detail-modpack", [] { return Detail(modstab::kModpacks); } });
+    scenes.push_back({ L"mods-detail-resource-pack", [] { return Detail(modstab::kResourcePacks); } });
+    scenes.push_back({ L"mods-detail-shader", [] { return Detail(modstab::kShaders); } });
+    scenes.push_back({ L"mods-profile-open", [] {
+        AuthUiState state = ModsPage(modstab::kProfiles);
+        state.status.clear();
+        state.modsProfileOpen = true;
+        state.modsProfileId = L"survival";
+        state.modsProfileName = L"Survival";
+        state.modsProfileTargetText = L"1.21.11 Fabric 0.19.3";
+        state.modsProfileMods = {
+            L"sodium-fabric-0.6.13+mc1.21.11.jar", L"iris-fabric-1.8.12+mc1.21.11.jar", L"modmenu-15.0.0.jar",
+            L"fabric-api-0.130.0+1.21.11.jar", L"lithium-fabric-0.15.1+mc1.21.11.jar", L"entityculling-fabric-1.8.2-mc1.21.11.jar",
+        };
+        return state;
+    } });
+    scenes.push_back({ L"mods-target-open", [] {
+        AuthUiState state = ModsPage(modstab::kPopular);
+        state.modsFocus = 3;
+        state.modsTargetOpen = true;
+        state.modsTargetSel = 1;
+        return state;
+    } });
+    scenes.push_back({ L"mods-empty", [] {
+        AuthUiState state = ModsPage(modstab::kShaders);
+        state.modsCards.clear();
+        state.modsSearchQuery = L"nothing matches this";
+        state.status = L"No shaders found";
+        return state;
+    } });
+    scenes.push_back({ L"mods-error", [] {
+        AuthUiState state = ModsPage(modstab::kPopular);
+        state.modsSource = ModSource::CurseForge;
+        state.modsCards.clear();
+        state.status = L"No CurseForge API key is set. Add one in Remote Files.";
+        state.isError = true;
+        return state;
+    } });
+    scenes.push_back({ L"mods-search-typing", [] {
+        AuthUiState state = ModsPage(modstab::kResourcePacks);
+        state.modsFocus = 1;
+        state.modsSearchEditing = true;
+        state.modsSearchQuery = L"fresh anim";
+        return state;
+    } });
+
+    return scenes;
 }
 
 // every com object the renderer holds has to be released before CoUninitialize, so it lives in here
@@ -93,27 +257,15 @@ int RenderAll(const std::wstring& outDir) {
     }
 
     int failures = 0;
-    auto renderTo = [&](const AuthUiState& state, const std::wstring& name) {
-        renderer.Render(state);
-        const std::wstring path = outDir + L"\\" + name + L".png";
+    for (const Scene& scene : Scenes()) {
+        renderer.Render(scene.build());
+        const std::wstring path = outDir + L"\\" + scene.name + L".png";
         if (renderer.SaveFramePng(path)) {
             wprintf(L"%s\n", path.c_str());
         } else {
             fwprintf(stderr, L"could not write %s\n", path.c_str());
             ++failures;
         }
-    };
-
-    for (int tab = 0; tab < modstab::kCount; ++tab) {
-        renderTo(ModsPage(tab), L"mods-" + std::to_wstring(tab) + L"-" + Slug(ModsTabAt(tab).label));
-    }
-    for (const int tab : { modstab::kModpacks, modstab::kResourcePacks, modstab::kShaders }) {
-        AuthUiState state = ModsPage(tab);
-        state.modsDetailOpen = true;
-        state.modsDetailCard = state.modsCards.front();
-        state.modsDetailMeta = L"Decoration, Utility  -  " + state.modsDetailCard.status;
-        state.modsDetailBody = L"About\nA sample description so the body text has something to wrap.";
-        renderTo(state, L"detail-" + Slug(ModsTabAt(tab).label));
     }
     return failures;
 }
