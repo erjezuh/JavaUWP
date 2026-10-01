@@ -217,8 +217,23 @@ static std::wstring CrashSuspectLine(const telemetry::CrashRecord& record) {
         return line;
     }
     if (!record.detail.symbol.empty()) {
+        std::string symLower = record.detail.symbol;
+        for (char& c : symLower) {
+            if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+        }
+        const bool graphicsSymbol =
+            symLower.rfind("gl", 0) == 0 ||
+            symLower.find("egl") != std::string::npos ||
+            symLower.find("glfw") != std::string::npos ||
+            symLower.find("opengl") != std::string::npos;
+        if (graphicsSymbol) {
+            return L"A mod asked for " + a2w(record.detail.symbol.c_str()) +
+                L", which this console's graphics layer does not provide.\nThis points to the launcher's graphics layer.";
+        }
         return L"A mod asked for " + a2w(record.detail.symbol.c_str()) +
-            L", which this console's graphics layer does not provide.\nThis points to the launcher's graphics layer.";
+            L", a Windows system component this console does not hand out to mods.\n"
+            L"Recent launcher builds probe and stand in for the common ones; check the\n"
+            L"'System dll probe' lines in the log to see what was available.";
     }
     if (record.exception.find(L"unknown_") != std::wstring::npos) {
         return L"Nothing readable was left behind, so there is no diagnosis for this one.";

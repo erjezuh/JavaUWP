@@ -1889,6 +1889,47 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
     if (VerboseLoggingEnabled()) {
         vmOptionStorage.push_back("-Dmixin.debug.verbose=true");
     }
+    // ---- System DLL probe (mod compatibility) -----------------------------
+    // Mods using JNA ask for Windows system DLLs by name (ole32, oleaut32,
+    // ...). The console only maps a subset for explicit LoadLibrary calls.
+    // Probe every common one now: whatever loads stays loaded (JNA then
+    // resolves it instantly), and for refused names the packaged compat
+    // stand-ins are staged into a dedicated dir added to jna.library.path,
+    // so a working system DLL is never shadowed.
+    std::wstring jnaCompatDir;
+    {
+        static const wchar_t* kProbeDlls[] = {
+            L"ole32.dll", L"oleaut32.dll", L"shell32.dll", L"version.dll",
+            L"winmm.dll", L"psapi.dll", L"dbghelp.dll", L"setupapi.dll",
+            L"cfgmgr32.dll", L"powrprof.dll", L"wtsapi32.dll", L"netapi32.dll",
+            L"iphlpapi.dll", L"hid.dll", L"dwmapi.dll", L"uxtheme.dll",
+            L"user32.dll", L"gdi32.dll", L"combase.dll", L"bcrypt.dll",
+            L"crypt32.dll", L"ws2_32.dll", L"wintrust.dll", L"mpr.dll",
+            L"userenv.dll", L"shlwapi.dll", L"propsys.dll",
+        };
+        const std::wstring compatSrcDir = packageDir + L"\\compat";
+        const std::wstring compatStagedDir = exeDir + L"\\jna-compat";
+        bool stagedAny = false;
+        for (const wchar_t* name : kProbeDlls) {
+            const std::wstring stagedPath = compatStagedDir + L"\\" + name;
+            DeleteFileW(stagedPath.c_str()); // fresh staging every launch
+            HMODULE probeMod = LoadLibraryW(name);
+            if (probeMod) {
+                WriteLogF(L"System dll probe: %s -> OK", name);
+                continue;
+            }
+            WriteLogF(L"System dll probe: %s -> FAILED err=%u", name, GetLastError());
+            const std::wstring stub = compatSrcDir + L"\\" + name;
+            if (GetFileAttributesW(stub.c_str()) != INVALID_FILE_ATTRIBUTES) {
+                EnsureDirectoryTree(compatStagedDir);
+                if (CopyFileW(stub.c_str(), stagedPath.c_str(), FALSE)) {
+                    WriteLogF(L"System dll probe: staged compat stand-in for %s", name);
+                    stagedAny = true;
+                }
+            }
+        }
+        if (stagedAny) jnaCompatDir = compatStagedDir;
+    }
     vmOptionStorage.push_back("-Djava.io.tmpdir=" + w2a(fwd(jnaTmpDir)));
     vmOptionStorage.push_back("-Djna.tmpdir=" + w2a(fwd(jnaTmpDir)));
     vmOptionStorage.push_back("-Djna.nosys=true");
@@ -1897,9 +1938,15 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
     vmOptionStorage.push_back("-Djna.boot.library.path=" + w2a(fwd(nativesDir)));
     vmOptionStorage.push_back("-Djava.library.path=" + w2a(fwd(lwjglNativeDir)));
     vmOptionStorage.push_back("-Dorg.lwjgl.librarypath=" + w2a(fwd(lwjglNativeDir)));
-    if (legacyForge122Natives) {
-        vmOptionStorage.push_back("-Djna.library.path=" + w2a(fwd(lwjglNativeDir)));
-        WriteLogF(L"Legacy JNA library path: %s", lwjglNativeDir.c_str());
+    {
+        // JNA searches this list before falling back to the OS loader; the
+        // compat dir is last so stand-ins only win when the system DLL is
+        // actually unavailable on the console.
+        std::wstring jnaPath = lwjglNativeDir;
+        if (!nativesDir.empty() && nativesDir != lwjglNativeDir) jnaPath += L";" + nativesDir;
+        if (!jnaCompatDir.empty()) jnaPath += L";" + jnaCompatDir;
+        vmOptionStorage.push_back("-Djna.library.path=" + w2a(fwd(jnaPath)));
+        WriteLogF(L"JNA library path: %s", jnaPath.c_str());
     }
     if (VerboseLoggingEnabled()) {
         vmOptionStorage.push_back("-Dorg.lwjgl.util.Debug=true");

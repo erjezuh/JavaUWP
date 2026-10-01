@@ -127,6 +127,7 @@ $certDir = Get-ConfigPath "CertificateDir"
 $mcBuildDir = Join-Path $buildDir "MC.Xbox"
 $glfwBuildDir = Join-Path $buildDir "glfw_shim"
 $mouseSupportBuildDir = Join-Path $buildDir "mouse_support"
+$compatDllsBuildDir = Join-Path $buildDir "compat_dlls"
 $mouseSupportDll = Join-Path $mouseSupportBuildDir "mouse_support.dll"
 $mouseSupportLib = Join-Path $mouseSupportBuildDir "mouse_support.lib"
 $mcExe = Join-Path $mcBuildDir "MC.Xbox.exe"
@@ -506,6 +507,9 @@ Write-Host "=== Building GLFW CoreWindow shim ==="
 & (Join-Path $root "glfw_shim\build_glfw.ps1") -OutputDir $glfwBuildDir -MouseSupportLib $mouseSupportLib -MouseSupportInclude (Join-Path $root "mouse_support")
 if (-not (Test-Path $shimDll)) { throw "GLFW shim DLL missing after build: $shimDll" }
 
+Write-Host "=== Building mod-compat system DLL stand-ins ==="
+& (Join-Path $root "compat_dlls\build_compat_dlls.ps1") -OutputDir $compatDllsBuildDir
+
 if ($ProjectConfig.DefaultLoader -eq "fabric") {
     Write-Host "=== Building Xbox compatibility mod ==="
     & (Join-Path $root "compat_mod\build_compat_mod.ps1")
@@ -851,6 +855,16 @@ Write-Host "Copying GLFW shim..."
 Copy-Item $shimDll (Join-Path $pkg "natives\glfw.dll") -Force
 Copy-Item $mouseSupportDll (Join-Path $pkg "mouse_support.dll") -Force
 Copy-Item $mouseSupportDll (Join-Path $pkg "natives\mouse_support.dll") -Force
+
+# Mod-compat stand-ins (ole32/oleaut32): the launcher stages these per name
+# only when its probe finds the system DLL unavailable on the console, so a
+# working system DLL is never shadowed.
+Ensure-Dir (Join-Path $pkg "compat")
+foreach ($compatName in @("ole32.dll", "oleaut32.dll")) {
+    $compatSrc = Join-Path $compatDllsBuildDir $compatName
+    if (-not (Test-Path $compatSrc)) { throw "compat DLL missing after build: $compatSrc" }
+    Copy-Item $compatSrc (Join-Path $pkg "compat\$compatName") -Force
+}
 
 Write-Host "Copying Mesa runtime..."
 $mesaRuntime = Resolve-MesaRuntimeDir -MesaRuntimeDir $MesaRuntimeDir
