@@ -24,6 +24,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <algorithm>
 #include <chrono>
 #include <fstream>
 #include <functional>
@@ -1905,6 +1906,45 @@ static void SetModsTargetFromProfile(AuthUiState& state, const std::wstring& run
     state.modsBrowseTargetId = ResolveProfileTarget(runtimeRoot, profile).targetId;
 }
 
+// Sort the profile mods view: 0 = A-Z, 1 = Z-A, 2 = newest first (the
+// creation time is when the .jar was added to this profile), 3 = oldest first.
+static void SortProfileModsView(std::vector<std::wstring>& mods, const std::wstring& runtimeRoot, const std::wstring& profileId, int mode) {
+    if (mods.size() < 2) return;
+    const std::wstring modsDir = ProfileModsDir(runtimeRoot, profileId);
+    std::vector<std::pair<std::wstring, FILETIME>> keyed;
+    keyed.reserve(mods.size());
+    for (const std::wstring& jar : mods) {
+        FILETIME ft{};
+        HANDLE h = CreateFileW((modsDir + L"\\" + jar).c_str(), GENERIC_READ, FILE_SHARE_READ,
+            nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (h != INVALID_HANDLE_VALUE) {
+            GetFileTime(h, &ft, nullptr, nullptr);
+            CloseHandle(h);
+        }
+        keyed.push_back({ jar, ft });
+    }
+    const auto nameLess = [](const std::pair<std::wstring, FILETIME>& a, const std::pair<std::wstring, FILETIME>& b) {
+        return _wcsicmp(a.first.c_str(), b.first.c_str()) < 0;
+    };
+    const auto timeLess = [](const std::pair<std::wstring, FILETIME>& a, const std::pair<std::wstring, FILETIME>& b) {
+        if (a.second.dwHighDateTime != b.second.dwHighDateTime) return a.second.dwHighDateTime < b.second.dwHighDateTime;
+        return a.second.dwLowDateTime < b.second.dwLowDateTime;
+    };
+    if (mode == 0 || mode == 1) {
+        std::stable_sort(keyed.begin(), keyed.end(), nameLess);
+        if (mode == 1) std::reverse(keyed.begin(), keyed.end());
+    } else {
+        std::stable_sort(keyed.begin(), keyed.end(), timeLess);
+        if (mode == 3) std::reverse(keyed.begin(), keyed.end());
+    }
+    for (size_t i = 0; i < keyed.size(); ++i) mods[i] = keyed[i].first;
+}
+
+static void ReloadProfileModsList(AuthUiState& state, const std::wstring& runtimeRoot) {
+    state.modsProfileMods = ListProfileMods(runtimeRoot, state.modsProfileId);
+    SortProfileModsView(state.modsProfileMods, runtimeRoot, state.modsProfileId, state.modsProfileSort);
+}
+
 static void LoadModsTab(AuthUiState& state, const std::wstring& runtimeRoot, const std::wstring& userModsDir) {
     state.modsCards.clear();
     state.selectedModIndex = 0;
@@ -2622,6 +2662,7 @@ void ShowModsPage(
                     else if (hid == launchhit::kProfileBackup) profileFocus = 3;
                     else if (hid == launchhit::kProfileExport) profileFocus = 4;
                     else if (hid == launchhit::kProfileController) profileFocus = 5;
+                    else if (hid == launchhit::kProfileSort) profileFocus = 6;
                     if (profileFocus >= 0) {
                         if (apply) state.modsProfileFocus = profileFocus;
                         if (clicked) clickActivate = true;
@@ -2734,11 +2775,12 @@ void ShowModsPage(
                     else if (state.modsProfileFocus == 5) state.modsProfileFocus = 4;
                     else if (state.modsProfileFocus == 4) state.modsProfileFocus = 3;
                     else if (state.modsProfileFocus == 3) state.modsProfileFocus = 1;
-                    else state.modsProfileFocus = 1;
+                    else state.modsProfileFocus = 6;
                 }
             } else if (!gridFocus && rightDown && !rightWasDown) {
                 if (!state.modsProfileBuiltin) {
-                    if (state.modsProfileFocus == 1) state.modsProfileFocus = 3;
+                    if (state.modsProfileFocus == 6) state.modsProfileFocus = 1;
+                    else if (state.modsProfileFocus == 1) state.modsProfileFocus = 3;
                     else if (state.modsProfileFocus == 3) state.modsProfileFocus = 4;
                     else if (state.modsProfileFocus == 4) state.modsProfileFocus = 5;
                     else if (state.modsProfileFocus == 5) state.modsProfileFocus = 0;
@@ -2771,7 +2813,7 @@ void ShowModsPage(
                 if (gridFocus && pmTotal > 0 && state.modsProfileSel < pmTotal) {
                     const std::wstring jar = state.modsProfileMods[static_cast<size_t>(state.modsProfileSel)];
                     const int removed = RemoveProfileModAndUnusedDependencies(runtimeRoot, state.modsProfileId, jar);
-                    state.modsProfileMods = ListProfileMods(runtimeRoot, state.modsProfileId);
+                    ReloadProfileModsList(state, runtimeRoot);
                     const int newTotal = static_cast<int>(state.modsProfileMods.size());
                     if (state.modsProfileSel >= newTotal) state.modsProfileSel = (std::max)(0, newTotal - 1);
                     if (newTotal == 0) state.modsProfileFocus = 0;
@@ -2818,17 +2860,27 @@ void ShowModsPage(
                     SetProfileControllerModEnabled(runtimeRoot, state.modsProfileId, state.modsProfileControllerModEnabled);
                     if (state.modsProfileControllerModEnabled) {
                         const int removed = DeleteControlifyModsFromDir(ProfileModsDir(runtimeRoot, state.modsProfileId));
-                        state.modsProfileMods = ListProfileMods(runtimeRoot, state.modsProfileId);
+                        ReloadProfileModsList(state, runtimeRoot);
                         state.status = removed > 0
                             ? L"Bandit controller mod enabled and Controlify removed"
                             : L"Bandit controller mod will be forced on launch";
                     } else {
                         const int removed = DeleteBanditControllerModsFromDir(ProfileModsDir(runtimeRoot, state.modsProfileId));
-                        state.modsProfileMods = ListProfileMods(runtimeRoot, state.modsProfileId);
+                        ReloadProfileModsList(state, runtimeRoot);
                         state.status = removed > 0
                             ? L"Bandit controller mod disabled and removed"
                             : L"Bandit controller mod disabled";
                     }
+                    state.isError = false;
+                } else if (state.modsProfileFocus == 6) {
+                    state.modsProfileSort = (state.modsProfileSort + 1) % 4;
+                    ReloadProfileModsList(state, runtimeRoot);
+                    state.modsProfileSel = 0;
+                    state.modsProfileScroll = 0;
+                    state.status = state.modsProfileSort == 0 ? L"Mods order: A to Z"
+                        : state.modsProfileSort == 1 ? L"Mods order: Z to A"
+                        : state.modsProfileSort == 2 ? L"Mods order: newest first"
+                        : L"Mods order: oldest first";
                     state.isError = false;
                 } else if (state.modsProfileFocus == 0) {
                     SetActiveProfileId(runtimeRoot, state.modsProfileId);
@@ -3110,7 +3162,7 @@ void ShowModsPage(
                         state.modsProfileTargetText = ProfileDisplayTarget(runtimeRoot, selected.filePath);
                         state.modsProfileBuiltin = (selected.filePath == kVanillaProfileId);
                         state.modsProfileControllerModEnabled = GetProfileById(runtimeRoot, selected.filePath).controllerModEnabled;
-                        state.modsProfileMods = ListProfileMods(runtimeRoot, selected.filePath);
+                        ReloadProfileModsList(state, runtimeRoot);
                         state.modsProfileScroll = 0;
                         state.modsProfileFocus = 0;
                         state.modsProfileSel = 0;

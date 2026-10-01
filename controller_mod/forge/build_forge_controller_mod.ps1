@@ -18,6 +18,9 @@ $compileOnlyDir = Join-Path $buildRoot "compile-only"
 $modId = "banditvault_forge_controller"
 $jarName = "banditvault-forge-controller-1.0.0.jar"
 $jarPath = Join-Path $buildRoot $jarName
+$exitJarName = "banditvault-exit-handler-1.0.0.jar"
+$exitJarPath = Join-Path $buildRoot $exitJarName
+$exitSrcResources = Join-Path $PSScriptRoot "src\main\resources-exit"
 $gameDir = Get-ConfigPath "GameDir"
 $profilePath = Join-Path $root "config\forge-install-profile.json"
 
@@ -98,14 +101,15 @@ $stamp = New-BuildStamp `
         "jar=$jarName",
         "sources=$($sourcePaths -join ';')"
     ) `
-    -ContentFiles (@($PSCommandPath, $profilePath) + $sourcePaths + $resourceFiles) `
+    -ContentFiles (@($PSCommandPath, $profilePath) + $sourcePaths + $resourceFiles + @(Get-ChildItem $exitSrcResources -Recurse -File | Select-Object -ExpandProperty FullName)) `
     -DependencyFiles @($patchedClient, $mixinJar.FullName)
 
-if (Test-BuildStampCurrent -StampPath $stampPath -Stamp $stamp -RequiredOutputs @($jarPath)) {
+if (Test-BuildStampCurrent -StampPath $stampPath -Stamp $stamp -RequiredOutputs @($jarPath, $exitJarPath)) {
     Write-Host "Forge controller mod up to date ($ForgeVersion), skipping compile."
     if ($OutputDir) {
         Ensure-Dir $OutputDir
         Copy-Item $jarPath (Join-Path $OutputDir $jarName) -Force
+        Copy-Item $exitJarPath (Join-Path $OutputDir $exitJarName) -Force
     }
     return
 }
@@ -220,10 +224,38 @@ if ($manifestText -notmatch "MixinConfigs:\s*banditvault-forge-controller\.mixin
     throw "Forge controller manifest is missing MixinConfigs entry."
 }
 
+# ---- Exit handler jar: returns to the launcher menu when the player quits.
+# Kept in its own jar so the per-profile "Bandit On/Off" toggle (which deletes
+# banditvault-*-controller jars) never removes quit-to-launcher behaviour.
+$exitStaging = Join-Path $buildRoot "exit-staging"
+Remove-Item -Recurse -Force $exitStaging -ErrorAction SilentlyContinue
+Ensure-Dir $exitStaging
+Copy-Item -Recurse (Join-Path $classesDir "banditvault\exithandler") (Join-Path $exitStaging "banditvault\exithandler") -Force
+Copy-Item -Recurse "$exitSrcResources\*" $exitStaging -Force
+$exitManifestPath = Join-Path $exitStaging "META-INF\MANIFEST.MF"
+if (-not (Test-Path $exitManifestPath)) {
+    throw "Exit handler manifest missing: $exitManifestPath"
+}
+Push-Location $exitStaging
+& $jar cfm $exitJarPath $exitManifestPath .
+if ($LASTEXITCODE -ne 0) {
+    Pop-Location
+    throw "Exit handler jar failed."
+}
+Pop-Location
+$exitJarListing = @(& $jar tf $exitJarPath)
+foreach ($requiredEntry in @("META-INF/mods.toml", "banditvault-exit-handler.mixins.json", "banditvault/exithandler/ReturnToLauncherSignal.class", "banditvault/exithandler/mixin/ForgeExitHandlerMixin.class")) {
+    if ($exitJarListing -notcontains $requiredEntry) {
+        throw "Packaged exit handler jar is missing $requiredEntry"
+    }
+}
+
 Set-BuildStamp -StampPath $stampPath -Stamp $stamp
 
 if ($OutputDir) {
     Ensure-Dir $OutputDir
     Copy-Item $jarPath (Join-Path $OutputDir $jarName) -Force
+    Copy-Item $exitJarPath (Join-Path $OutputDir $exitJarName) -Force
 }
 Write-Host "Forge controller mod built ($ForgeVersion) -> $jarPath"
+Write-Host "Forge exit handler built ($ForgeVersion) -> $exitJarPath"

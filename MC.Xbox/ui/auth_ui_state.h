@@ -67,6 +67,8 @@ struct AuthUiState {
     int modsProfileScroll = 0;
     int modsProfileFocus = 0;
     int modsProfileSel = 0;
+    // 0 = A-Z, 1 = Z-A, 2 = newest first, 3 = oldest first
+    int modsProfileSort = 0;
     bool modsRenaming = false;
     std::wstring modsRenameText;
     std::vector<ModCard> modsCards;

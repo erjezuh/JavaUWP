@@ -366,7 +366,7 @@ public:
                 const float btnW = state.modsProfileBuiltin ? 148.0f : 160.0f;
                 const float btnH = 54.0f;
                 const float btnGap = 12.0f;
-                const float actionBarW = state.modsProfileBuiltin ? btnW : (btnW * 5.0f + btnGap * 4.0f);
+                const float actionBarW = state.modsProfileBuiltin ? btnW : (btnW * 6.0f + btnGap * 5.0f);
 
                 const std::wstring nameShown = state.modsRenaming ? (state.modsRenameText + L"_") : state.modsProfileName;
                 const D2D1_RECT_F profileBack = DrawBackChip(left, top, surfaceFill.Get(), softEdge.Get(), muted.Get());
@@ -422,6 +422,20 @@ public:
                     DrawText(L"Backup", bodyMid_.Get(),
                         D2D1::RectF(backupBtn.left + 44.0f, backupBtn.top, backupBtn.right - 8.0f, backupBtn.bottom), accent.Get());
 
+                    const D2D1_RECT_F sortBtn = D2D1::RectF(right - btnW * 6.0f - btnGap * 5.0f, top, right - btnW * 5.0f - btnGap * 5.0f, top + btnH);
+                    RegisterHit(launchhit::kProfileSort, sortBtn);
+                    const bool sortFocus = state.modsProfileFocus == 6;
+                    if (sortFocus) GlowSelect(sortBtn, 12.0f);
+                    FillRound(sortBtn, surfaceFill.Get(), 12.0f);
+                    StrokeRound(sortBtn, accent.Get(), 12.0f, sortFocus ? 3.0f : 2.0f);
+                    DrawIcon(L"\uE8FD", D2D1::RectF(sortBtn.left + 12.0f, sortBtn.top, sortBtn.left + 36.0f, sortBtn.bottom), accent.Get());
+                    const wchar_t* sortLabel = L"Sort: A-Z";
+                    if (state.modsProfileSort == 1) sortLabel = L"Sort: Z-A";
+                    else if (state.modsProfileSort == 2) sortLabel = L"Sort: Newest";
+                    else if (state.modsProfileSort == 3) sortLabel = L"Sort: Oldest";
+                    DrawText(sortLabel, smallMid_.Get(),
+                        D2D1::RectF(sortBtn.left + 38.0f, sortBtn.top, sortBtn.right - 6.0f, sortBtn.bottom), accent.Get());
+
                     const D2D1_RECT_F delBtn = D2D1::RectF(right - btnW * 5.0f - btnGap * 4.0f, top, right - btnW * 4.0f - btnGap * 4.0f, top + btnH);
                     RegisterHit(launchhit::kProfileDelete, delBtn);
                     const bool delFocus = state.modsProfileFocus == 1;
@@ -442,6 +456,7 @@ public:
                     if (gridFocus) profileHint = L"B  Back      X  Remove mod      Y  Rename";
                     else if (state.modsProfileFocus == 4) profileHint = L"B  Back      A  Export .mrpack for PC";
                     else if (state.modsProfileFocus == 5) profileHint = L"B  Back      A  Toggle Bandit controller mod      Y Rename";
+                    else if (state.modsProfileFocus == 6) profileHint = L"B  Back      A  Change mods order      Y Rename";
                     else profileHint = L"B  Back      A select      X Delete      Y Rename";
                 }
                 DrawText(profileHint.c_str(),

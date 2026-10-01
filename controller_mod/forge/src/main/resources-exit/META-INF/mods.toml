@@ -1,0 +1,28 @@
+modLoader="javafml"
+loaderVersion="[47,)"
+license="MIT"
+
+[[mods]]
+modId="banditvault_exit_handler"
+version="1.0.0"
+displayName="Bandit Exit Handler"
+authors="Bandit Launcher"
+description='''
+Returns to the Bandit Launcher menu when the player quits Minecraft,
+instead of closing the whole launcher app. For Forge 1.20.1 on Xbox/UWP.
+'''
+features = { java_version = "[17,)" }
+
+[[dependencies.banditvault_exit_handler]]
+modId="forge"
+mandatory=true
+versionRange="[47,)"
+ordering="NONE"
+side="CLIENT"
+
+[[dependencies.banditvault_exit_handler]]
+modId="minecraft"
+mandatory=true
+versionRange="[1.20.1,1.21)"
+ordering="NONE"
+side="CLIENT"

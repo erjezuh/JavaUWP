@@ -1,0 +1,12 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "banditvault.exithandler.mixin",
+  "compatibilityLevel": "JAVA_17",
+  "client": [
+    "ForgeExitHandlerMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}
