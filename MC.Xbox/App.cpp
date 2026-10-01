@@ -959,17 +959,22 @@ public:
             } else if (EmbeddedJvmAlreadyUsed()) {
                 failedDetail = L"No se pudo arrancar. Cierra el launcher y abrelo otra vez antes de probar otra versión.";
             } else {
-                const std::wstring failedActiveId = GetActiveProfileId(exeDir);
-                const std::wstring failedGameDir = ProfileGameDir(exeDir, failedActiveId);
-                const telemetry::CrashRecord failedRecord = telemetry::ReadLastCrash();
-                const crashadvice::ModCrashInfo failedAdvice =
-                    crashadvice::AnalyzeLastRun(exeDir, failedGameDir, failedActiveId, failedRecord);
-                if (failedAdvice.found) {
-                    failedDetail = L"Causa: " + failedAdvice.reason;
-                    if (!failedAdvice.culpritName.empty()) {
-                        failedDetail = L"Mod: " + failedAdvice.culpritName + L". " + failedDetail;
+                const std::wstring logCause = crashadvice::LaunchFailureCause(exeDir);
+                if (!logCause.empty()) {
+                    failedDetail = logCause;
+                } else {
+                    const std::wstring failedActiveId = GetActiveProfileId(exeDir);
+                    const std::wstring failedGameDir = ProfileGameDir(exeDir, failedActiveId);
+                    const telemetry::CrashRecord failedRecord = telemetry::ReadLastCrash();
+                    const crashadvice::ModCrashInfo failedAdvice =
+                        crashadvice::AnalyzeLastRun(exeDir, failedGameDir, failedActiveId, failedRecord);
+                    if (failedAdvice.found) {
+                        failedDetail = L"Causa: " + failedAdvice.reason;
+                        if (!failedAdvice.culpritName.empty()) {
+                            failedDetail = L"Mod: " + failedAdvice.culpritName + L". " + failedDetail;
+                        }
+                        failedDetail += L" Solución: " + failedAdvice.solution;
                     }
-                    failedDetail += L" Solución: " + failedAdvice.solution;
                 }
             }
             RenderPreparationProgress(

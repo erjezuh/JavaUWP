@@ -328,6 +328,71 @@ std::wstring KnownIncompatibleLine(const std::wstring& profileId, const std::wst
     return line;
 }
 
+std::wstring LaunchFailureCause(const std::wstring& runtimeRoot) {
+    std::wstring text;
+    if (!ReadTextFile(runtimeRoot + L"\\logs\\current\\mc_launch.log", text) || text.empty()) {
+        return {};
+    }
+
+    // Only judge the most recent attempt: anything before the last
+    // "Launching embedded JVM" belongs to older runs.
+    const size_t attempt = text.rfind(L"Launching embedded JVM");
+    if (attempt != std::wstring::npos) text = text.substr(attempt);
+
+    // 1) A Java exception during startup names its stage.
+    const std::wstring excLine = FirstLineWith(text, L"Java exception during ");
+    if (!excLine.empty()) {
+        std::wstring stage = excLine;
+        const size_t at = stage.find(L"Java exception during ");
+        if (at != std::wstring::npos) stage = TrimW(stage.substr(at + 22));
+        std::wstring cause = L"Causa: Java falló al iniciar (" + stage + L").";
+        if (LowerW(excLine).find(L"findclass") != std::wstring::npos) {
+            cause += L" Solución: no se pudo cargar la clase principal del juego; "
+                L"reinstala la build y comprueba que la carpeta de mods no tenga un archivo corrupto.";
+        } else {
+            cause += L" Solución: cierra el launcher por completo y vuelve a abrirlo; si se repite, reinstala la build.";
+        }
+        return cause;
+    }
+
+    // 2) JNI_CreateJavaVM result code.
+    const std::wstring jniLine = FirstLineWith(text, L"JNI_CreateJavaVM => ");
+    if (!jniLine.empty()) {
+        const size_t at = jniLine.find(L"=> ");
+        std::wstring code = (at == std::wstring::npos) ? L"" : TrimW(jniLine.substr(at + 3));
+        if (!code.empty() && code != L"0") {
+            if (code == L"-1" || code == L"-5") {
+                return L"Causa: el motor de Java de esta sesión ya se había usado "
+                    L"(solo puede arrancar una vez por cada apertura del launcher). "
+                    L"Solución: cierra el launcher COMPLETAMENTE (menú Xbox → cerrar la app) "
+                    L"y vuelve a abrirlo antes de intentar otra vez.";
+            }
+            return L"Causa: el motor de Java no pudo arrancar (código " + code + L"). "
+                L"Solución: reinicia la consola y vuelve a intentarlo; si se repite, reinstala la build.";
+        }
+    }
+
+    // 3) The JVM DLL never loaded.
+    const std::wstring loadLine = FirstLineWith(text, L"LoadPackagedLibrary(");
+    if (!loadLine.empty() && LowerW(loadLine).find(L"failed") != std::wstring::npos) {
+        return L"Causa: falta o está dañada una librería del motor de Java incluida en el launcher. "
+            L"Solución: reinstala la build completa (el paquete con el Java 8).";
+    }
+    if (text.find(L"GetProcAddress(JNI_CreateJavaVM) failed") != std::wstring::npos) {
+        return L"Causa: el motor de Java incluido no es válido para esta consola. "
+            L"Solución: reinstala la build completa.";
+    }
+
+    // 4) The game started and died instantly.
+    if (text.find(L"Embedded JVM failed after startup") != std::wstring::npos) {
+        return L"Causa: el juego llegó a arrancar pero se cerró inmediatamente. "
+            L"Solución: abre Remote Files → logs → current y mira java_output.log para el error de Java; "
+            L"un mod de la carpeta de mods suele ser el culpable.";
+    }
+
+    return {};
+}
+
 ModCrashInfo AnalyzeLastRun(
     const std::wstring& runtimeRoot,
     const std::wstring& gameDir,

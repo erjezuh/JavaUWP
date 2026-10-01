@@ -38,4 +38,9 @@ ModCrashInfo AnalyzeLastRun(
 // line each. Used by the crash report and the launch-failure screen.
 std::wstring KnownIncompatibleLine(const std::wstring& profileId, const std::wstring& runtimeRoot);
 
+// Plain-Spanish cause + fix for a launch that never reached the game, read from
+// the launcher log tail (PreloadJvm / JNI_CreateJavaVM / FindClass markers).
+// Empty when nothing recognizable is found.
+std::wstring LaunchFailureCause(const std::wstring& runtimeRoot);
+
 }
