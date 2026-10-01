@@ -692,6 +692,12 @@ $manifestTargets = @(
 $fabricTargets = @($manifestTargets | Where-Object { $_.loader -eq "fabric" })
 $forgeTargets = @($manifestTargets | Where-Object { $_.loader -eq "forge" })
 $neoForgeTargets = @($manifestTargets | Where-Object { $_.loader -eq "neoforge" })
+# The shipped version catalog advertises every target in every package, so the
+# artifacts a target needs must ship too - even when the primary build version
+# is a different one. Forge 1.12.2 needs its legacy class overrides, ZipFS
+# patch and LWJGL2 natives regardless of the -McVersion the build was run with.
+$legacyForgeRow = @($forgeTargets | Where-Object { $_.minecraftVersion -eq "1.12.2" }) | Select-Object -First 1
+$legacyForge1122Advertised = $null -ne $legacyForgeRow
 # Per-version controller mods are expensive and are only useful for the target
 # being built. Do not rebuild controllers for every catalog entry on each
 # single-version build.
@@ -750,7 +756,7 @@ Write-Host "Copying natives..."
 Ensure-Dir (Join-Path $pkg "natives")
 Copy-Item (Join-Path $nativesSourceDir "*.dll") (Join-Path $pkg "natives\") -Force
 
-if ($ProjectConfig.MinecraftVersion -eq "1.12.2" -and $Loader.ToLowerInvariant() -eq "forge") {
+if ($legacyForge1122Advertised) {
     # Forge 1.12.2 uses LWJGL 2.9.4. Its x64 native is a legacy Win32 DLL
     # whose import table expects the VC++ 2010 CRT on many builds. A plain
     # "Can't find dependent libraries" from Java does not tell us which
@@ -960,13 +966,13 @@ if (-not $SkipVersionManifests) {
     Write-Host "Skipping extra per-version manifests (-SkipVersionManifests)"
 }
 
-if ($ProjectConfig.MinecraftVersion -eq "1.12.2" -and $Loader.ToLowerInvariant() -eq "forge") {
+if ($legacyForge1122Advertised) {
     Write-Host "=== Preparing legacy Forge 1.12.2 cache ==="
     & (Join-Path $root "scripts\setup.ps1") `
-        -MinecraftVersion $ProjectConfig.MinecraftVersion `
+        -MinecraftVersion "1.12.2" `
         -Loader "forge" `
-        -LoaderVersion $(if ($LoaderVersion) { $LoaderVersion } else { "14.23.5.2864" }) `
-        -AssetIndex $(if ($AssetIndex) { $AssetIndex } else { "1" })
+        -LoaderVersion $legacyForgeRow.loaderVersion `
+        -AssetIndex "1"
     if ($LASTEXITCODE -ne 0) { throw "Legacy Forge 1.12.2 setup failed" }
 }
 if (-not $SkipVersionCompat) {
@@ -1018,10 +1024,8 @@ if (-not $SkipVersionCompat) {
         # "bundled mods are missing" just because its controller/compat mod was
         # skipped or failed to build. The launcher skips this file when copying.
         Set-Content -Path (Join-Path $outDir ".bandit-empty") -Value "" -NoNewline
-        if ($ProjectConfig.MinecraftVersion -eq "1.12.2" -and
-            $row.minecraftVersion -eq "1.12.2" -and
-            $lv -eq $defaultLoaderVersion) {
-            Write-Host "Building legacy Forge 1.12.2 ZipFS coremod: $targetId"
+        if ($row.minecraftVersion -eq "1.12.2") {
+            Write-Host "Building legacy Forge 1.12.2 ZipFS coremod + legacy class overrides: $targetId"
             & (Join-Path $root "legacy_forge_compat\build_legacy_forge_compat.ps1") `
                 -MinecraftVersion "1.12.2" `
                 -ForgeVersion "1.12.2-$lv" `
@@ -1693,7 +1697,8 @@ if ($cfApiKey -and $cfApiKey.Trim().Length -gt 0) {
     Write-Host "MC_CURSEFORGE_API_KEY not set; CurseForge browsing needs a key file at runtime"
 }
 Copy-PackagedJre -JavaHome $jreSrc -PackageRelativeDir "jre" -SecurityPropertiesPath $xboxSecurityProperties
-$isLegacyForge122Build = $McVersion -eq "1.12.2" -and $Loader.ToLowerInvariant() -eq "forge"
+# Java 8 ZipFS patch ships whenever the catalog advertises Forge 1.12.2.
+$isLegacyForge122Build = $legacyForge1122Advertised
 try {
     $jre8Src = Resolve-JavaRuntimeHomeExact -MajorVersion 8
     Copy-PackagedJre -JavaHome $jre8Src -PackageRelativeDir "jre8" -SecurityPropertiesPath $xboxSecurityProperties

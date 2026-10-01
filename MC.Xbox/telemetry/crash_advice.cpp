@@ -383,6 +383,22 @@ std::wstring LaunchFailureCause(const std::wstring& runtimeRoot) {
             L"Solución: reinstala la build completa.";
     }
 
+    // 3b) Missing legacy Forge 1.12.2 components in the package.
+    if (text.find(L"aborting legacy JVM setup") != std::wstring::npos ||
+        text.find(L"missing from package") != std::wstring::npos) {
+        return L"Causa: faltan los componentes de compatibilidad de Forge 1.12.2 dentro de esta "
+            L"instalación del launcher (build sin soporte 1.12.2 o paquete incompleto). "
+            L"Solución: instala una build compilada con soporte 1.12.2; las builds nuevas lo "
+            L"incluyen siempre, aunque el destino principal sea 1.20.1.";
+    }
+
+    // 3c) Args file locked by an earlier attempt in the same launcher session.
+    if (text.find(L"FAILED args file") != std::wstring::npos) {
+        return L"Causa: el archivo de argumentos del juego estaba bloqueado por un intento anterior "
+            L"de esta misma sesión del launcher. "
+            L"Solución: cierra el launcher COMPLETAMENTE (menú Xbox → cerrar la app) y vuelve a abrirlo.";
+    }
+
     // 4) The game started and died instantly.
     if (text.find(L"Embedded JVM failed after startup") != std::wstring::npos) {
         return L"Causa: el juego llegó a arrancar pero se cerró inmediatamente. "

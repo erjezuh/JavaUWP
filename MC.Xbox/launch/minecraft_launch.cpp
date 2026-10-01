@@ -1485,6 +1485,12 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
         WriteLogF(L"FAILED args file err=%u", GetLastError());
         return false;
     }
+    // Close the args file on every exit path: a leaked handle here made every
+    // retry fail with err=32 (sharing violation) until the launcher restarted.
+    struct ArgsFileGuard {
+        FILE*& f;
+        ~ArgsFileGuard() { if (f) fclose(f); }
+    } argsFileGuard{ af };
 
     LoaderJvmContext loaderCtx;
     loaderCtx.loader = loaderId;
@@ -2104,6 +2110,7 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
         fprintf(af, "%s\n", launchdiag::DiagnosticMinecraftAppArg(appArgs, i).c_str());
     }
     fclose(af);
+    af = nullptr;
     WriteLog(L"Embedded JVM options written");
     reportProgress(
         L"Starting Java runtime",
