@@ -415,6 +415,87 @@ std::wstring CreateAutoProfile(const std::wstring& runtimeRoot, const LaunchTarg
     return CreateProfile(runtimeRoot, L"Profile " + std::to_wstring(n) + L" - " + TargetShortText(target), target);
 }
 
+// ---- Legacy 1.12.2 OptiFine auto-install -----------------------------------
+
+namespace {
+
+std::wstring LowerAsciiCopy(const std::wstring& s) {
+    std::wstring out = s;
+    for (wchar_t& c : out) {
+        if (c >= L'A' && c <= L'Z') c = c - L'A' + L'a';
+    }
+    return out;
+}
+
+bool IsLegacyOptiFineJarName(const std::wstring& name) {
+    const std::wstring lower = LowerAsciiCopy(name);
+    return lower.size() > 4 &&
+        lower.compare(lower.size() - 4, 4, L".jar") == 0 &&
+        lower.rfind(L"optifine", 0) == 0 &&
+        lower.find(L"1.12.2") != std::wstring::npos;
+}
+
+std::wstring FindLegacyOptiFineJar(
+    const std::wstring& runtimeRoot,
+    const std::wstring& targetId,
+    const std::wstring& skipModsDir) {
+    std::vector<std::wstring> dirs;
+    // Packaged per-target bundle dir, then every other profile's mods folders
+    // (both current and legacy layout), then the old shared mods folder.
+    dirs.push_back(runtimeRoot + L"\\runtime\\version-mods\\" + targetId);
+    for (const Profile& p : LoadProfiles(runtimeRoot)) {
+        const std::wstring modsDir = ProfileModsDir(runtimeRoot, p.id);
+        if (_wcsicmp(modsDir.c_str(), skipModsDir.c_str()) != 0) dirs.push_back(modsDir);
+        const std::wstring legacyDir = LegacyProfileModsDir(runtimeRoot, p.id);
+        if (_wcsicmp(legacyDir.c_str(), skipModsDir.c_str()) != 0) dirs.push_back(legacyDir);
+    }
+    dirs.push_back(runtimeRoot + L"\\mods");
+    for (const std::wstring& dir : dirs) {
+        WIN32_FIND_DATAW fd{};
+        HANDLE h = FindFirstFileW((dir + L"\\*.jar").c_str(), &fd);
+        if (h == INVALID_HANDLE_VALUE) continue;
+        do {
+            if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) &&
+                IsLegacyOptiFineJarName(fd.cFileName)) {
+                FindClose(h);
+                return dir + L"\\" + fd.cFileName;
+            }
+        } while (FindNextFileW(h, &fd));
+        FindClose(h);
+    }
+    return {};
+}
+
+} // namespace
+
+OptiFineAutoInstall AutoInstallLegacyOptiFine(
+    const std::wstring& runtimeRoot,
+    const std::wstring& profileId,
+    const LaunchTarget& target,
+    std::wstring& detail) {
+    detail.clear();
+    if (target.minecraftVersion != L"1.12.2") return OptiFineAutoInstall::NotApplicable;
+    const std::wstring loader = LowerAsciiCopy(target.loader);
+    if (!loader.empty() && loader.find(L"forge") == std::wstring::npos) {
+        return OptiFineAutoInstall::NotApplicable;
+    }
+
+    const std::wstring destDir = ProfileModsDir(runtimeRoot, profileId);
+    EnsureDirectoryTree(destDir);
+
+    const std::wstring src = FindLegacyOptiFineJar(runtimeRoot, target.targetId, destDir);
+    if (src.empty()) return OptiFineAutoInstall::NotFound;
+
+    const std::wstring name = GetFileName(src);
+    const std::wstring dest = destDir + L"\\" + name;
+    detail = name;
+    if (GetFileAttributesW(dest.c_str()) != INVALID_FILE_ATTRIBUTES) {
+        return OptiFineAutoInstall::AlreadyPresent;
+    }
+    if (!CopyFileW(src.c_str(), dest.c_str(), TRUE)) return OptiFineAutoInstall::NotFound;
+    return OptiFineAutoInstall::Installed;
+}
+
 std::wstring ProfileBackupsRoot(const std::wstring& runtimeRoot) {
     return runtimeRoot + L"\\profile-backups";
 }

@@ -52,6 +52,13 @@ std::wstring CreateProfile(const std::wstring& runtimeRoot, const std::wstring& 
 std::wstring CreateProfile(const std::wstring& runtimeRoot, const std::wstring& name);
 std::wstring CreateAutoProfile(const std::wstring& runtimeRoot, const LaunchTarget& target);
 
+// Legacy 1.12.2: every new profile auto-gets OptiFine by copying the jar that
+// already exists on this console (optifine.net has no stable direct download,
+// so the jar is user-supplied once and shared automatically from then on).
+enum class OptiFineAutoInstall { NotApplicable, Installed, AlreadyPresent, NotFound };
+OptiFineAutoInstall AutoInstallLegacyOptiFine(const std::wstring& runtimeRoot,
+    const std::wstring& profileId, const LaunchTarget& target, std::wstring& detail);
+
 bool BackupProfile(const std::wstring& runtimeRoot, const std::wstring& id, std::wstring& backupDir);
 bool RestoreProfileBackup(const std::wstring& runtimeRoot, const std::wstring& backupDir, bool removeBackup, std::wstring& restoredName);
 void DeleteProfilePermanent(const std::wstring& runtimeRoot, const std::wstring& id);
