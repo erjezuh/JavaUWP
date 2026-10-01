@@ -428,7 +428,7 @@ static std::atomic<bool> g_installResultOk{false};
 static std::mutex g_installStatusMutex;
 static std::wstring g_installStatus;
 
-static void SetInstallStatus(const std::wstring& s) {
+void SetInstallStatus(const std::wstring& s) {
     std::lock_guard<std::mutex> lk(g_installStatusMutex);
     g_installStatus = s;
 }
@@ -444,7 +444,7 @@ static std::wstring MbStr(unsigned long long bytes) {
     return buf;
 }
 
-static std::function<void(unsigned long long)> MakeInstallProgress(const std::wstring& label, unsigned long long total) {
+std::function<void(unsigned long long)> MakeInstallProgress(const std::wstring& label, unsigned long long total) {
     return [label, total](unsigned long long done) {
         std::wstring s = label;
         if (total > 0) s += L"  " + MbStr((std::min)(done, total)) + L" / " + MbStr(total) + L" MB";
@@ -983,15 +983,10 @@ static bool FetchCurseForgeMods(
         error = L"CurseForge API key missing (curseforge_api_key.txt)";
         return false;
     }
-    if (projectType && std::string(projectType) == "modpack") {
-        // CurseForge modpacks are not mrpacks; the modpack pipeline stays on
-        // Modrinth until a CurseForge pack installer exists.
-        error = L"CurseForge modpacks are not supported yet";
-        return false;
-    }
-
+    const bool modpackType = projectType && std::string(projectType) == "modpack";
     const int kind = ContentKindOf(projectType);
-    const int classId = kind == 1 ? 6552 : (kind == 2 ? 12 : 6); // shaders / resource packs / mods
+    // classIds: Mods=6, Modpacks=4471, ResourcePacks=12, Shaders=6552.
+    const int classId = modpackType ? 4471 : (kind == 1 ? 6552 : (kind == 2 ? 12 : 6));
     std::wstring url =
         L"https://api.curseforge.com/v1/mods/search?gameId=432&classId=" +
         std::to_wstring(classId) + L"&sortField=2&sortOrder=desc";
@@ -1038,6 +1033,7 @@ static bool FetchCurseForgeMods(
             ModCard card;
             card.projectId = L"curse:" + std::to_wstring(modId);
             card.contentKind = kind;
+            card.isModpack = modpackType;
             card.slug = JsonStringOrEmpty(hit, L"slug");
             card.title = JsonStringOrEmpty(hit, L"name");
             card.description = JsonStringOrEmpty(hit, L"summary");
@@ -1341,6 +1337,113 @@ static bool InstallModpack(const ModCard& card, const std::wstring& runtimeRoot,
     return ok;
 }
 
+// CurseForge modpack install: resolve the pack zip (manifest.json + overrides)
+// and run the manifest pipeline in modpack_io.
+static bool InstallCurseForgeModpack(const ModCard& card, const std::wstring& runtimeRoot, const std::wstring& profileId, std::wstring& error, const std::string& gameVersion, const std::string& loaderId) {
+    using namespace winrt::Windows::Data::Json;
+    std::wstring id = card.projectId;
+    if (id.rfind(L"curse:", 0) == 0) {
+        id = id.substr(6);
+    }
+    if (id.empty()) {
+        error = L"Missing CurseForge project id";
+        return false;
+    }
+    const std::wstring key = CurseForgeApiKey(runtimeRoot);
+    if (key.empty()) {
+        error = L"CurseForge API key missing (curseforge_api_key.txt)";
+        return false;
+    }
+
+    SetInstallStatus(L"Resolving " + card.title + L"...");
+    std::wstring url =
+        L"https://api.curseforge.com/v1/mods/" + id + L"/files?index=0&pageSize=50";
+    if (!gameVersion.empty()) {
+        url += L"&gameVersion=" + a2w(FormUrlEncode(gameVersion).c_str());
+    }
+    const int loaderType = CurseForgeLoaderType(loaderId);
+    if (loaderType != 0) {
+        url += L"&modLoaderType=" + std::to_wstring(loaderType);
+    }
+    WriteLogF(L"CurseForge modpack files url=%s", url.c_str());
+    const HttpResult response = HttpGetStringHeader(url.c_str(), L"x-api-key", key);
+    if (!response.success()) {
+        error = L"CurseForge pack lookup failed HTTP " + std::to_wstring(response.status);
+        WriteLogF(L"%s project=%s", error.c_str(), id.c_str());
+        return false;
+    }
+
+    std::wstring fileName;
+    std::wstring downloadUrl;
+    int fileId = 0;
+    try {
+        JsonObject root = JsonObject::Parse(winrt::to_hstring(response.body));
+        if (!root.HasKey(L"data") ||
+            root.GetNamedValue(L"data").ValueType() != JsonValueType::Array) {
+            error = L"Could not parse CurseForge pack files response";
+            return false;
+        }
+        JsonArray files = root.GetNamedArray(L"data");
+        for (uint32_t i = 0; i < files.Size(); ++i) {
+            auto value = files.GetAt(i);
+            if (value.ValueType() != JsonValueType::Object) continue;
+            JsonObject file = value.GetObject();
+            const std::wstring name = JsonStringOrEmpty(file, L"fileName");
+            const std::wstring lowerName = ToLowerW(name);
+            if (lowerName.size() < 5 ||
+                lowerName.compare(lowerName.size() - 4, 4, L".zip") != 0) {
+                continue;
+            }
+            fileName = name;
+            downloadUrl = JsonStringOrEmpty(file, L"downloadUrl");
+            fileId = JsonIntOrZero(file, L"id");
+            break;
+        }
+    } catch (const winrt::hresult_error&) {
+        error = L"Could not parse CurseForge pack files response";
+        return false;
+    }
+    if (fileName.empty()) {
+        error = L"No CurseForge pack download was found";
+        return false;
+    }
+    if (downloadUrl.empty() && fileId > 0) {
+        const std::wstring resolveUrl =
+            L"https://api.curseforge.com/v1/mods/" + id +
+            L"/files/" + std::to_wstring(fileId) + L"/download-url";
+        const HttpResult resolve =
+            HttpGetStringHeader(resolveUrl.c_str(), L"x-api-key", key);
+        if (resolve.success()) {
+            try {
+                JsonObject resolveRoot =
+                    JsonObject::Parse(winrt::to_hstring(resolve.body));
+                downloadUrl = JsonStringOrEmpty(resolveRoot, L"data");
+            } catch (...) {
+            }
+        }
+    }
+    if (downloadUrl.empty()) {
+        error = L"Pack has no download url";
+        return false;
+    }
+
+    const std::wstring cacheDir = runtimeRoot + L"\\.modpack-cache";
+    EnsureDirectoryTree(cacheDir);
+    const std::wstring packPath = cacheDir + L"\\" + SafeFileName(fileName);
+    DeleteFileW(packPath.c_str());
+    if (!DownloadUrlToFile(downloadUrl, packPath,
+            MakeInstallProgress(L"Downloading " + card.title, 0))) {
+        DeleteFileW(packPath.c_str());
+        error = L"Pack download failed";
+        return false;
+    }
+
+    SetInstallStatus(L"Installing " + card.title + L"...");
+    const bool ok = InstallCurseForgeModpackFromFile(packPath, runtimeRoot, profileId, key, error);
+    DeleteFileW(packPath.c_str());
+    return ok;
+}
+
 static void CleanInlineMd(const std::wstring& s, std::wstring& out,
                           std::vector<std::pair<UINT32, UINT32>>& bold,
                           bool& boldOpen, UINT32& boldStart) {
@@ -1536,7 +1639,11 @@ static void StartInstallJob(const ModCard& card, const std::wstring& runtimeRoot
         if (copy.isModpack) {
             const std::wstring pid = CreateProfile(rootCopy, copy.title, targetCopy);
             WriteLogF(L"Installing modpack '%s' target=%s into profile %s", copy.title.c_str(), targetCopy.targetId.c_str(), pid.c_str());
-            ok = InstallModpack(copy, rootCopy, pid, err, gameVersion, loaderId);
+            if (IsCurseForgeCard(copy)) {
+                ok = InstallCurseForgeModpack(copy, rootCopy, pid, err, gameVersion, loaderId);
+            } else {
+                ok = InstallModpack(copy, rootCopy, pid, err, gameVersion, loaderId);
+            }
             if (ok) {
                 SetActiveProfileId(rootCopy, pid);
                 SetInstallStatus(L"Installed profile " + copy.title);
@@ -1918,12 +2025,22 @@ static void LoadModsTab(AuthUiState& state, const std::wstring& runtimeRoot, con
         }
         WriteLog(L"CurseForge API key not configured; Modrinth-only browsing");
     } else if (std::string(projectType) == "modpack") {
-        if (!useModrinth) {
-            state.status = L"CurseForge modpacks are not supported yet";
-            state.isError = true;
-            return;
+        // CurseForge modpacks are searchable now (classId 4471); installs go
+        // through the manifest.json pack pipeline.
+        std::wstring cfError;
+        int cfTotal = 0;
+        if (FetchCurseForgeMods(runtimeRoot, query, 0, kModPageSize, state.modsCards,
+                cfTotal, cfError, projectType, gameVersion, loaderId)) {
+            total += cfTotal;
+            WriteLogF(L"CurseForge modpacks total=%d", cfTotal);
+        } else {
+            if (!useModrinth) {
+                state.status = cfError.empty() ? L"Could not load CurseForge" : cfError;
+                state.isError = true;
+                return;
+            }
+            WriteLogF(L"CurseForge modpack search failed: %s", cfError.c_str());
         }
-        WriteLog(L"CurseForge skipped: modpack tab stays on Modrinth packs");
     } else {
         std::wstring cfError;
         int cfTotal = 0;
@@ -2316,7 +2433,7 @@ void ShowModsPage(
             return;
         }
         // keep paging CurseForge with its own offset so both sources grow
-        if (useCurseForge && !CurseForgeApiKey(runtimeRoot).empty() && std::string(projectType) != "modpack") {
+        if (useCurseForge && !CurseForgeApiKey(runtimeRoot).empty()) {
             const int cfBefore = CountCurseForgeCards(state.modsCards);
             std::wstring cfError;
             int cfTotal = 0;

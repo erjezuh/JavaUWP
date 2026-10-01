@@ -545,7 +545,10 @@ public:
             }
 
             {
-                const float infoY = top + 76.0f + 5 * (buttonH + buttonGap) + 8.0f;
+                float infoY = top + 76.0f + 7 * (buttonH + buttonGap) + 8.0f;
+                // Never overlap the status area at the bottom of the column.
+                const float infoMaxTop = frame.bottom - 112.0f - 74.0f - 10.0f;
+                if (infoY > infoMaxTop) infoY = infoMaxTop;
                 const D2D1_RECT_F infoBox = D2D1::RectF(left, infoY, tabsRight, infoY + 74.0f);
                 FillRound(infoBox, surfaceFill.Get(), 12.0f);
                 StrokeRound(infoBox, softEdge.Get(), 12.0f, 1.0f);

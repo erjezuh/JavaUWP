@@ -275,6 +275,310 @@ bool InstallModpackFromFile(
     return true;
 }
 
+static std::wstring MpJsonString(const winrt::Windows::Data::Json::JsonObject& obj, const wchar_t* key) {
+    using namespace winrt::Windows::Data::Json;
+    if (obj.HasKey(key) && obj.GetNamedValue(key).ValueType() == JsonValueType::String) {
+        return std::wstring(obj.GetNamedString(key).c_str());
+    }
+    return std::wstring();
+}
+
+static int MpJsonInt(const winrt::Windows::Data::Json::JsonObject& obj, const wchar_t* key) {
+    using namespace winrt::Windows::Data::Json;
+    if (obj.HasKey(key) && obj.GetNamedValue(key).ValueType() == JsonValueType::Number) {
+        return static_cast<int>(obj.GetNamedNumber(key));
+    }
+    return 0;
+}
+
+// CurseForge modpack zip: manifest.json + overrides/. Each files[] entry is a
+// (projectID, fileID) pair resolved through the CurseForge Core API.
+bool InstallCurseForgeModpackFromFile(
+    const std::wstring& packZipPath,
+    const std::wstring& runtimeRoot,
+    const std::wstring& profileId,
+    const std::wstring& curseForgeApiKey,
+    std::wstring& error) {
+    using namespace winrt::Windows::Data::Json;
+    error.clear();
+    if (profileId == kVanillaProfileId) {
+        error = L"Vanilla is read-only. Pick or create a profile first.";
+        return false;
+    }
+    if (curseForgeApiKey.empty()) {
+        error = L"CurseForge API key missing (curseforge_api_key.txt)";
+        return false;
+    }
+    if (GetFileAttributesW(packZipPath.c_str()) == INVALID_FILE_ATTRIBUTES) {
+        error = L"Pack file not found";
+        return false;
+    }
+
+    EnsureProfileGameDataInitialized(runtimeRoot, profileId);
+    const Profile profile = GetProfileById(runtimeRoot, profileId);
+    const std::wstring gameDir = ProfileGameDir(runtimeRoot, profileId);
+    const std::wstring userModsDir = ProfileModsDir(runtimeRoot, profileId);
+    ConfigureKnownModDefaults(gameDir, userModsDir, profile.minecraftVersion);
+
+    std::vector<unsigned char> packBytes;
+    if (!ReadBinaryFileAll(packZipPath, packBytes) || packBytes.empty()) {
+        error = L"Could not read pack file";
+        return false;
+    }
+
+    mz_zip_archive zip{};
+    if (!mz_zip_reader_init_mem(&zip, packBytes.data(), packBytes.size(), 0)) {
+        error = L"Pack is not a valid CurseForge modpack archive";
+        return false;
+    }
+
+    std::string manifestJson;
+    {
+        const int idx = mz_zip_reader_locate_file(&zip, "manifest.json", nullptr, 0);
+        if (idx < 0) {
+            mz_zip_reader_end(&zip);
+            error = L"Pack is missing manifest.json";
+            return false;
+        }
+        size_t outSize = 0;
+        void* p = mz_zip_reader_extract_to_heap(&zip, static_cast<mz_uint>(idx), &outSize, 0);
+        if (!p) {
+            mz_zip_reader_end(&zip);
+            error = L"Could not read pack manifest";
+            return false;
+        }
+        manifestJson.assign(static_cast<const char*>(p), outSize);
+        mz_free(p);
+    }
+
+    std::wstring overridesFolder = L"overrides";
+    struct PackRef { int projectId = 0; int fileId = 0; };
+    std::vector<PackRef> refs;
+    int optionalSkipped = 0;
+    try {
+        JsonObject root = JsonObject::Parse(winrt::to_hstring(manifestJson));
+        std::wstring packMinecraft;
+        std::wstring packLoaderFamily;
+        if (root.HasKey(L"minecraft") && root.GetNamedValue(L"minecraft").ValueType() == JsonValueType::Object) {
+            JsonObject mc = root.GetNamedObject(L"minecraft");
+            packMinecraft = MpJsonString(mc, L"version");
+            if (mc.HasKey(L"modLoaders") && mc.GetNamedValue(L"modLoaders").ValueType() == JsonValueType::Array) {
+                JsonArray loaders = mc.GetNamedArray(L"modLoaders");
+                std::wstring primaryId;
+                std::wstring anyId;
+                for (uint32_t i = 0; i < loaders.Size(); ++i) {
+                    auto v = loaders.GetAt(i);
+                    if (v.ValueType() != JsonValueType::Object) continue;
+                    JsonObject lo = v.GetObject();
+                    const std::wstring id = MpJsonString(lo, L"id");  // e.g. forge-47.4.20
+                    if (id.empty()) continue;
+                    if (anyId.empty()) anyId = id;
+                    if (lo.HasKey(L"primary") && lo.GetNamedValue(L"primary").ValueType() == JsonValueType::Boolean &&
+                        lo.GetNamedBoolean(L"primary")) {
+                        primaryId = id;
+                    }
+                }
+                const std::wstring loaderId = !primaryId.empty() ? primaryId : anyId;
+                const size_t dash = loaderId.find(L'-');
+                packLoaderFamily = dash == std::wstring::npos ? loaderId : loaderId.substr(0, dash);
+                for (wchar_t& c : packLoaderFamily) c = static_cast<wchar_t>(towlower(c));
+            }
+        }
+
+        // The profile (created from the browse target) must match the pack's
+        // Minecraft line, otherwise the launch would crash with the wrong game.
+        if (!packMinecraft.empty() && packMinecraft != profile.minecraftVersion) {
+            error = L"Pack is for Minecraft " + packMinecraft +
+                L" but the selected target is " + profile.minecraftVersion +
+                L". Set Target to a " + packMinecraft + L" profile and install again.";
+            return false;
+        }
+        std::wstring profileLoader = profile.loader;
+        for (wchar_t& c : profileLoader) c = static_cast<wchar_t>(towlower(c));
+        if (!packLoaderFamily.empty() && packLoaderFamily != profileLoader) {
+            error = L"Pack uses " + packLoaderFamily + L" but the selected target is " +
+                profileLoader + L". Set Target to a " + packLoaderFamily + L" profile and install again.";
+            return false;
+        }
+
+        const std::wstring ov = MpJsonString(root, L"overrides");
+        if (!ov.empty()) {
+            overridesFolder = ov;
+            while (!overridesFolder.empty() && (overridesFolder.back() == L'/' || overridesFolder.back() == L'\\')) {
+                overridesFolder.pop_back();
+            }
+            if (overridesFolder.empty()) overridesFolder = L"overrides";
+        }
+
+        if (root.HasKey(L"files") && root.GetNamedValue(L"files").ValueType() == JsonValueType::Array) {
+            JsonArray files = root.GetNamedArray(L"files");
+            for (uint32_t i = 0; i < files.Size(); ++i) {
+                auto v = files.GetAt(i);
+                if (v.ValueType() != JsonValueType::Object) continue;
+                JsonObject fo = v.GetObject();
+                if (fo.HasKey(L"required") && fo.GetNamedValue(L"required").ValueType() == JsonValueType::Boolean &&
+                    !fo.GetNamedBoolean(L"required")) {
+                    ++optionalSkipped;
+                    continue;
+                }
+                PackRef ref;
+                ref.projectId = MpJsonInt(fo, L"projectID");
+                ref.fileId = MpJsonInt(fo, L"fileID");
+                if (ref.projectId <= 0 || ref.fileId <= 0) continue;
+                refs.push_back(ref);
+            }
+        }
+    } catch (const winrt::hresult_error&) {
+        error = L"Could not parse pack manifest";
+        return false;
+    }
+
+    if (refs.empty()) {
+        error = L"Pack had no required mods to install";
+        return false;
+    }
+
+    std::wstring firstError;
+    int done = 0;
+    int blocked = 0;
+    const int total = static_cast<int>(refs.size());
+    for (const PackRef& ref : refs) {
+        const std::wstring modId = std::to_wstring(ref.projectId);
+        const std::wstring fileId = std::to_wstring(ref.fileId);
+        const std::wstring label = L"Mod " + std::to_wstring(done + 1) + L"/" + std::to_wstring(total);
+        SetInstallStatus(label + L"...");
+
+        std::wstring fileName;
+        std::wstring downloadUrl;
+        std::string sha1;
+        try {
+            const std::wstring resolveUrl =
+                L"https://api.curseforge.com/v1/mods/" + modId + L"/files/" + fileId;
+            const HttpResult response =
+                HttpGetStringHeader(resolveUrl.c_str(), L"x-api-key", curseForgeApiKey);
+            if (!response.success()) {
+                if (firstError.empty()) firstError = L"File lookup failed for project " + modId;
+                ++done;
+                continue;
+            }
+            JsonObject root = JsonObject::Parse(winrt::to_hstring(response.body));
+            if (root.HasKey(L"data") && root.GetNamedValue(L"data").ValueType() == JsonValueType::Object) {
+                JsonObject data = root.GetNamedObject(L"data");
+                fileName = MpJsonString(data, L"fileName");
+                downloadUrl = MpJsonString(data, L"downloadUrl");
+                if (data.HasKey(L"hashes") && data.GetNamedValue(L"hashes").ValueType() == JsonValueType::Array) {
+                    JsonArray hashes = data.GetNamedArray(L"hashes");
+                    for (uint32_t h = 0; h < hashes.Size(); ++h) {
+                        auto hv = hashes.GetAt(h);
+                        if (hv.ValueType() != JsonValueType::Object) continue;
+                        JsonObject hash = hv.GetObject();
+                        if (MpJsonInt(hash, L"algo") == 1) sha1 = w2a(MpJsonString(hash, L"value").c_str());
+                    }
+                }
+            }
+        } catch (const winrt::hresult_error&) {
+        }
+
+        if (downloadUrl.empty()) {
+            const std::wstring fallbackUrl =
+                L"https://api.curseforge.com/v1/mods/" + modId + L"/files/" + fileId + L"/download-url";
+            const HttpResult resolve =
+                HttpGetStringHeader(fallbackUrl.c_str(), L"x-api-key", curseForgeApiKey);
+            if (resolve.success()) {
+                try {
+                    JsonObject root = JsonObject::Parse(winrt::to_hstring(resolve.body));
+                    downloadUrl = MpJsonString(root, L"data");
+                } catch (...) {
+                }
+            }
+        }
+        if (fileName.empty()) fileName = L"mod-" + modId + L"-" + fileId + L".jar";
+        if (downloadUrl.empty()) {
+            WriteLogF(L"CurseForge pack file without download url: %s", fileName.c_str());
+            if (firstError.empty()) firstError = L"Some pack files failed to install";
+            ++done;
+            continue;
+        }
+
+        const std::wstring dest = ModpackDestForRelative(L"mods\\" + fileName, gameDir, userModsDir);
+        const size_t bslash = dest.find_last_of(L'\\');
+        const std::wstring base = bslash == std::wstring::npos ? dest : dest.substr(bslash + 1);
+        if (IsBlockedModFileName(base)) {
+            WriteLogF(L"Skipping blocked modpack file: %s", base.c_str());
+            ++blocked;
+            ++done;
+            continue;
+        }
+        if (!sha1.empty() && FileMatchesSha1(dest, sha1)) {
+            WriteLogF(L"Modpack file already installed: %s", base.c_str());
+            ++done;
+            continue;
+        }
+
+        EnsureDirectoryTree(GetParentDir(dest));
+        const std::wstring tmp = dest + L".download";
+        DeleteFileW(tmp.c_str());
+        SetInstallStatus(label + L": " + base);
+        bool fileOk = DownloadUrlToFile(downloadUrl, tmp,
+            MakeInstallProgress(label + L": " + base, 0)) &&
+            (sha1.empty() || FileMatchesSha1(tmp, sha1));
+        if (fileOk) {
+            DeleteFileW(dest.c_str());
+            if (!MoveFileExW(tmp.c_str(), dest.c_str(), MOVEFILE_REPLACE_EXISTING)) {
+                DeleteFileW(tmp.c_str());
+                fileOk = false;
+            }
+        } else {
+            DeleteFileW(tmp.c_str());
+        }
+        if (!fileOk && firstError.empty()) firstError = L"Some pack files failed to install";
+        WriteLogF(L"Modpack file %d/%d %s: %s", done + 1, total, fileOk ? L"ok" : L"failed", base.c_str());
+        ++done;
+    }
+
+    WriteLog(L"Applying CurseForge modpack overrides...");
+    const std::string prefixA = w2a(overridesFolder.c_str()) + "/";
+    const mz_uint entryCount = mz_zip_reader_get_num_files(&zip);
+    for (mz_uint i = 0; i < entryCount; ++i) {
+        if (mz_zip_reader_is_file_a_directory(&zip, i)) continue;
+        mz_zip_archive_file_stat st;
+        if (!mz_zip_reader_file_stat(&zip, i, &st)) continue;
+        std::string name = st.m_filename;
+        std::string prefix;
+        if (name.rfind(prefixA, 0) == 0) prefix = prefixA;
+        else if (name.rfind("overrides/", 0) == 0) prefix = "overrides/";
+        else if (name.rfind("client-overrides/", 0) == 0) prefix = "client-overrides/";
+        else continue;
+        const std::string relA = name.substr(prefix.size());
+        if (relA.empty()) continue;
+        const std::wstring rel = a2w(relA.c_str());
+        const std::wstring dest = ModpackDestForRelative(rel, gameDir, userModsDir);
+        const size_t slash = dest.find_last_of(L'\\');
+        const std::wstring base = slash == std::wstring::npos ? dest : dest.substr(slash + 1);
+        if (ToLowerW(dest).find(ToLowerW(userModsDir)) == 0 && IsBlockedModFileName(base)) {
+            WriteLogF(L"Skipping blocked modpack override: %s", base.c_str());
+            ++blocked;
+            continue;
+        }
+        size_t outSize = 0;
+        void* p = mz_zip_reader_extract_to_heap(&zip, i, &outSize, 0);
+        if (!p) continue;
+        WriteAllBytes(dest, p, outSize);
+        mz_free(p);
+    }
+
+    mz_zip_reader_end(&zip);
+    PurgeBlockedModsFromDir(runtimeRoot, userModsDir);
+
+    WriteLogF(L"CurseForge modpack import done: %d files, %d optional skipped, %d blocked",
+        done, optionalSkipped, blocked);
+    if (!firstError.empty()) {
+        error = firstError;
+        return false;
+    }
+    return true;
+}
+
 static bool ZipAddBytes(mz_zip_archive* zip, const std::string& archiveName, const std::vector<unsigned char>& bytes) {
     if (bytes.empty()) return false;
     return mz_zip_writer_add_mem(zip, archiveName.c_str(), bytes.data(), bytes.size(), MZ_DEFAULT_COMPRESSION) != 0;
