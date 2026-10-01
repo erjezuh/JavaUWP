@@ -539,6 +539,15 @@ bool IsBlockedModFileName(const std::wstring& fileName) {
     return FindBlockedModFile(fileName) != nullptr;
 }
 
+std::vector<std::wstring> BlockedModNotesForJars(const std::vector<std::wstring>& jarNames) {
+    std::vector<std::wstring> notes;
+    for (const std::wstring& jar : jarNames) {
+        const BlockedMod* blocked = FindBlockedModFile(jar);
+        if (blocked) notes.push_back(jar + L" - " + blocked->reason);
+    }
+    return notes;
+}
+
 static std::vector<std::string> SplitConstraintAlternatives(const std::string& constraint) {
     std::vector<std::string> out;
     size_t start = 0;

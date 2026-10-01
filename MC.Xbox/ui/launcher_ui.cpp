@@ -10,6 +10,7 @@
 #include "remote_file_server.h"
 #include "qr_code.h"
 #include "telemetry.h"
+#include "crash_advice.h"
 
 #include <chrono>
 #include <thread>
@@ -195,76 +196,98 @@ static void ShowRemoteFilesPage(ICoreWindow* window, AuthScreenRenderer* rendere
     }
 }
 
-static std::wstring CrashHeadline(const telemetry::CrashRecord& record) {
-    if (record.repeatCount >= 3) {
-        return L"Minecraft has crashed " + std::to_wstring(record.repeatCount) + L" launches in a row";
+static std::wstring CrashHeadline(const telemetry::CrashRecord& record, const crashadvice::ModCrashInfo& advice) {
+    std::wstring base;
+    if (record.found && record.repeatCount >= 3) {
+        base = L"Minecraft se ha cerrado inesperado " + std::to_wstring(record.repeatCount) + L" veces seguidas";
+    } else if (record.found && record.phase == L"mod_load") {
+        base = L"Minecraft se ha cerrado mientras cargaba los mods";
+    } else if (record.found && record.phase == L"jvm_init") {
+        base = L"Minecraft se ha cerrado justo al arrancar";
+    } else if (record.found && record.phase == L"ingame") {
+        base = L"Minecraft se ha cerrado mientras jugabas";
+    } else {
+        base = L"Minecraft se ha cerrado de forma inesperada";
     }
-    if (record.exception.find(L"unknown_") != std::wstring::npos) {
-        return L"Minecraft closed unexpectedly";
+    if (!advice.culpritName.empty()) {
+        base += L" - parece ser: " + advice.culpritName;
     }
-    if (record.phase == L"mod_load") return L"Minecraft crashed while loading mods";
-    if (record.phase == L"jvm_init") return L"Minecraft crashed while starting up";
-    if (record.phase == L"ingame") return L"Minecraft crashed while playing";
-    return L"Minecraft closed unexpectedly";
+    return base;
 }
 
-static std::wstring CrashSuspectLine(const telemetry::CrashRecord& record) {
-    if (!record.suspectedMod.empty()) {
-        std::wstring line = L"Suspected: " + record.suspectedMod;
-        if (!record.detail.targetMethod.empty()) {
-            line += L"\nIt asked for something this version of Minecraft does not have.";
-        }
-        return line;
+static std::wstring CrashSuspectLine(const telemetry::CrashRecord& record, const crashadvice::ModCrashInfo& advice) {
+    std::wstring line;
+    if (!advice.culpritName.empty()) {
+        line = L"MOD QUE HA FALLADO: " + advice.culpritName;
+        if (!advice.culpritFile.empty()) line += L"  (" + advice.culpritFile + L")";
+    } else {
+        line = L"MOD QUE HA FALLADO: no se pudo identificar con seguridad.";
+    }
+    if (!advice.reason.empty()) {
+        line += L"\n\nQUÉ HA PASADO: " + advice.reason;
+    }
+    if (!advice.solution.empty()) {
+        line += L"\n\nQUÉ PUEDES HACER: " + advice.solution;
+    }
+    if (!advice.incompatible.empty()) {
+        line += L"\n\n" + advice.incompatible;
+    }
+
+    // Extra leads from the fast analysis when the file-based one was thin.
+    if (!record.suspectedMod.empty() &&
+        (advice.culpritName.empty() || record.suspectedMod != advice.culpritName)) {
+        line += L"\n\nSospechoso del análisis: " + record.suspectedMod;
     }
     if (!record.detail.symbol.empty()) {
-        std::string symLower = record.detail.symbol;
-        for (char& c : symLower) {
-            if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
-        }
-        const bool graphicsSymbol =
-            symLower.rfind("gl", 0) == 0 ||
-            symLower.find("egl") != std::string::npos ||
-            symLower.find("glfw") != std::string::npos ||
-            symLower.find("opengl") != std::string::npos;
-        if (graphicsSymbol) {
-            return L"A mod asked for " + a2w(record.detail.symbol.c_str()) +
-                L", which this console's graphics layer does not provide.\nThis points to the launcher's graphics layer.";
-        }
-        return L"A mod asked for " + a2w(record.detail.symbol.c_str()) +
-            L", a Windows system component this console does not hand out to mods.\n"
-            L"Recent launcher builds probe and stand in for the common ones; check the\n"
-            L"'System dll probe' lines in the log to see what was available.";
+        line += L"\n\nUn mod pidió " + a2w(record.detail.symbol.c_str()) +
+            L", que esta consola no entrega a los mods.";
     }
-    if (record.exception.find(L"unknown_") != std::wstring::npos) {
-        return L"Nothing readable was left behind, so there is no diagnosis for this one.";
-    }
-    if (!record.message.empty()) return record.message;
-    return record.exception;
+    return line;
 }
 
 static std::wstring CrashTraceText(const telemetry::CrashRecord& record) {
-    std::wstring text = record.exception;
+    std::wstring text = L"DETALLES TÉCNICOS (solo si necesitas pedir ayuda):\n";
+    if (!record.exception.empty()) text += L"\n" + record.exception;
     if (!record.message.empty()) text += L"\n" + record.message;
     text += L"\n";
     for (const std::wstring& frame : record.frames) {
         text += L"\n  at " + frame;
     }
-    if (record.frames.empty()) text += L"\nNo stack trace was recovered.";
+    if (record.frames.empty()) text += L"\n(no se pudo recuperar la lista de llamadas)";
     text += L"\n\nfingerprint " + record.fingerprint;
     text += L"\nbuild " + record.launcherBuild + L", " + record.mcVersion + L" " + record.loader;
     if (!record.zip.empty()) {
-        text += L"\n\nThe full logs are zipped at:\n" + record.zip +
-            L"\nOpen Remote Files on the main menu to read it on a phone or PC.";
+        text += L"\n\nLos logs completos están en:\n" + record.zip +
+            L"\nAbre Remote Files en el menú principal para verlo desde el móvil o el PC.";
     }
     return text;
 }
 
-static void ShowCrashScreen(ICoreWindow* window, AuthScreenRenderer* renderer, AuthUiState& state) {
+static void ShowCrashScreen(ICoreWindow* window, AuthScreenRenderer* renderer, AuthUiState& state, const std::wstring& runtimeRoot) {
     const telemetry::CrashRecord record = telemetry::ReadLastCrash();
-    if (!record.found) return;
 
-    WriteLogF(L"Crash screen shown for %s, repeat %d",
-        record.fingerprint.c_str(), record.repeatCount);
+    const std::wstring activeId = GetActiveProfileId(runtimeRoot);
+    const std::wstring adviceGameDir = ProfileGameDir(runtimeRoot, activeId);
+    const crashadvice::ModCrashInfo advice =
+        crashadvice::AnalyzeLastRun(runtimeRoot, adviceGameDir, activeId, record);
+
+    if (!record.found && !advice.found) return;
+
+    // Every incident is shown exactly once: the marker remembers the stamp of
+    // the report the user already saw and dismissed.
+    const std::wstring stamp = advice.sourceStamp.empty() ? record.fingerprint : advice.sourceStamp;
+    if (!stamp.empty()) {
+        const std::wstring markerPath = CrashReportsDir(runtimeRoot) + L"\\ultimo-informe-shown.txt";
+        std::wstring shown;
+        ReadTextFile(markerPath, shown);
+        if (TrimWhitespace(StripNewlines(shown)) == stamp) return;
+        WriteTextFile(markerPath, stamp);
+    }
+
+    WriteLogF(L"Crash screen shown for %s, repeat %d, culprit=%s",
+        record.fingerprint.empty() ? advice.sourceStamp.c_str() : record.fingerprint.c_str(),
+        record.repeatCount,
+        advice.culpritName.c_str());
 
     const bool showConsent =
         telemetry::Configured() && telemetry::Consent() == telemetry::ConsentState::Unanswered;
@@ -275,8 +298,8 @@ static void ShowCrashScreen(ICoreWindow* window, AuthScreenRenderer* renderer, A
     state.showRemoteFiles = false;
     state.showDeviceCode = false;
     state.showCrashScreen = true;
-    state.crashHeadline = CrashHeadline(record);
-    state.crashSuspectLine = CrashSuspectLine(record);
+    state.crashHeadline = CrashHeadline(record, advice);
+    state.crashSuspectLine = CrashSuspectLine(record, advice);
     state.crashTrace = CrashTraceText(record);
     state.crashConsentPayload = telemetry::ConsentPayloadPreview(record);
     state.crashAskConsent = showConsent;
@@ -285,8 +308,11 @@ static void ShowCrashScreen(ICoreWindow* window, AuthScreenRenderer* renderer, A
     state.crashSelected = 0;
     state.crashButtonCount = showConsent ? 3 : 2;
     state.crashFootnote = showConsent
-        ? L"You can change this later, and reading the crash never sends anything."
-        : L"Press B or select Dismiss to carry on.";
+        ? L"Puedes cambiarlo después; leer el informe no envía nada."
+        : (advice.reportPath.empty()
+            ? L"Pulsa B o Dismiss para seguir."
+            : L"Pulsa B o Dismiss para seguir. Informe guardado en: " + advice.reportPath +
+                L" (abre Remote Files para verlo desde el PC).");
 
     bool leftWas = false;
     bool rightWas = false;
@@ -563,7 +589,7 @@ MainMenuAction ShowMainMenu(ICoreWindow* window, const LaunchAuthConfig& authCon
     bool downWasDown = false;
     bool selectWasDown = false;
 
-    ShowCrashScreen(window, renderer, state);
+    ShowCrashScreen(window, renderer, state, runtimeRoot);
 
     WriteLog(L"Main menu opened");
     while (true) {

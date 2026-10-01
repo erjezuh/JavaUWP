@@ -25,6 +25,8 @@
 #include "runtime_config.h"
 #include "launcher_common.h"
 #include "crash_report.h"
+#include "crash_advice.h"
+#include "telemetry.h"
 #include "mod_defaults.h"
 #include "minecraft_auth.h"
 #include "profiles.h"
@@ -949,19 +951,32 @@ public:
                 failedRenderer = &failedRendererInstance;
             }
             AuthUiState failedState;
-            const wchar_t* failedTitle = L"Launch failed";
-            const wchar_t* failedDetail = L"Minecraft could not start. Check logs for details.";
+            std::wstring failedTitle = L"No se pudo iniciar Minecraft";
+            std::wstring failedDetail = L"No se pudo arrancar. Abre Remote Files para leer el informe y los logs.";
             if (jvmSpentBeforeLaunch) {
-                failedTitle = L"Restart the launcher";
-                failedDetail = L"An earlier launch used this session's Java runtime. Close the launcher and open it again to play.";
+                failedTitle = L"Reinicia el launcher";
+                failedDetail = L"Un arranque anterior ya usó el Java de esta sesión. Cierra el launcher y ábrelo otra vez para jugar.";
             } else if (EmbeddedJvmAlreadyUsed()) {
-                failedDetail = L"Minecraft could not start. Check logs for details. Close the launcher and open it again before trying another version.";
+                failedDetail = L"No se pudo arrancar. Cierra el launcher y abrelo otra vez antes de probar otra versión.";
+            } else {
+                const std::wstring failedActiveId = GetActiveProfileId(exeDir);
+                const std::wstring failedGameDir = ProfileGameDir(exeDir, failedActiveId);
+                const telemetry::CrashRecord failedRecord = telemetry::ReadLastCrash();
+                const crashadvice::ModCrashInfo failedAdvice =
+                    crashadvice::AnalyzeLastRun(exeDir, failedGameDir, failedActiveId, failedRecord);
+                if (failedAdvice.found) {
+                    failedDetail = L"Causa: " + failedAdvice.reason;
+                    if (!failedAdvice.culpritName.empty()) {
+                        failedDetail = L"Mod: " + failedAdvice.culpritName + L". " + failedDetail;
+                    }
+                    failedDetail += L" Solución: " + failedAdvice.solution;
+                }
             }
             RenderPreparationProgress(
                 failedRenderer,
                 failedState,
-                failedTitle,
-                failedDetail,
+                failedTitle.c_str(),
+                failedDetail.c_str(),
                 1.0f);
             SleepWithAuthUi(failedRenderer, failedState, 6000);
             continue;

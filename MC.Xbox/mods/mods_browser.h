@@ -13,6 +13,8 @@ class AuthScreenRenderer;
 LaunchTarget CurrentModsTarget(const AuthUiState& state);
 int PurgeBlockedModsFromDir(const std::wstring& runtimeRoot, const std::wstring& modsDir);
 bool IsBlockedModFileName(const std::wstring& fileName);
+// "file - why" lines for jars on the known-broken list (crash reports use this).
+std::vector<std::wstring> BlockedModNotesForJars(const std::vector<std::wstring>& jarNames);
 
 // Shared install progress reporting (mods browser + modpack installers).
 void SetInstallStatus(const std::wstring& s);
