@@ -1479,7 +1479,8 @@ static void StartInstallJob(const ModCard& card, const std::wstring& runtimeRoot
             ok = InstallModpack(copy, rootCopy, pid, err, gameVersion, loaderId);
             if (ok) {
                 SetActiveProfileId(rootCopy, pid);
-                SetInstallStatus(L"Installed profile " + copy.title);
+                // on success err carries the note about files that need fetching by hand
+                SetInstallStatus(L"Installed profile " + copy.title + (err.empty() ? std::wstring() : L". " + err));
             } else {
                 DeleteProfilePermanent(rootCopy, pid);
                 SetInstallStatus(err.empty() ? L"Modpack install failed" : err);
