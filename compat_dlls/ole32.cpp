@@ -131,7 +131,7 @@ extern "C" HRESULT CompatStringFromIID(const GUID* piid, wchar_t** ppsz) {
 }
 
 extern "C" HRESULT CompatCoInitializeEx(void* pvReserved, DWORD dwCoInit) {
-    using Fn = HRESULT(WINAPI*)(void*, DWORD);
+    using Fn = HRESULT(WINAPI*)(DWORD);
     if (Fn real = CombaseProc<Fn>("RoInitialize")) {
         // RoInitialize accepts single/multi-threaded styles and answers
         // S_OK/S_FALSE/RPC_E_CHANGED_MODE like CoInitializeEx for the cases
