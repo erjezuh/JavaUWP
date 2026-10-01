@@ -28,7 +28,7 @@ bool Search(
     const std::wstring& query,
     int offset,
     int limit,
-    bool modpacks,
+    ContentKind kind,
     bool sortByDownloads,
     const std::string& gameVersion,
     const std::wstring& loader,
@@ -56,10 +56,18 @@ bool ResolveFilesById(
     std::vector<FileRef>& out,
     std::wstring& error);
 
-// website urls for mods the api will not hand over, so the user can fetch them by hand
-bool ResolveModWebUrls(
+struct ModInfo {
+    long long modId = 0;
+    std::wstring name;
+    std::wstring websiteUrl;
+    ContentKind kind = ContentKind::Mod;
+    // false for classes the launcher has no folder for, like worlds and data packs
+    bool kindKnown = false;
+};
+
+bool ResolveModInfo(
     const std::vector<long long>& modIds,
-    std::vector<std::pair<long long, std::wstring>>& out,
+    std::vector<ModInfo>& out,
     std::wstring& error);
 
 bool DownloadFile(
@@ -67,6 +75,8 @@ bool DownloadFile(
     const std::wstring& destination,
     const std::function<void(unsigned long long)>& progress);
 
-std::wstring ProjectWebUrl(const std::wstring& slug);
+int ClassIdFor(ContentKind kind);
+bool KindForClassId(int classId, ContentKind& kind);
+std::wstring ProjectWebUrl(ContentKind kind, const std::wstring& slug);
 
 }

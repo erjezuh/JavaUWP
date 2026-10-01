@@ -139,8 +139,8 @@ bool InstallModpackFromFile(
     int skipped = 0;
     int blockedCount = 0;
     int missingCount = 0;
-    std::wstring blockedNames;
-    std::vector<curseforge::FileRef> blockedRefs;
+    int unsupportedCount = 0;
+    std::vector<ManualDownload> manual;
 
     auto readZipText = [&](const char* entry, std::string& out) {
         const int idx = mz_zip_reader_locate_file(&zip, entry, nullptr, 0);
@@ -255,22 +255,57 @@ bool InstallModpackFromFile(
             WriteLogF(L"Pack file %lld is gone from CurseForge", fileId);
         }
 
+        // class id picks the folder, and the same lookup names blocked files
+        std::vector<long long> modIds;
+        for (const curseforge::FileRef& ref : refs) modIds.push_back(ref.modId);
+        std::vector<curseforge::ModInfo> infos;
+        std::wstring infoError;
+        if (!curseforge::ResolveModInfo(modIds, infos, infoError)) {
+            WriteLogF(L"Pack project lookup failed, routing jars only: %s", infoError.c_str());
+        }
+        auto infoFor = [&infos](long long modId) -> const curseforge::ModInfo* {
+            for (const curseforge::ModInfo& info : infos) {
+                if (info.modId == modId) return &info;
+            }
+            return nullptr;
+        };
+
         for (const curseforge::FileRef& ref : refs) {
-            if (IsBlockedModFileName(ref.fileName)) {
+            const curseforge::ModInfo* info = infoFor(ref.modId);
+            // without project info only a jar is safe to call a mod
+            const bool routable = info ? info->kindKnown : EndsWithInsensitive(ref.fileName, L".jar");
+            if (!routable) {
+                ++unsupportedCount;
+                WriteLogF(L"Pack file has no folder the launcher installs to: %s", ref.fileName.c_str());
+                continue;
+            }
+            const ContentKind kind = info ? info->kind : ContentKind::Mod;
+            if (kind == ContentKind::Modpack) {
+                ++unsupportedCount;
+                WriteLogF(L"Pack lists another modpack, skipped: %s", ref.fileName.c_str());
+                continue;
+            }
+            if (kind == ContentKind::Mod && IsBlockedModFileName(ref.fileName)) {
                 WriteLogF(L"Skipping blocked modpack file: %s", ref.fileName.c_str());
                 ++skipped;
                 continue;
             }
             if (ref.distributionBlocked) {
-                if (!blockedNames.empty()) blockedNames += L", ";
-                blockedNames += ref.fileName;
+                ManualDownload item;
+                item.fileName = ref.fileName;
+                item.modName = info && !info->name.empty() ? info->name : ref.fileName;
+                item.folder = ContentFolder(kind);
+                // the per file page is the one with a working download button on it
+                item.url = info
+                    ? info->websiteUrl + L"/download/" + std::to_wstring(ref.fileId)
+                    : L"https://www.curseforge.com/minecraft/search?search=" + a2w(FormUrlEncode(w2a(ref.fileName)).c_str());
+                manual.push_back(item);
                 ++blockedCount;
-                blockedRefs.push_back(ref);
                 WriteLogF(L"Pack file blocks third party download: %s", ref.fileName.c_str());
                 continue;
             }
             PackFile job;
-            job.path = L"mods/" + ref.fileName;
+            job.path = std::wstring(ContentFolder(kind)) + L"/" + SafeFileName(ref.fileName);
             job.url = ref.downloadUrl;
             job.sha1 = ref.sha1;
             job.size = ref.fileSize;
@@ -380,37 +415,12 @@ bool InstallModpackFromFile(
     PurgeBlockedModsFromDir(runtimeRoot, userModsDir);
 
     WriteLogF(L"Modpack import done: %d indexed files, %d blocked", done, skipped);
-    if (!blockedRefs.empty()) {
-        std::vector<long long> modIds;
-        for (const curseforge::FileRef& ref : blockedRefs) modIds.push_back(ref.modId);
+    RecordManualDownloads(profileId, manual);
 
-        std::vector<std::pair<long long, std::wstring>> webUrls;
-        std::wstring urlError;
-        curseforge::ResolveModWebUrls(modIds, webUrls, urlError);
-
-        std::vector<ManualDownload> manual;
-        for (const curseforge::FileRef& ref : blockedRefs) {
-            ManualDownload item;
-            item.fileName = ref.fileName;
-            item.modName = ref.fileName;
-            for (const auto& entry : webUrls) {
-                if (entry.first != ref.modId) continue;
-                // the per file page is the one with a working download button on it
-                item.url = entry.second + L"/download/" + std::to_wstring(ref.fileId);
-                break;
-            }
-            if (item.url.empty()) {
-                item.url = L"https://www.curseforge.com/minecraft/search?search=" +
-                    a2w(FormUrlEncode(w2a(ref.fileName)).c_str());
-            }
-            manual.push_back(item);
-        }
-        RecordManualDownloads(profileId, manual);
-    }
     std::wstring note;
-    if (!blockedNames.empty()) {
+    if (blockedCount > 0) {
         note = std::to_wstring(blockedCount) +
-            (blockedCount == 1 ? L" mod could not be downloaded" : L" mods could not be downloaded") +
+            (blockedCount == 1 ? L" file could not be downloaded" : L" files could not be downloaded") +
             L" because their authors block third party launchers. Open Remote Files, the Manual downloads panel has a link for each one.";
         WriteLogF(L"Modpack skipped %d blocked files", blockedCount);
     }
@@ -419,6 +429,12 @@ bool InstallModpackFromFile(
         note += std::to_wstring(missingCount) +
             (missingCount == 1 ? L" file in the pack no longer exists" : L" files in the pack no longer exist") +
             L" on CurseForge, so the pack may not start.";
+    }
+    if (unsupportedCount > 0) {
+        if (!note.empty()) note += L" ";
+        note += std::to_wstring(unsupportedCount) +
+            (unsupportedCount == 1 ? L" file is" : L" files are") +
+            L" content the launcher does not install, like worlds or data packs.";
     }
     if (!note.empty()) {
         if (skippedNote) {

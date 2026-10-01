@@ -789,15 +789,16 @@ input,select{min-height:42px;min-width:0;max-width:100%;padding:8px 12px;backgro
         std::ostringstream out;
         out << "<section class=\"panel\"><h3>Manual downloads ("
             << pending.size() << ")</h3>"
-            << "<p class=\"muted\">These mods block third party launchers, so CurseForge will not serve them to the Xbox. "
-            << "Download each jar from its link, then use Add a mod. "
-            << "A row disappears once its jar lands in the profile.</p><div class=\"world-list\">";
+            << "<p class=\"muted\">These files block third party launchers, so CurseForge will not serve them to the Xbox. "
+            << "Download each one from its link and put it in the folder shown, mods through Add a mod and packs through the file browser. "
+            << "A row disappears once its file lands in the profile.</p><div class=\"world-list\">";
         for (const ManualDownload& item : pending) {
             // url comes from the api or a tsv on disk, only https goes in an href next to the pin
             const bool safeUrl = item.url.rfind(L"https://", 0) == 0;
             const std::wstring href = safeUrl ? item.url : std::wstring(L"https://www.curseforge.com/minecraft");
-            out << "<div class=\"world-card\"><div><strong>" << HtmlEscape(item.fileName) << "</strong>"
-                << "<div class=\"muted\">Missing from this profile</div></div><div class=\"world-actions\">"
+            out << "<div class=\"world-card\"><div><strong>" << HtmlEscape(item.modName) << "</strong>"
+                << "<div class=\"muted\">" << HtmlEscape(item.fileName) << " goes in " << HtmlEscape(item.folder)
+                << "</div></div><div class=\"world-actions\">"
                 << "<a class=\"button secondary\" href=\"" << HtmlEscape(href)
                 << "\" target=\"_blank\" rel=\"noopener noreferrer\">Get it on CurseForge</a></div></div>";
         }

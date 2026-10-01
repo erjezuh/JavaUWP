@@ -20,7 +20,9 @@ using namespace winrt::Windows::Data::Json;
 
 constexpr int kGameIdMinecraft = 432;
 constexpr int kClassMods = 6;
+constexpr int kClassResourcePacks = 12;
 constexpr int kClassModpacks = 4471;
+constexpr int kClassShaders = 6552;
 constexpr int kRelationRequired = 3;
 constexpr int kHashAlgoSha1 = 1;
 constexpr int kReleaseTypeRelease = 1;
@@ -335,16 +337,43 @@ int LoaderType(const std::wstring& loader) {
     return 0;
 }
 
-std::wstring ProjectWebUrl(const std::wstring& slug) {
+int ClassIdFor(ContentKind kind) {
+    switch (kind) {
+    case ContentKind::Modpack: return kClassModpacks;
+    case ContentKind::ResourcePack: return kClassResourcePacks;
+    case ContentKind::Shader: return kClassShaders;
+    case ContentKind::Mod: break;
+    }
+    return kClassMods;
+}
+
+bool KindForClassId(int classId, ContentKind& kind) {
+    switch (classId) {
+    case kClassMods: kind = ContentKind::Mod; return true;
+    case kClassModpacks: kind = ContentKind::Modpack; return true;
+    case kClassResourcePacks: kind = ContentKind::ResourcePack; return true;
+    case kClassShaders: kind = ContentKind::Shader; return true;
+    default: return false;
+    }
+}
+
+std::wstring ProjectWebUrl(ContentKind kind, const std::wstring& slug) {
     if (slug.empty()) return L"https://www.curseforge.com/minecraft";
-    return L"https://www.curseforge.com/minecraft/mc-mods/" + slug;
+    const wchar_t* section = L"mc-mods";
+    switch (kind) {
+    case ContentKind::Modpack: section = L"modpacks"; break;
+    case ContentKind::ResourcePack: section = L"texture-packs"; break;
+    case ContentKind::Shader: section = L"shaders"; break;
+    case ContentKind::Mod: break;
+    }
+    return std::wstring(L"https://www.curseforge.com/minecraft/") + section + L"/" + slug;
 }
 
 bool Search(
     const std::wstring& query,
     int offset,
     int limit,
-    bool modpacks,
+    ContentKind kind,
     bool sortByDownloads,
     const std::string& gameVersion,
     const std::wstring& loader,
@@ -355,7 +384,7 @@ bool Search(
 
     std::wstring url = std::wstring(kApiBase) + L"/mods/search?gameId=" +
         std::to_wstring(kGameIdMinecraft) +
-        L"&classId=" + std::to_wstring(modpacks ? kClassModpacks : kClassMods) +
+        L"&classId=" + std::to_wstring(ClassIdFor(kind)) +
         L"&index=" + std::to_wstring(offset) +
         L"&pageSize=" + std::to_wstring(limit) +
         L"&sortOrder=desc" +
@@ -363,8 +392,9 @@ bool Search(
     if (!gameVersion.empty()) {
         url += L"&gameVersion=" + a2w(FormUrlEncode(gameVersion).c_str());
     }
+    // only mod files are reliably tagged with a loader
     const int loaderType = LoaderType(loader);
-    if (loaderType > 0 && !modpacks) {
+    if (loaderType > 0 && kind == ContentKind::Mod) {
         url += L"&modLoaderType=" + std::to_wstring(loaderType);
     }
     if (!query.empty()) {
@@ -393,7 +423,7 @@ bool Search(
 
             ModCard card;
             card.source = ModSource::CurseForge;
-            card.isModpack = modpacks;
+            card.kind = kind;
             const long long id = static_cast<long long>(JsonNumberOrZero(mod, L"id"));
             if (id <= 0) continue;
             card.projectId = std::to_wstring(id);
@@ -402,8 +432,8 @@ bool Search(
             card.description = JsonStringOrEmpty(mod, L"summary");
             if (card.title.empty()) card.title = card.slug.empty() ? card.projectId : card.slug;
             if (card.description.empty()) {
-                card.description = (modpacks ? L"CurseForge modpack for Minecraft " : L"CurseForge mod for Minecraft ") +
-                    a2w(gameVersion.c_str());
+                card.description = std::wstring(L"CurseForge ") + ContentNoun(kind, false) +
+                    L" for Minecraft " + a2w(gameVersion.c_str());
             }
             card.status = std::to_wstring(static_cast<long long>(JsonNumberOrZero(mod, L"downloadCount"))) + L" downloads";
 
@@ -580,9 +610,9 @@ bool ResolveFilesById(
     return true;
 }
 
-bool ResolveModWebUrls(
+bool ResolveModInfo(
     const std::vector<long long>& modIds,
-    std::vector<std::pair<long long, std::wstring>>& out,
+    std::vector<ModInfo>& out,
     std::wstring& error) {
     error.clear();
     out.clear();
@@ -592,41 +622,48 @@ bool ResolveModWebUrls(
         return false;
     }
 
-    std::string body = "{\"modIds\":[";
-    for (size_t i = 0; i < modIds.size(); ++i) {
-        if (i) body += ",";
-        body += std::to_string(modIds[i]);
-    }
-    body += "]}";
+    constexpr size_t kBatch = 200;
+    for (size_t start = 0; start < modIds.size(); start += kBatch) {
+        const size_t end = (std::min)(start + kBatch, modIds.size());
+        std::string body = "{\"modIds\":[";
+        for (size_t i = start; i < end; ++i) {
+            if (i != start) body += ",";
+            body += std::to_string(modIds[i]);
+        }
+        body += "]}";
 
-    const std::wstring url = std::wstring(kApiBase) + L"/mods";
-    const HttpResult response = HttpPostWithHeaders(url.c_str(), body, L"application/json", KeyHeader());
-    if (!response.success()) {
-        error = StatusMessage(response.status);
-        return false;
-    }
-
-    try {
-        const JsonObject root = JsonObject::Parse(winrt::to_hstring(response.body));
-        const JsonArray data = JsonArrayOrNull(root, L"data");
-        if (!data) {
-            error = L"CurseForge returned no mods";
+        const std::wstring url = std::wstring(kApiBase) + L"/mods";
+        const HttpResult response = HttpPostWithHeaders(url.c_str(), body, L"application/json", KeyHeader());
+        if (!response.success()) {
+            error = StatusMessage(response.status);
+            WriteLogF(L"CurseForge mod batch failed status=%d count=%zu", response.status, end - start);
             return false;
         }
-        for (uint32_t i = 0; i < data.Size(); ++i) {
-            if (data.GetAt(i).ValueType() != JsonValueType::Object) continue;
-            const JsonObject mod = data.GetAt(i).GetObject();
-            const long long id = static_cast<long long>(JsonNumberOrZero(mod, L"id"));
-            if (id <= 0) continue;
-            std::wstring web;
-            const JsonObject links = JsonObjectOrNull(mod, L"links");
-            if (links) web = JsonStringOrEmpty(links, L"websiteUrl");
-            if (web.empty()) web = ProjectWebUrl(JsonStringOrEmpty(mod, L"slug"));
-            out.push_back({ id, web });
+
+        try {
+            const JsonObject root = JsonObject::Parse(winrt::to_hstring(response.body));
+            const JsonArray data = JsonArrayOrNull(root, L"data");
+            if (!data) {
+                error = L"CurseForge returned no mods";
+                return false;
+            }
+            for (uint32_t i = 0; i < data.Size(); ++i) {
+                if (data.GetAt(i).ValueType() != JsonValueType::Object) continue;
+                const JsonObject mod = data.GetAt(i).GetObject();
+                ModInfo info;
+                info.modId = static_cast<long long>(JsonNumberOrZero(mod, L"id"));
+                if (info.modId <= 0) continue;
+                info.name = JsonStringOrEmpty(mod, L"name");
+                info.kindKnown = KindForClassId(static_cast<int>(JsonNumberOrZero(mod, L"classId")), info.kind);
+                const JsonObject links = JsonObjectOrNull(mod, L"links");
+                if (links) info.websiteUrl = JsonStringOrEmpty(links, L"websiteUrl");
+                if (info.websiteUrl.empty()) info.websiteUrl = ProjectWebUrl(info.kind, JsonStringOrEmpty(mod, L"slug"));
+                out.push_back(std::move(info));
+            }
+        } catch (const winrt::hresult_error&) {
+            error = L"Could not parse the CurseForge mod batch";
+            return false;
         }
-    } catch (const winrt::hresult_error&) {
-        error = L"Could not parse the CurseForge mod batch";
-        return false;
     }
     return true;
 }

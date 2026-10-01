@@ -27,6 +27,23 @@ std::wstring EscapeField(const std::wstring& value) {
     return out;
 }
 
+// ends up in a path, so only the known folders are trusted
+bool IsKnownFolder(const std::wstring& folder) {
+    return folder == L"mods" || folder == L"resourcepacks" || folder == L"shaderpacks";
+}
+
+std::vector<std::wstring> SplitTabs(const std::wstring& line) {
+    std::vector<std::wstring> fields;
+    size_t start = 0;
+    while (true) {
+        const size_t tab = line.find(L'\t', start);
+        fields.push_back(line.substr(start, tab == std::wstring::npos ? std::wstring::npos : tab - start));
+        if (tab == std::wstring::npos) break;
+        start = tab + 1;
+    }
+    return fields;
+}
+
 std::vector<ManualDownload> ReadAll(const std::wstring& profileId) {
     std::vector<ManualDownload> items;
     const std::wstring path = ManualPath(profileId);
@@ -40,16 +57,15 @@ std::vector<ManualDownload> ReadAll(const std::wstring& profileId) {
         const size_t eol = text.find(L'\n', pos);
         std::wstring line = text.substr(pos, eol == std::wstring::npos ? std::wstring::npos : eol - pos);
         if (!line.empty() && line.back() == L'\r') line.pop_back();
-        if (!line.empty()) {
-            const size_t t1 = line.find(L'\t');
-            const size_t t2 = t1 == std::wstring::npos ? std::wstring::npos : line.find(L'\t', t1 + 1);
-            if (t1 != std::wstring::npos && t2 != std::wstring::npos) {
-                ManualDownload item;
-                item.fileName = line.substr(0, t1);
-                item.modName = line.substr(t1 + 1, t2 - t1 - 1);
-                item.url = line.substr(t2 + 1);
-                if (!item.fileName.empty()) items.push_back(item);
-            }
+        // lists from before the folder column have three fields and are all mods
+        const std::vector<std::wstring> fields = SplitTabs(line);
+        if (fields.size() >= 3 && !fields[0].empty()) {
+            ManualDownload item;
+            item.fileName = fields[0];
+            item.modName = fields[1];
+            item.url = fields[2];
+            if (fields.size() >= 4 && IsKnownFolder(fields[3])) item.folder = fields[3];
+            items.push_back(item);
         }
         if (eol == std::wstring::npos) break;
         pos = eol + 1;
@@ -67,7 +83,8 @@ bool WriteAll(const std::wstring& profileId, const std::vector<ManualDownload>& 
 
     std::wstring text;
     for (const ManualDownload& item : items) {
-        text += EscapeField(item.fileName) + L"\t" + EscapeField(item.modName) + L"\t" + EscapeField(item.url) + L"\n";
+        text += EscapeField(item.fileName) + L"\t" + EscapeField(item.modName) + L"\t" +
+            EscapeField(item.url) + L"\t" + EscapeField(item.folder) + L"\n";
     }
     return WriteTextFile(path, text);
 }
@@ -81,7 +98,10 @@ bool RecordManualDownloads(const std::wstring& profileId, const std::vector<Manu
     for (const ManualDownload& item : items) {
         bool known = false;
         for (const ManualDownload& existing : merged) {
-            if (ToLowerW(existing.fileName) == ToLowerW(item.fileName)) { known = true; break; }
+            if (existing.folder == item.folder && ToLowerW(existing.fileName) == ToLowerW(item.fileName)) {
+                known = true;
+                break;
+            }
         }
         if (!known) merged.push_back(item);
     }
@@ -93,11 +113,11 @@ std::vector<ManualDownload> PendingManualDownloads(const std::wstring& runtimeRo
     std::vector<ManualDownload> items = ReadAll(profileId);
     if (items.empty()) return items;
 
-    const std::wstring modsDir = ProfileModsDir(runtimeRoot, profileId);
+    const std::wstring gameDir = ProfileGameDir(runtimeRoot, profileId);
     std::vector<ManualDownload> pending;
     for (const ManualDownload& item : items) {
-        const std::wstring jar = modsDir + L"\\" + SafeFileName(item.fileName);
-        if (GetFileAttributesW(jar.c_str()) != INVALID_FILE_ATTRIBUTES) continue;
+        const std::wstring file = gameDir + L"\\" + item.folder + L"\\" + SafeFileName(item.fileName);
+        if (GetFileAttributesW(file.c_str()) != INVALID_FILE_ATTRIBUTES) continue;
         pending.push_back(item);
     }
 

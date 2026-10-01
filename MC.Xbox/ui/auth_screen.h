@@ -278,13 +278,13 @@ public:
                     d2dContext_->CreateSolidColorBrush(D2D1::ColorF(0x05080B), ph.GetAddressOf());
                     FillRound(iconRect, ph.Get(), 14.0f);
                     StrokeRound(iconRect, softEdge.Get(), 14.0f, 1.0f);
-                    DrawIcon(card.isModpack ? L"\uE7B8" : L"\uE74C", iconRect, muted.Get(), true);
+                    DrawIcon(ContentIcon(card.kind), iconRect, muted.Get(), true);
                 }
 
                 const float headLeft = iconRect.right + 24.0f;
                 DrawText(card.title.c_str(), titleFormat_.Get(),
                     D2D1::RectF(headLeft, top, right, top + 48.0f), white.Get());
-                DrawText(card.isModpack ? L"Modpack" : L"Mod", captionFormat_.Get(),
+                DrawText(ContentLabel(card.kind), captionFormat_.Get(),
                     D2D1::RectF(headLeft, top + 50.0f, headLeft + 200.0f, top + 74.0f), accent.Get());
                 const std::wstring metaLine = !state.modsDetailMeta.empty() ? state.modsDetailMeta : card.status;
                 DrawText(metaLine.c_str(), smallFormat_.Get(),
@@ -301,7 +301,7 @@ public:
                 FillRound(installBtn, installing ? panel.Get() : accent.Get(), 12.0f);
                 StrokeRound(installBtn, accent.Get(), 12.0f, 2.0f);
                 DrawIcon(installing ? L"\uE895" : L"\uE896", D2D1::RectF(installBtn.left + 18.0f, installBtn.top, installBtn.left + 46.0f, installBtn.bottom), installing ? muted.Get() : black.Get());
-                DrawText(installing ? L"Installing..." : (card.isModpack ? L"Install pack" : L"Install"),
+                DrawText(installing ? L"Installing..." : (card.kind == ContentKind::Modpack ? L"Install pack" : L"Install"),
                     bodyMid_.Get(), D2D1::RectF(installBtn.left + 52.0f, installBtn.top, installBtn.right - 8.0f, installBtn.bottom), installing ? muted.Get() : black.Get());
 
                 RegisterHit(launchhit::kBack, D2D1::RectF(left, iconRect.bottom + 22.0f, left + 220.0f, iconRect.bottom + 62.0f));
@@ -519,14 +519,9 @@ public:
             const float cardsLeft = tabsRight + 34.0f;
             const float cardsRight = frame.right - 36.0f;
             const float top = frame.top + 34.0f;
-            const float buttonH = 58.0f;
-            const float buttonGap = 22.0f;
-            const wchar_t* tabs[] = { L"Profiles", L"Popular", L"Latest", L"Recommended", L"Modpacks" };
 
             const D2D1_RECT_F modsBack = DrawBackChip(left, top, surfaceFill.Get(), softEdge.Get(), muted.Get());
             DrawText(L"Mods", titleFormat_.Get(), D2D1::RectF(modsBack.right + 16.0f, top, tabsRight, top + 48.0f), white.Get());
-
-            const wchar_t* tabIcons[] = { L"\uE8B7", L"\uE735", L"\uE823", L"\uEB52", L"\uE7B8" };
 
             const float sourceH = 44.0f;
             const float sourceY = top + 72.0f;
@@ -550,8 +545,13 @@ public:
             }
 
             const float tabsTop = sourceY + sourceH + 16.0f;
-            for (int i = 0; i < 5; ++i) {
-                const float y = tabsTop + i * (buttonH + buttonGap);
+            const float infoH = 74.0f;
+            const float statusTop = frame.bottom - 112.0f;
+            const float tabStep = 80.0f;
+            const float buttonH = 58.0f;
+            for (int i = 0; i < modstab::kCount; ++i) {
+                const ModsTabInfo& info = ModsTabAt(i);
+                const float y = tabsTop + i * tabStep;
                 const D2D1_RECT_F tab = D2D1::RectF(left, y, tabsRight, y + buttonH);
                 RegisterHit(launchhit::kTabBase + i, tab);
                 const bool selected = i == state.selectedModsTab && state.modsFocus == 0;
@@ -561,15 +561,15 @@ public:
                 if (emphasized) GlowSelect(tab, 14.0f);
                 FillRound(tab, active ? accentSoft.Get() : surfaceFill.Get(), 14.0f);
                 StrokeRound(tab, (emphasized || active) ? accent.Get() : softEdge.Get(), 14.0f, emphasized ? 3.0f : (active ? 2.0f : 1.0f));
-                DrawIcon(tabIcons[i], D2D1::RectF(tab.left + 8.0f, tab.top, tab.left + 46.0f, tab.bottom), (active || emphasized) ? accent.Get() : muted.Get());
-                DrawText(tabs[i], bodyMid_.Get(),
+                DrawIcon(info.icon, D2D1::RectF(tab.left + 8.0f, tab.top, tab.left + 46.0f, tab.bottom), (active || emphasized) ? accent.Get() : muted.Get());
+                DrawText(info.label, bodyMid_.Get(),
                     D2D1::RectF(tab.left + 52.0f, tab.top, tab.right - 10.0f, tab.bottom),
                     (active || emphasized) ? accent.Get() : white.Get());
             }
 
             {
-                const float infoY = tabsTop + 5 * (buttonH + buttonGap) + 8.0f;
-                const D2D1_RECT_F infoBox = D2D1::RectF(left, infoY, tabsRight, infoY + 74.0f);
+                const float infoY = tabsTop + modstab::kCount * tabStep + 8.0f;
+                const D2D1_RECT_F infoBox = D2D1::RectF(left, infoY, tabsRight, infoY + infoH);
                 FillRound(infoBox, surfaceFill.Get(), 12.0f);
                 StrokeRound(infoBox, softEdge.Get(), 12.0f, 1.0f);
                 DrawIcon(L"\uE768", D2D1::RectF(infoBox.left + 8.0f, infoBox.top + 6.0f, infoBox.left + 34.0f, infoBox.top + 30.0f), muted.Get());
@@ -582,7 +582,7 @@ public:
 
             if (!state.status.empty()) {
                 DrawText(state.status.c_str(), smallFormat_.Get(),
-                    D2D1::RectF(left, frame.bottom - 112.0f, tabsRight, frame.bottom - 30.0f),
+                    D2D1::RectF(left, statusTop, tabsRight, frame.bottom - 30.0f),
                     state.isError ? danger.Get() : muted.Get());
             }
 
@@ -620,8 +620,8 @@ public:
             DrawIcon(L"\uE721", D2D1::RectF(search.left + 8.0f, search.top, search.left + 40.0f, search.bottom), searchFocused ? accent.Get() : muted.Get());
             {
                 const bool placeholder = state.modsSearchQuery.empty() && !state.modsSearchEditing;
-                const wchar_t* hint = state.selectedModsTab == 4 ? L"Search modpacks" : L"Search mods";
-                std::wstring shown = placeholder ? std::wstring(hint) : state.modsSearchQuery;
+                const std::wstring hint = std::wstring(L"Search ") + ContentNoun(ModsTabAt(state.selectedModsTab).kind, true);
+                std::wstring shown = placeholder ? hint : state.modsSearchQuery;
                 if (state.modsSearchEditing) shown += L"_";
                 DrawText(shown.c_str(), smallMid_.Get(),
                     D2D1::RectF(search.left + 44.0f, search.top, search.right - 12.0f, search.bottom),
@@ -672,9 +672,9 @@ public:
                         d2dContext_->CreateSolidColorBrush(D2D1::ColorF(0x05080B), ph.GetAddressOf());
                         FillRound(imageRect, ph.Get(), 8.0f);
                         StrokeRound(imageRect, softEdge.Get(), 8.0f, 1.0f);
-                        const wchar_t* g = state.selectedModsTab == 0
+                        const wchar_t* g = state.selectedModsTab == modstab::kProfiles
                             ? (state.modsCards[i].projectId == L"__new__" ? L"\uE710" : L"\uE8B7")
-                            : (state.modsCards[i].isModpack ? L"\uE7B8" : L"\uE74C");
+                            : ContentIcon(state.modsCards[i].kind);
                         DrawIcon(g, imageRect, muted.Get(), true);
                     }
 
@@ -704,9 +704,9 @@ public:
             }
 
             if (state.modsCards.empty()) {
-                const std::wstring emptyText = state.selectedModsTab == 0
-                    ? L"No installed mods"
-                    : (state.selectedModsTab == 4 ? L"No modpacks found" : L"No mods found");
+                const std::wstring emptyText = state.selectedModsTab == modstab::kProfiles
+                    ? std::wstring(L"No installed mods")
+                    : std::wstring(L"No ") + ContentNoun(ModsTabAt(state.selectedModsTab).kind, true) + L" found";
                 DrawText(emptyText.c_str(), bodyFormat_.Get(),
                     D2D1::RectF(inner.left + 8.0f, gridTop + 8.0f, inner.right - 8.0f, gridTop + 70.0f),
                     muted.Get());
