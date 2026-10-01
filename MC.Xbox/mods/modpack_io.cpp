@@ -121,6 +121,7 @@ bool InstallModpackFromFile(
     std::vector<PackFile> jobs;
     int skipped = 0;
     int blockedCount = 0;
+    int missingCount = 0;
     std::wstring blockedNames;
     std::vector<curseforge::FileRef> blockedRefs;
 
@@ -219,12 +220,22 @@ bool InstallModpackFromFile(
         std::vector<curseforge::FileRef> refs;
         std::wstring resolveError;
         if (progressFor) {
-            progressFor(L"Looking up " + std::to_wstring(fileIds.size()) + L" files on CurseForge", 0)(0);
+            const auto lookup = progressFor(L"Looking up " + std::to_wstring(fileIds.size()) + L" files on CurseForge", 0);
+            if (lookup) lookup(0);
         }
         if (!curseforge::ResolveFilesById(fileIds, refs, resolveError)) {
             mz_zip_reader_end(&zip);
             error = resolveError.empty() ? L"Could not resolve this pack on CurseForge" : resolveError;
             return false;
+        }
+
+        // the batch endpoint silently drops deleted files
+        for (const long long fileId : fileIds) {
+            const bool found = std::any_of(refs.begin(), refs.end(),
+                [fileId](const curseforge::FileRef& ref) { return ref.fileId == fileId; });
+            if (found) continue;
+            ++missingCount;
+            WriteLogF(L"Pack file %lld is gone from CurseForge", fileId);
         }
 
         for (const curseforge::FileRef& ref : refs) {
@@ -361,16 +372,28 @@ bool InstallModpackFromFile(
                 item.url = entry.second + L"/download/" + std::to_wstring(ref.fileId);
                 break;
             }
-            if (item.url.empty()) item.url = L"https://www.curseforge.com/minecraft/search?search=" + ref.fileName;
+            if (item.url.empty()) {
+                item.url = L"https://www.curseforge.com/minecraft/search?search=" +
+                    a2w(FormUrlEncode(w2a(ref.fileName)).c_str());
+            }
             manual.push_back(item);
         }
         RecordManualDownloads(profileId, manual);
     }
+    std::wstring note;
     if (!blockedNames.empty()) {
-        const std::wstring note = std::to_wstring(blockedCount) +
+        note = std::to_wstring(blockedCount) +
             (blockedCount == 1 ? L" mod could not be downloaded" : L" mods could not be downloaded") +
             L" because their authors block third party launchers. Open Remote Files, the Manual downloads panel has a link for each one.";
         WriteLogF(L"Modpack skipped %d blocked files", blockedCount);
+    }
+    if (missingCount > 0) {
+        if (!note.empty()) note += L" ";
+        note += std::to_wstring(missingCount) +
+            (missingCount == 1 ? L" file in the pack no longer exists" : L" files in the pack no longer exist") +
+            L" on CurseForge, so the pack may not start.";
+    }
+    if (!note.empty()) {
         if (skippedNote) {
             *skippedNote = note;
         } else if (firstError.empty()) {
@@ -378,7 +401,7 @@ bool InstallModpackFromFile(
         }
     }
     if (jobs.empty() && firstError.empty()) {
-        error = L"Pack had no installable client files";
+        error = note.empty() ? L"Pack had no installable client files" : note;
         return false;
     }
     if (!firstError.empty()) {

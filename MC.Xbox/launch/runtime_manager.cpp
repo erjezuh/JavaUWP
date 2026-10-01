@@ -580,7 +580,9 @@ static bool HostMatchesSuffix(const std::wstring& host, const std::wstring& suff
     const std::wstring h = ToLowerW(host);
     const std::wstring s = ToLowerW(suffix);
     if (h.size() < s.size()) return false;
-    return h.compare(h.size() - s.size(), s.size(), s) == 0;
+    if (h.compare(h.size() - s.size(), s.size(), s) != 0) return false;
+    // without the dot check evilforgecdn.net would pass for forgecdn.net
+    return h.size() == s.size() || h[h.size() - s.size() - 1] == L'.';
 }
 
 bool DownloadUrlToFileWithHeaders(

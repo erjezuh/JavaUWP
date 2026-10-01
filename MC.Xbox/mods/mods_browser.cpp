@@ -986,9 +986,9 @@ static bool InstallCurseForgeProjectRecursive(
         return false;
     }
 
-    // curseforge does not list fabric api as a dependency the way modrinth does
+    // curseforge often leaves fabric api out of dependencies. newer mods name it fabric-api, older ones fabric
     if (ToLowerW(loaderName) == L"fabric" && modId != kCurseForgeFabricApiId &&
-        FabricModDependsOn(tempPath, L"fabric")) {
+        (FabricModDependsOn(tempPath, L"fabric-api") || FabricModDependsOn(tempPath, L"fabric"))) {
         WriteLogF(L"Mod %s requires Fabric API; ensuring Fabric API dependency", file.fileName.c_str());
         if (!InstallCurseForgeProjectRecursive(kCurseForgeFabricApiId, runtimeRoot, userModsDir, visited,
                 installed, nullptr, error, gameVersion, loaderName, loaderVersion, rootProjectId, true)) {
@@ -1111,7 +1111,8 @@ static bool InstallModpack(const ModCard& card, const std::wstring& runtimeRoot,
     curseforge::FileRef packFile;
 
     if (card.source == ModSource::CurseForge) {
-        if (!curseforge::ResolveLatestFile(idOrSlug, gameVersion, a2w(loaderId.c_str()), packFile, error)) return false;
+        // pack files are not reliably tagged with a loader
+        if (!curseforge::ResolveLatestFile(idOrSlug, gameVersion, L"", packFile, error)) return false;
         if (packFile.distributionBlocked) {
             error = card.title + L" cannot be downloaded by third party launchers. Get it from curseforge.com and import the zip in Remote Files.";
             return false;

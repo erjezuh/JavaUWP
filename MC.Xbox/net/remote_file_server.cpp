@@ -793,9 +793,12 @@ input,select{min-height:42px;min-width:0;max-width:100%;padding:8px 12px;backgro
             << "Download each jar from its link, then use Add a mod. "
             << "A row disappears once its jar lands in the profile.</p><div class=\"world-list\">";
         for (const ManualDownload& item : pending) {
+            // url comes from the api or a tsv on disk, only https goes in an href next to the pin
+            const bool safeUrl = item.url.rfind(L"https://", 0) == 0;
+            const std::wstring href = safeUrl ? item.url : std::wstring(L"https://www.curseforge.com/minecraft");
             out << "<div class=\"world-card\"><div><strong>" << HtmlEscape(item.fileName) << "</strong>"
                 << "<div class=\"muted\">Missing from this profile</div></div><div class=\"world-actions\">"
-                << "<a class=\"button secondary\" href=\"" << HtmlEscape(item.url)
+                << "<a class=\"button secondary\" href=\"" << HtmlEscape(href)
                 << "\" target=\"_blank\" rel=\"noopener noreferrer\">Get it on CurseForge</a></div></div>";
         }
         out << "</div><div class=\"toolbar\" style=\"margin-top:12px\">"

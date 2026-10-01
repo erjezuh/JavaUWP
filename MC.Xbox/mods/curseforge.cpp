@@ -50,6 +50,17 @@ double JsonNumberOrZero(const JsonObject& obj, const wchar_t* key) {
     }
 }
 
+bool JsonBoolOrFalse(const JsonObject& obj, const wchar_t* key) {
+    if (!obj.HasKey(key)) return false;
+    try {
+        const auto value = obj.GetNamedValue(key);
+        if (value.ValueType() != JsonValueType::Boolean) return false;
+        return obj.GetNamedBoolean(key);
+    } catch (...) {
+        return false;
+    }
+}
+
 JsonArray JsonArrayOrNull(const JsonObject& obj, const wchar_t* key) {
     if (!obj.HasKey(key)) return JsonArray{ nullptr };
     try {
@@ -493,6 +504,8 @@ bool ResolveLatestFile(
         for (uint32_t i = 0; i < data.Size(); ++i) {
             if (data.GetAt(i).ValueType() != JsonValueType::Object) continue;
             const JsonObject file = data.GetAt(i).GetObject();
+            // packs list their server zip as a file too
+            if (JsonBoolOrFalse(file, L"isServerPack")) continue;
             if (static_cast<int>(JsonNumberOrZero(file, L"releaseType")) == kReleaseTypeRelease) {
                 releases.push_back(file);
             } else {
