@@ -4534,7 +4534,8 @@ extern "C" __declspec(dllexport) int banditMicOpen(int sampleRate, int channels,
 
     g_mic.bufferEvent = CreateEventW(nullptr, FALSE, FALSE, nullptr);
     g_mic.client->SetEventHandle(g_mic.bufferEvent);
-    hr = g_mic.client->GetService(__uuidof(IAudioCaptureClient), g_mic.capture.ReleaseAndGetAddressOf());
+    hr = g_mic.client->GetService(__uuidof(IAudioCaptureClient),
+        reinterpret_cast<void**>(g_mic.capture.ReleaseAndGetAddressOf()));
     if (FAILED(hr) || !g_mic.capture) {
         ShimLog("banditMicOpen: GetService(IAudioCaptureClient) failed");
         CloseHandle(g_mic.bufferEvent);
