@@ -5,6 +5,7 @@ import javax.sound.sampled.AudioSystem;
 import javax.sound.sampled.Control;
 import javax.sound.sampled.Control.Type;
 import javax.sound.sampled.DataLine;
+import javax.sound.sampled.Line;
 import javax.sound.sampled.LineEvent;
 import javax.sound.sampled.LineListener;
 import javax.sound.sampled.LineUnavailableException;
@@ -14,9 +15,8 @@ import java.util.List;
 
 /**
  * TargetDataLine backed by the UWP microphone capture in the glfw shim.
- * Pure javax.sound.sampled implementation (no JDK-internal base classes):
- * voice chat mods open this through AudioSystem.getTargetDataLine() and read
- * raw PCM frames.
+ * Implements exactly the Java 8 TargetDataLine/DataLine/Line contracts so the
+ * same jar loads on the Java 8 runtime (1.12.2) and the modern runtime.
  */
 public final class BanditMicTargetDataLine implements TargetDataLine {
 
@@ -74,12 +74,7 @@ public final class BanditMicTargetDataLine implements TargetDataLine {
         return got < 0 ? 0 : got;
     }
 
-    // ---- Line -----------------------------------------------------------
-
-    @Override
-    public void open() throws LineUnavailableException {
-        open(getFormat(), getBufferSize());
-    }
+    // ---- TargetDataLine.open overloads ----------------------------------
 
     @Override
     public void open(AudioFormat format) throws LineUnavailableException {
@@ -92,7 +87,9 @@ public final class BanditMicTargetDataLine implements TargetDataLine {
             throw new LineUnavailableException("Unsupported format: " + format);
         }
         synchronized (lock) {
-            if (open) return;
+            if (open) {
+                throw new IllegalStateException("Line is already open");
+            }
             if (!BanditMic.isAvailable()) {
                 throw new LineUnavailableException("Microphone native bridge not loaded: " + BanditMic.loadError());
             }
@@ -108,6 +105,13 @@ public final class BanditMicTargetDataLine implements TargetDataLine {
             open = true;
         }
         fire(new LineEvent(this, LineEvent.Type.OPEN, AudioSystem.NOT_SPECIFIED));
+    }
+
+    // ---- Line ------------------------------------------------------------
+
+    @Override
+    public void open() throws LineUnavailableException {
+        open(getFormat(), getBufferSize());
     }
 
     @Override
@@ -131,7 +135,7 @@ public final class BanditMicTargetDataLine implements TargetDataLine {
     }
 
     @Override
-    public javax.sound.sampled.Line.Info getLineInfo() {
+    public Line.Info getLineInfo() {
         return info();
     }
 
@@ -165,7 +169,7 @@ public final class BanditMicTargetDataLine implements TargetDataLine {
         }
     }
 
-    // ---- DataLine --------------------------------------------------------
+    // ---- DataLine ----------------------------------------------------------
 
     @Override
     public void start() {
@@ -233,31 +237,6 @@ public final class BanditMicTargetDataLine implements TargetDataLine {
     }
 
     @Override
-    public int getFrameLength() {
-        return AudioSystem.NOT_SPECIFIED;
-    }
-
-    @Override
-    public long getLongFrameLength() {
-        return AudioSystem.NOT_SPECIFIED;
-    }
-
-    @Override
-    public long getMicrosecondPosition() {
-        final AudioFormat f = getFormat();
-        final float frameRate = f.getFrameRate();
-        if (frameRate <= 0f) return 0;
-        synchronized (lock) {
-            return (long) (bytesRead * 1000000.0 / frameRate);
-        }
-    }
-
-    @Override
-    public long getMicrosecondLength() {
-        return AudioSystem.NOT_SPECIFIED;
-    }
-
-    @Override
     public int getFramePosition() {
         final int frameSize = getFormat().getFrameSize();
         if (frameSize <= 0) return 0;
@@ -272,6 +251,16 @@ public final class BanditMicTargetDataLine implements TargetDataLine {
         if (frameSize <= 0) return 0;
         synchronized (lock) {
             return bytesRead / frameSize;
+        }
+    }
+
+    @Override
+    public long getMicrosecondPosition() {
+        final AudioFormat f = getFormat();
+        final float frameRate = f.getFrameRate();
+        if (frameRate <= 0f) return 0;
+        synchronized (lock) {
+            return (long) (bytesRead * 1000000.0 / frameRate);
         }
     }
 

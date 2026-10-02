@@ -1,7 +1,7 @@
 package banditvault.audio;
 
-import javax.sound.sampled.AudioSystem;
 import javax.sound.sampled.AudioFormat;
+import javax.sound.sampled.AudioSystem;
 import javax.sound.sampled.Control;
 import javax.sound.sampled.Control.Type;
 import javax.sound.sampled.DataLine;
@@ -10,14 +10,13 @@ import javax.sound.sampled.LineEvent;
 import javax.sound.sampled.LineListener;
 import javax.sound.sampled.LineUnavailableException;
 import javax.sound.sampled.Mixer;
-import javax.sound.sampled.SourceDataLine;
-import javax.sound.sampled.TargetDataLine;
 import java.util.ArrayList;
 import java.util.List;
 
 /**
  * One-target-line mixer exposing the UWP microphone to javax.sound.
- * Pure javax.sound.sampled implementation (no JDK-internal base classes).
+ * Implements exactly the Java 8 Mixer/Line contracts so the same jar loads on
+ * the Java 8 runtime (1.12.2) and the modern runtime.
  */
 public final class BanditMixer implements Mixer {
 
@@ -70,22 +69,12 @@ public final class BanditMixer implements Mixer {
     }
 
     @Override
-    public boolean isSourceLineSupported(Line.Info info) {
-        return false;
-    }
-
-    @Override
-    public boolean isTargetLineSupported(Line.Info info) {
-        return isLineSupported(info);
-    }
-
-    @Override
     public boolean isLineSupported(Line.Info info) {
         if (info == null) return false;
         final Class<?> cls = info.getLineClass();
-        if (cls != TargetDataLine.class && cls != Line.class
-                && cls != DataLine.class
-                && !TargetDataLine.class.isAssignableFrom(cls)) {
+        if (cls != TargetDataLineClass.TARGET && cls != TargetDataLineClass.LINE
+                && cls != TargetDataLineClass.DATA
+                && !TargetDataLineClass.TARGET.isAssignableFrom(cls)) {
             return false;
         }
         if (info instanceof DataLine.Info) {
@@ -130,13 +119,18 @@ public final class BanditMixer implements Mixer {
     }
 
     @Override
-    public TargetDataLine getTargetLine() throws LineUnavailableException {
-        return theLine();
+    public void synchronize(Line[] lines, boolean maintainSync) {
+        throw new IllegalArgumentException("Synchronization is not supported");
     }
 
     @Override
-    public SourceDataLine getSourceLine() throws LineUnavailableException {
-        throw new LineUnavailableException("This mixer has no source lines");
+    public void unsynchronize(Line[] lines) {
+        throw new IllegalArgumentException("Synchronization is not supported");
+    }
+
+    @Override
+    public boolean isSynchronizationSupported(Line[] lines, boolean maintainSync) {
+        return false;
     }
 
     // ---- Line (a Mixer is a Line) ----------------------------------------
@@ -213,5 +207,12 @@ public final class BanditMixer implements Mixer {
         for (LineListener listener : copy) {
             listener.update(event);
         }
+    }
+
+    /** Line-class constants, kept in a tiny holder to avoid repeated class literals. */
+    private static final class TargetDataLineClass {
+        static final Class<?> TARGET = javax.sound.sampled.TargetDataLine.class;
+        static final Class<?> DATA = DataLine.class;
+        static final Class<?> LINE = Line.class;
     }
 }
