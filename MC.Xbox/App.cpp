@@ -870,6 +870,13 @@ public:
         }
         CollectManifestLibraryJars(effManifestPath, exeDir, packageDir, jars);
         jars.push_back(clientJar);
+        // javax.sound microphone provider (voice chat mods); discovered via
+        // META-INF/services by AudioSystem from the system class loader.
+        const std::wstring audioProviderJar = packageDir + L"\runtime\banditvault-audio-input.jar";
+        if (GetFileAttributesW(audioProviderJar.c_str()) != INVALID_FILE_ATTRIBUTES) {
+            jars.push_back(audioProviderJar);
+            WriteLog(L"Audio input provider jar added to classpath");
+        }
         WriteLogF(L"JAR count: %zu", jars.size());
 
         std::wstring cp;

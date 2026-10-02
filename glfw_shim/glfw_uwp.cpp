@@ -4343,3 +4343,300 @@ extern "C" __declspec(dllexport) void* glfwGetOSMesaContext(GLFWwindow*) { retur
 
 extern "C" __declspec(dllexport) const char* glfwGetWin32Adapter(GLFWmonitor*) { return NULL; }
 extern "C" __declspec(dllexport) const char* glfwGetWin32Monitor(GLFWmonitor*) { return NULL; }
+
+// ---------------------------------------------------------------------------
+// Microphone capture (WASAPI shared mode via ActivateAudioInterfaceAsync).
+// Backs the javax.sound TargetDataLine provider used by voice chat mods.
+// ---------------------------------------------------------------------------
+#include <audioclient.h>
+#include <mmdeviceapi.h>
+#include <process.h>
+#include <chrono>
+#include <condition_variable>
+#include <winrt/Windows.Media.Devices.h>
+
+namespace {
+
+struct BanditMicState {
+    std::mutex openMu;
+    std::mutex mu;
+    std::condition_variable cv;
+    std::vector<uint8_t> fifo;
+    size_t fifoRead = 0;
+    bool open = false;
+    int channels = 1;
+    int bitsPerSample = 16;
+    int sampleRate = 48000;
+    HANDLE activationEvent = nullptr;
+    ComPtr<IAudioClient> client;
+    ComPtr<IAudioCaptureClient> capture;
+    HANDLE bufferEvent = nullptr;
+    std::atomic<bool> running{false};
+    HANDLE threadHandle = nullptr;
+    HRESULT activationResult = E_FAIL;
+    ComPtr<IUnknown> activated;
+};
+
+BanditMicState g_mic;
+
+class BanditMicActivationHandler
+    : public RuntimeClass<RuntimeClassFlags<ClassicCom>,
+                          IActivateAudioInterfaceCompletionHandler> {
+public:
+    STDMETHOD(ActivateCompleted)(IActivateAudioInterfaceAsyncOperation* operation) override {
+        HRESULT hr = E_FAIL;
+        IUnknown* punk = nullptr;
+        if (operation) {
+            operation->GetActivateResult(&hr, &punk);
+        }
+        {
+            std::lock_guard<std::mutex> lk(g_mic.mu);
+            g_mic.activationResult = hr;
+            g_mic.activated = punk;
+        }
+        if (punk) punk->Release();
+        if (g_mic.activationEvent) SetEvent(g_mic.activationEvent);
+        return S_OK;
+    }
+};
+
+unsigned __stdcall BanditMicCaptureThread(void*) {
+    for (;;) {
+        {
+            if (!g_mic.running.load()) break;
+        }
+        DWORD wait = WaitForSingleObject(g_mic.bufferEvent, 200);
+        (void)wait;
+        if (!g_mic.running.load()) break;
+        IAudioCaptureClient* capture = g_mic.capture.Get();
+        if (!capture) break;
+        UINT32 packet = 0;
+        while (SUCCEEDED(capture->GetNextPacketSize(&packet)) && packet > 0) {
+            BYTE* data = nullptr;
+            UINT32 frames = 0;
+            DWORD flags = 0;
+            if (FAILED(capture->GetBuffer(&data, &frames, &flags, nullptr, nullptr))) break;
+            const UINT32 frameBytes = (UINT32)(g_mic.channels * g_mic.bitsPerSample / 8);
+            const UINT32 bytes = frames * frameBytes;
+            if (bytes > 0) {
+                std::lock_guard<std::mutex> lk(g_mic.mu);
+                if (flags & AUDCLNT_BUFFERFLAGS_SILENT) {
+                    g_mic.fifo.insert(g_mic.fifo.end(), bytes, 0);
+                } else if (data) {
+                    g_mic.fifo.insert(g_mic.fifo.end(), data, data + bytes);
+                }
+                // Keep at most ~2 seconds of audio queued.
+                const size_t maxQueued = (size_t)g_mic.sampleRate * frameBytes * 2;
+                if (g_mic.fifo.size() - g_mic.fifoRead > maxQueued) {
+                    const size_t drop = (g_mic.fifo.size() - g_mic.fifoRead) - maxQueued;
+                    g_mic.fifoRead += drop;
+                }
+                if (g_mic.fifoRead > 0 && g_mic.fifoRead * 2 > g_mic.fifo.size()) {
+                    g_mic.fifo.erase(g_mic.fifo.begin(), g_mic.fifo.begin() + g_mic.fifoRead);
+                    g_mic.fifoRead = 0;
+                }
+                g_mic.cv.notify_all();
+            }
+            capture->ReleaseBuffer(frames);
+        }
+    }
+    return 0;
+}
+
+}  // namespace
+
+extern "C" __declspec(dllexport) int banditMicOpen(int sampleRate, int channels, int bitsPerSample) {
+    std::lock_guard<std::mutex> openLk(g_mic.openMu);
+    {
+        std::lock_guard<std::mutex> lk(g_mic.mu);
+        if (g_mic.open) return 1;
+    }
+    if (channels < 1 || channels > 2) channels = 1;
+    if (bitsPerSample != 16) bitsPerSample = 16;
+    if (sampleRate < 8000 || sampleRate > 48000) sampleRate = 48000;
+
+    // The default capture endpoint id comes from WinRT MediaDevice; the fixed
+    // UWP "MediaDevice\Default" string is the render endpoint and cannot be
+    // opened for capture.
+    winrt::hstring captureId;
+    try {
+        winrt::init_apartment(winrt::apartment_type::multi_threaded);
+    } catch (...) {}
+    try {
+        captureId = winrt::Windows::Media::Devices::MediaDevice::GetDefaultAudioCaptureId(
+            winrt::Windows::Media::Devices::AudioDeviceRole::Default);
+    } catch (...) {}
+    if (captureId.empty()) {
+        ShimLog("banditMicOpen: no default capture device id");
+        return 0;
+    }
+
+    g_mic.activationEvent = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    g_mic.activationResult = E_FAIL;
+    g_mic.activated.Reset();
+
+    ComPtr<BanditMicActivationHandler> handler = Make<BanditMicActivationHandler>();
+    ComPtr<IActivateAudioInterfaceAsyncOperation> operation;
+    HRESULT hr = ActivateAudioInterfaceAsync(
+        captureId.c_str(), __uuidof(IAudioClient), nullptr, handler.Get(), &operation);
+    if (FAILED(hr) || !operation) {
+        char msg[128];
+        sprintf_s(msg, "banditMicOpen: ActivateAudioInterfaceAsync failed hr=0x%08lx", (unsigned long)hr);
+        ShimLog(msg);
+        CloseHandle(g_mic.activationEvent);
+        g_mic.activationEvent = nullptr;
+        return 0;
+    }
+    if (WaitForSingleObject(g_mic.activationEvent, 5000) != WAIT_OBJECT_0) {
+        ShimLog("banditMicOpen: device activation timed out");
+        CloseHandle(g_mic.activationEvent);
+        g_mic.activationEvent = nullptr;
+        return 0;
+    }
+    CloseHandle(g_mic.activationEvent);
+    g_mic.activationEvent = nullptr;
+    if (FAILED(g_mic.activationResult) || !g_mic.activated) {
+        char msg[128];
+        sprintf_s(msg, "banditMicOpen: activation result hr=0x%08lx", (unsigned long)g_mic.activationResult);
+        ShimLog(msg);
+        return 0;
+    }
+    g_mic.activated.As(&g_mic.client);
+    if (!g_mic.client) {
+        ShimLog("banditMicOpen: activated object is not an IAudioClient");
+        return 0;
+    }
+
+    WAVEFORMATEX fmt = {};
+    fmt.wFormatTag = WAVE_FORMAT_PCM;
+    fmt.nChannels = (WORD)channels;
+    fmt.nSamplesPerSec = (DWORD)sampleRate;
+    fmt.wBitsPerSample = (WORD)bitsPerSample;
+    fmt.nBlockAlign = (WORD)(channels * bitsPerSample / 8);
+    fmt.nAvgBytesPerSec = fmt.nSamplesPerSec * fmt.nBlockAlign;
+    fmt.cbSize = 0;
+
+    // AUTOCONVERTPCM lets the audio engine deliver exactly the requested PCM
+    // format regardless of the endpoint mix format.
+    hr = g_mic.client->Initialize(
+        AUDCLNT_SHAREMODE_SHARED,
+        AUDCLNT_STREAMFLAGS_EVENTCALLBACK | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM |
+            AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,
+        200000,  // 200 ms buffer
+        0, &fmt, nullptr);
+    if (FAILED(hr)) {
+        char msg[128];
+        sprintf_s(msg, "banditMicOpen: IAudioClient::Initialize failed hr=0x%08lx", (unsigned long)hr);
+        ShimLog(msg);
+        g_mic.client.Reset();
+        return 0;
+    }
+
+    g_mic.bufferEvent = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    g_mic.client->SetEventHandle(g_mic.bufferEvent);
+    hr = g_mic.client->GetService(__uuidof(IAudioCaptureClient), g_mic.capture.ReleaseAndGetAddressOf());
+    if (FAILED(hr) || !g_mic.capture) {
+        ShimLog("banditMicOpen: GetService(IAudioCaptureClient) failed");
+        CloseHandle(g_mic.bufferEvent);
+        g_mic.bufferEvent = nullptr;
+        g_mic.client.Reset();
+        return 0;
+    }
+    hr = g_mic.client->Start();
+    if (FAILED(hr)) {
+        ShimLog("banditMicOpen: IAudioClient::Start failed");
+        g_mic.capture.Reset();
+        CloseHandle(g_mic.bufferEvent);
+        g_mic.bufferEvent = nullptr;
+        g_mic.client.Reset();
+        return 0;
+    }
+
+    g_mic.channels = channels;
+    g_mic.bitsPerSample = bitsPerSample;
+    g_mic.sampleRate = sampleRate;
+    g_mic.fifo.clear();
+    g_mic.fifoRead = 0;
+    g_mic.running.store(true);
+    g_mic.open = true;
+    g_mic.threadHandle = (HANDLE)_beginthreadex(nullptr, 0, BanditMicCaptureThread, nullptr, 0, nullptr);
+    ShimLog("banditMicOpen: capture started");
+    return 1;
+}
+
+extern "C" __declspec(dllexport) int banditMicAvailable() {
+    std::lock_guard<std::mutex> lk(g_mic.mu);
+    if (!g_mic.open) return 0;
+    return (int)(g_mic.fifo.size() - g_mic.fifoRead);
+}
+
+extern "C" __declspec(dllexport) int banditMicRead(void* buffer, int length, int timeoutMs) {
+    if (!buffer || length <= 0) return -1;
+    std::unique_lock<std::mutex> lk(g_mic.mu);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs > 0 ? timeoutMs : 200);
+    while (g_mic.open && (g_mic.fifo.size() - g_mic.fifoRead) == 0) {
+        if (g_mic.cv.wait_until(lk, deadline) == std::cv_status::timeout) break;
+    }
+    if (!g_mic.open) return -1;
+    const size_t avail = g_mic.fifo.size() - g_mic.fifoRead;
+    if (avail == 0) return 0;
+    const size_t take = (size_t)length < avail ? (size_t)length : avail;
+    memcpy(buffer, g_mic.fifo.data() + g_mic.fifoRead, take);
+    g_mic.fifoRead += take;
+    return (int)take;
+}
+
+extern "C" __declspec(dllexport) void banditMicClose() {
+    std::lock_guard<std::mutex> openLk(g_mic.openMu);
+    {
+        std::lock_guard<std::mutex> lk(g_mic.mu);
+        if (!g_mic.open) return;
+        g_mic.open = false;
+        g_mic.running.store(false);
+    }
+    g_mic.cv.notify_all();
+    if (g_mic.client) g_mic.client->Stop();
+    if (g_mic.threadHandle) {
+        WaitForSingleObject(g_mic.threadHandle, 2000);
+        CloseHandle(g_mic.threadHandle);
+        g_mic.threadHandle = nullptr;
+    }
+    g_mic.capture.Reset();
+    if (g_mic.bufferEvent) {
+        CloseHandle(g_mic.bufferEvent);
+        g_mic.bufferEvent = nullptr;
+    }
+    g_mic.client.Reset();
+    g_mic.activated.Reset();
+    ShimLog("banditMicClose: capture stopped");
+}
+
+// ---- JNI thunks for the javax.sound provider (banditvault.audio.BanditMic)
+#include <jni.h>
+
+extern "C" __declspec(dllexport) jint JNICALL
+Java_banditvault_audio_BanditMic_nativeOpen(JNIEnv*, jclass, jint rate, jint channels, jint bits) {
+    return (jint)banditMicOpen(rate, channels, bits);
+}
+
+extern "C" __declspec(dllexport) jint JNICALL
+Java_banditvault_audio_BanditMic_nativeAvailable(JNIEnv*, jclass) {
+    return (jint)banditMicAvailable();
+}
+
+extern "C" __declspec(dllexport) jint JNICALL
+Java_banditvault_audio_BanditMic_nativeRead(JNIEnv* env, jclass, jbyteArray buf, jint off, jint len, jint timeoutMs) {
+    if (!buf || off < 0 || len <= 0) return -1;
+    jsize total = env->GetArrayLength(buf);
+    if (off + len > total) len = total - off;
+    if (len <= 0) return -1;
+    std::vector<uint8_t> tmp((size_t)len);
+    int got = banditMicRead(tmp.data(), len, timeoutMs);
+    if (got > 0) env->SetByteArrayRegion(buf, off, got, reinterpret_cast<const jbyte*>(tmp.data()));
+    return (jint)got;
+}
+
+extern "C" __declspec(dllexport) void JNICALL
+Java_banditvault_audio_BanditMic_nativeClose(JNIEnv*, jclass) {
+    banditMicClose();
+}

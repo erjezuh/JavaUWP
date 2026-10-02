@@ -32,12 +32,21 @@ if (-not (Test-Path $MouseSupportLib)) {
     throw "mouse_support import library missing: $MouseSupportLib (build mouse_support before glfw)"
 }
 
+# jni.h: the microphone capture exports JNI entry points for the
+# javax.sound provider shipped in banditvault-audio-input.jar.
+$javaHome = Resolve-JavaHome
+$jniInclude = Join-Path $javaHome "include"
+$jniWin32Include = Join-Path $jniInclude "win32"
+if (-not (Test-Path (Join-Path $jniInclude "jni.h"))) {
+    throw "jni.h not found under $jniInclude; glfw shim microphone exports require a JDK."
+}
 $env:INCLUDE = "$($tools.MsvcRoot)\include;" +
                "${sdkRoot}Include\$sdkVer\ucrt;" +
                "${sdkRoot}Include\$sdkVer\shared;" +
                "${sdkRoot}Include\$sdkVer\um;" +
                "${sdkRoot}Include\$sdkVer\winrt;" +
-               "${sdkRoot}Include\$sdkVer\cppwinrt"
+               "${sdkRoot}Include\$sdkVer\cppwinrt;" +
+               "$jniInclude;$jniWin32Include"
 $env:LIB = "$($tools.MsvcRoot)\lib\x64;" +
            "${sdkRoot}Lib\$sdkVer\ucrt\x64;" +
            "${sdkRoot}Lib\$sdkVer\um\x64"
@@ -61,7 +70,7 @@ Write-Host "Building glfw.dll (CoreWindow shim)..."
     /DWINAPI_FAMILY=WINAPI_FAMILY_APP `
     /link /LTCG /DEF:glfw_uwp.def /OUT:"$dllPath" /IMPLIB:"$libPath" /MACHINE:X64 `
     "$MouseSupportLib" `
-    kernel32.lib runtimeobject.lib windowsapp.lib ole32.lib oleaut32.lib gameinput.lib ws2_32.lib
+    kernel32.lib runtimeobject.lib windowsapp.lib ole32.lib oleaut32.lib gameinput.lib ws2_32.lib mmdevapi.lib
 if ($LASTEXITCODE -ne 0) { Pop-Location; throw "glfw_uwp build FAILED" }
 Pop-Location
 Set-BuildStamp -StampPath $stampPath -Stamp $stamp

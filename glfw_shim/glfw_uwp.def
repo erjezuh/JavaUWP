@@ -1,5 +1,9 @@
 LIBRARY glfw
 EXPORTS
+    Java_banditvault_audio_BanditMic_nativeAvailable
+    Java_banditvault_audio_BanditMic_nativeClose
+    Java_banditvault_audio_BanditMic_nativeOpen
+    Java_banditvault_audio_BanditMic_nativeRead
     banditKeyboardBegin
     banditKeyboardConsumeFlags
     banditKeyboardCopyText
@@ -9,6 +13,10 @@ EXPORTS
     banditKeyboardGetSelectionStart
     banditKeyboardGetTextLength
     banditKeyboardUpdate
+    banditMicAvailable
+    banditMicClose
+    banditMicOpen
+    banditMicRead
     glfwAttachWin32Window
     glfwCreateCursor
     glfwCreateStandardCursor

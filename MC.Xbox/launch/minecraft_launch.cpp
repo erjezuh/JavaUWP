@@ -1744,6 +1744,16 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
         SetEnvironmentVariableW(L"MESA_GLSL_CACHE_DIR", shaderCacheDir.c_str());
         WriteLogF(L"Mesa: MESA_GLSL_CACHE_DIR=%s", shaderCacheDir.c_str());
     }
+    // OpenAL-soft diagnostics: 1.12.2 sound falls back to "No Sound (Silent
+    // Mode)" whenever the ALC device fails to open at startup (Mojang MC-9974
+    // family). Capture the backend log so the exact failure is visible in a
+    // file the Remote Files page can fetch.
+    {
+        std::wstring alsoftLog = gameDir + L"\\alsoft.log";
+        SetEnvironmentVariableW(L"ALSOFT_LOGLEVEL", L"3");
+        SetEnvironmentVariableW(L"ALSOFT_LOGFILE", alsoftLog.c_str());
+        WriteLogF(L"OpenAL: ALSOFT_LOGLEVEL=3 ALSOFT_LOGFILE=%s", alsoftLog.c_str());
+    }
     // The integrated JVM renders on this process; ask the console scheduler for
     // stable frame pacing on the shared cores.
     if (SetPriorityClass(GetCurrentProcess(), HIGH_PRIORITY_CLASS)) {

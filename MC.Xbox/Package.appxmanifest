@@ -56,6 +56,7 @@
     <Capability Name="internetClient"/>
     <Capability Name="internetClientServer"/>
     <Capability Name="privateNetworkClientServer"/>
+    <DeviceCapability Name="microphone"/>
     <rescap:Capability Name="runFullTrust"/>
     <rescap:Capability Name="broadFileSystemAccess"/>
     <rescap:Capability Name="expandedResources"/>
