@@ -606,6 +606,7 @@ public:
 
         LaunchAuthConfig authConfig;
         bool authConfigReady = false;
+        bool startupCrashShown = false;
         for (;;) {
         bool repairDownloads = false;
         while (true) {
@@ -614,6 +615,39 @@ public:
                 return E_FAIL;
             }
             authConfigReady = true;
+
+            // A native crash can take the whole process down (game + launcher),
+            // so the failure screen never runs. Surface the incident once when
+            // the launcher opens again: the marker keeps it to one report.
+            if (!startupCrashShown) {
+                startupCrashShown = true;
+                const std::wstring startupActiveId = GetActiveProfileId(exeDir);
+                const std::wstring startupGameDir = ProfileGameDir(exeDir, startupActiveId);
+                const telemetry::CrashRecord startupRecord = telemetry::ReadLastCrash();
+                const crashadvice::ModCrashInfo startupAdvice =
+                    crashadvice::AnalyzeLastRun(exeDir, startupGameDir, startupActiveId, startupRecord);
+                if (startupAdvice.found) {
+                    WriteLog(L"Startup crash report shown from the previous session");
+                    AuthScreenRenderer startupCrashRendererInstance;
+                    AuthScreenRenderer* startupCrashRenderer = nullptr;
+                    if (startupCrashRendererInstance.Initialize(g_authWindow.Get())) {
+                        startupCrashRenderer = &startupCrashRendererInstance;
+                    }
+                    AuthUiState startupCrashState;
+                    std::wstring startupCrashDetail = L"Causa: " + startupAdvice.reason;
+                    if (!startupAdvice.culpritName.empty()) {
+                        startupCrashDetail = L"Mod: " + startupAdvice.culpritName + L". " + startupCrashDetail;
+                    }
+                    startupCrashDetail += L" Soluci\u00f3n: " + startupAdvice.solution;
+                    RenderPreparationProgress(
+                        startupCrashRenderer,
+                        startupCrashState,
+                        L"El juego se cerr\u00f3 de forma inesperada",
+                        startupCrashDetail.c_str(),
+                        1.0f);
+                    SleepWithAuthUi(startupCrashRenderer, startupCrashState, 8000);
+                }
+            }
 
             const MainMenuAction menuAction = ShowMainMenu(g_authWindow.Get(), authConfig, exeDir);
             if (menuAction == MainMenuAction::Play) {
