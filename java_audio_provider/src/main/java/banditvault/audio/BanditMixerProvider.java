@@ -9,7 +9,7 @@ import javax.sound.sampled.spi.MixerProvider;
  * classpath; exposes the UWP microphone to any mod that opens a
  * TargetDataLine (voice chat mods).
  */
-public final class BanditMixerProvider implements MixerProvider {
+public final class BanditMixerProvider extends MixerProvider {
 
     @Override
     public Mixer.Info[] getMixerInfo() {
