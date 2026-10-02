@@ -38,6 +38,8 @@
 #include <windows.applicationmodel.core.h>
 #include <windows.foundation.h>
 #include <windows.foundation.collections.h>
+#include <winrt/Windows.ApplicationModel.Core.h>
+#include <winrt/base.h>
 #include <windows.ui.core.h>
 #include <appmodel.h>
 
@@ -973,11 +975,20 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
     };
 
     if (g_embeddedJvmUsed) {
-        WriteLog(L"Refusing launch: this process has already run a JVM, it cannot start another");
+        // One JVM per process: a second Play cannot create another. Instead of
+        // a dead end, ask the OS to restart the app so the user gets a fresh
+        // process and can press Play again immediately.
+        WriteLog(L"Second launch requested in one process; requesting an app restart for a fresh JVM");
         reportProgress(
-            L"Restart the launcher",
-            L"A previous launch already used this session's Java runtime. Close the launcher and open it again.",
+            L"Reiniciando el launcher",
+            L"Jugar otra vez necesita un reinicio r\u00e1pido: el launcher vuelve solo y luego pulsa Play.",
             1.0f);
+        try {
+            winrt::Windows::ApplicationModel::Core::CoreApplication::RequestRestartAsync(winrt::hstring(L""));
+            WriteLog(L"RequestRestartAsync issued");
+        } catch (const winrt::hresult_error& e) {
+            WriteLogF(L"RequestRestartAsync failed hr=0x%08lx", (unsigned long)e.code());
+        }
         return false;
     }
 
