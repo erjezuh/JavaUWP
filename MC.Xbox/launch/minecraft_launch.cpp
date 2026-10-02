@@ -372,14 +372,14 @@ static void WriteLauncherCrashTxt(
     const std::wstring& reason,
     const std::wstring& javaLog,
     const std::wstring& stderrLog) {
-    const std::wstring dir = gameDir + L"\crash-reports";
+    const std::wstring dir = gameDir + L"\\crash-reports";
     EnsureDirectoryTree(dir);
     SYSTEMTIME st = {};
     GetLocalTime(&st);
     wchar_t name[96];
     swprintf_s(name, L"%04u-%02u-%02u_%02u-%02u-%02u-launcher-exception.txt",
         st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
-    const std::wstring outPath = dir + L"\" + name;
+    const std::wstring outPath = dir + L"\\" + name;
     std::wstring body = L"---- Launcher crash report ----\n";
     body += L"Time: " + std::to_wstring(st.wYear) + L"-" + std::to_wstring(st.wMonth) + L"-" +
         std::to_wstring(st.wDay) + L" " + std::to_wstring(st.wHour) + L":" +
@@ -1858,7 +1858,7 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
     vmOptionStorage.push_back("-XX:MaxDirectMemorySize=1024M");
     // Native crashes must land where crash_advice::AnalyzeLastRun looks for
     // them: the game dir. %p is the JVM's pid placeholder.
-    vmOptionStorage.push_back("-XX:ErrorFile=" + w2a(fwd(gameDir + L"\hs_err_pid%p.log")));
+    vmOptionStorage.push_back("-XX:ErrorFile=" + w2a(fwd(gameDir + L"\\hs_err_pid%p.log")));
 
     // ignoreUnrecognized is JNI_FALSE, so a typo in jvm_args.txt would stop it booting
     vmOptionStorage.push_back("-XX:+IgnoreUnrecognizedVMOptions");
