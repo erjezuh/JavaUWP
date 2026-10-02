@@ -1049,6 +1049,21 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
     const std::wstring lwjglNativeDir =
         suppliedNativesReady ? nativesDir :
         (packagedNativesReady ? packagedNativesDir : nativesDir);
+    // OpenAL variant selection for the legacy sound system (MC-9974 family):
+    // OpenAL64.dll/32.dll mirror the variant picked with MC_OPENAL_VARIANT
+    // (default: openal-soft; "lwjgl3": the openal-soft modern Minecraft uses).
+    if (legacyForge122Natives) {
+        const std::wstring variant = GetEnvVarString(L"MC_OPENAL_VARIANT") == L"lwjgl3"
+            ? L"openal-lwjgl3.dll" : L"openal-soft.dll";
+        const std::wstring variantPath = lwjglNativeDir + L"\\" + variant;
+        if (GetFileAttributesW(variantPath.c_str()) != INVALID_FILE_ATTRIBUTES) {
+            CopyFileW(variantPath.c_str(), (lwjglNativeDir + L"\\OpenAL64.dll").c_str(), FALSE);
+            CopyFileW(variantPath.c_str(), (lwjglNativeDir + L"\\OpenAL32.dll").c_str(), FALSE);
+            WriteLogF(L"OpenAL variant selected: %s -> OpenAL64.dll + OpenAL32.dll", variant.c_str());
+        } else {
+            WriteLogF(L"OpenAL variant %s not found in %s; keeping the current OpenAL64.dll", variant.c_str(), lwjglNativeDir.c_str());
+        }
+    }
     const std::wstring lwjglGlfwDll = lwjglNativeDir + L"\\glfw.dll";
     std::wstring graphicsRuntime = GetEnvVarString(L"MC_GRAPHICS_RUNTIME");
     if (graphicsRuntime.empty()) {

@@ -779,20 +779,24 @@ if ($legacyForge1122Advertised) {
         Write-Host "Legacy natives copied from $legacyNativesCache"
     }
 
-    # Prefer the OpenAL-soft build that ships inside the LWJGL 3 natives: it is
-    # the exact binary modern Minecraft uses successfully on this hardware.
-    # The stock LWJGL 2 OpenAL fails to open the playback device on UWP and the
-    # game silently falls back to "No Sound (Silent Mode)" (Mojang MC-9974).
+    # Ship BOTH OpenAL variants side by side and let the launcher pick at
+    # launch time (MC_OPENAL_VARIANT): openal-soft (the safe default) and the
+    # LWJGL3 openal-soft that modern Minecraft uses on this hardware. The
+    # game's OpenAL64.dll/32.dll always mirror the selected variant.
     $modernOpenal = Join-Path $nativesSourceDir "openal.dll"
     if (-not (Test-Path $modernOpenal)) {
         $modernOpenal = Join-Path (Join-Path (Get-ConfigPath "CacheDir") "natives-1.20.1") "openal.dll"
     }
+    $pkgNatives = Join-Path $pkg "natives"
+    if (Test-Path (Join-Path $pkgNatives "OpenAL64.dll")) {
+        Copy-Item (Join-Path $pkgNatives "OpenAL64.dll") (Join-Path $pkgNatives "openal-soft.dll") -Force
+        Write-Host "Legacy OpenAL variant: openal-soft.dll (safe default backup)"
+    }
     if (Test-Path $modernOpenal) {
-        Copy-Item $modernOpenal (Join-Path $pkg "natives\OpenAL64.dll") -Force
-        Copy-Item $modernOpenal (Join-Path $pkg "natives\OpenAL32.dll") -Force
-        Write-Host "Legacy OpenAL: LWJGL3 openal.dll (the binary 1.20.1 uses) -> OpenAL64.dll + OpenAL32.dll"
+        Copy-Item $modernOpenal (Join-Path $pkgNatives "openal-lwjgl3.dll") -Force
+        Write-Host "Legacy OpenAL variant: openal-lwjgl3.dll (the binary 1.20.1 uses; MC_OPENAL_VARIANT=lwjgl3 to select)"
     } else {
-        Write-Host "Legacy OpenAL: keeping the openal-soft from natives-1.12.2 (no LWJGL3 openal.dll found)"
+        Write-Host "Legacy OpenAL: no LWJGL3 openal.dll found; only the openal-soft variant is shipped"
     }
     $legacyNativeNames = @(
         "lwjgl64.dll",
