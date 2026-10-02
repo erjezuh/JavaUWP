@@ -1915,11 +1915,9 @@ static void SortProfileModsView(std::vector<std::wstring>& mods, const std::wstr
     keyed.reserve(mods.size());
     for (const std::wstring& jar : mods) {
         FILETIME ft{};
-        HANDLE h = CreateFileW((modsDir + L"\\" + jar).c_str(), GENERIC_READ, FILE_SHARE_READ,
-            nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-        if (h != INVALID_HANDLE_VALUE) {
-            GetFileTime(h, &ft, nullptr, nullptr);
-            CloseHandle(h);
+        WIN32_FILE_ATTRIBUTE_DATA fad = {};
+        if (GetFileAttributesExW((modsDir + L"\\" + jar).c_str(), GetFileExInfoStandard, &fad)) {
+            ft = fad.ftCreationTime;
         }
         keyed.push_back({ jar, ft });
     }
