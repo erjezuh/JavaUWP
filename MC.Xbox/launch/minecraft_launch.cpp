@@ -342,6 +342,63 @@ static void LogTextFileTail(const std::wstring& path, const wchar_t* label, DWOR
     WriteLogF(L"%s tail (%u bytes):\n%s", label ? label : L"log file", static_cast<unsigned>(bytesRead), wide.c_str());
 }
 
+static std::wstring ReadTextFileTail(const std::wstring& path, DWORD maxBytes = 16384) {
+    int fd = -1;
+    errno_t openErr = _wsopen_s(&fd, path.c_str(), _O_RDONLY | _O_BINARY, _SH_DENYNO, _S_IREAD);
+    if (openErr != 0 || fd < 0) return std::wstring();
+    const __int64 size = _lseeki64(fd, 0, SEEK_END);
+    if (size <= 0) {
+        _close(fd);
+        return std::wstring();
+    }
+    const DWORD bytesToRead = static_cast<DWORD>(size < maxBytes ? size : maxBytes);
+    _lseeki64(fd, size - bytesToRead, SEEK_SET);
+    std::string data(bytesToRead, '\0');
+    const int bytesRead = _read(fd, data.data(), bytesToRead);
+    _close(fd);
+    if (bytesRead <= 0) return std::wstring();
+    data.resize(static_cast<size_t>(bytesRead));
+    for (char& ch : data) {
+        if (ch == '\0') ch = ' ';
+    }
+    return a2w(data.c_str());
+}
+
+// The analyzer (crash_advice::AnalyzeLastRun) reads crash-reports\*.txt in
+// the game dir. A Java exception kills the whole process, so write the
+// incident there BEFORE ExitProcess or nobody ever explains the crash.
+static void WriteLauncherCrashTxt(
+    const std::wstring& gameDir,
+    const std::wstring& reason,
+    const std::wstring& javaLog,
+    const std::wstring& stderrLog) {
+    const std::wstring dir = gameDir + L"\crash-reports";
+    EnsureDirectoryTree(dir);
+    SYSTEMTIME st = {};
+    GetLocalTime(&st);
+    wchar_t name[96];
+    swprintf_s(name, L"%04u-%02u-%02u_%02u-%02u-%02u-launcher-exception.txt",
+        st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
+    const std::wstring outPath = dir + L"\" + name;
+    std::wstring body = L"---- Launcher crash report ----\n";
+    body += L"Time: " + std::to_wstring(st.wYear) + L"-" + std::to_wstring(st.wMonth) + L"-" +
+        std::to_wstring(st.wDay) + L" " + std::to_wstring(st.wHour) + L":" +
+        std::to_wstring(st.wMinute) + L":" + std::to_wstring(st.wSecond) + L"\n";
+    body += L"Reason: " + reason + L"\n";
+    body += L"\n---- java_output.log tail ----\n" + ReadTextFileTail(javaLog) + L"\n";
+    body += L"\n---- stderr_stream.log tail ----\n" + ReadTextFileTail(stderrLog) + L"\n";
+    int fd = -1;
+    errno_t openErr = _wsopen_s(&fd, outPath.c_str(), _O_CREAT | _O_WRONLY | _O_TRUNC | _O_BINARY, _SH_DENYNO, _S_IREAD | _S_IWRITE);
+    if (openErr == 0 && fd >= 0) {
+        const std::string utf8 = w2a(body);
+        _write(fd, utf8.data(), (unsigned)utf8.size());
+        _close(fd);
+        WriteLogF(L"Launcher crash report written: %s", outPath.c_str());
+    } else {
+        WriteLogF(L"Failed to write launcher crash report: %s err=%d", outPath.c_str(), openErr);
+    }
+}
+
 static void LogUtf8Chunk(const std::wstring& label, const char* data, DWORD length) {
     if (!data || length == 0) return;
 
@@ -1799,6 +1856,9 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
     vmOptionStorage.push_back("-Xmx3072M");
     vmOptionStorage.push_back("-Xms3072M");
     vmOptionStorage.push_back("-XX:MaxDirectMemorySize=1024M");
+    // Native crashes must land where crash_advice::AnalyzeLastRun looks for
+    // them: the game dir. %p is the JVM's pid placeholder.
+    vmOptionStorage.push_back("-XX:ErrorFile=" + w2a(fwd(gameDir + L"\hs_err_pid%p.log")));
 
     // ignoreUnrecognized is JNI_FALSE, so a typo in jvm_args.txt would stop it booting
     vmOptionStorage.push_back("-XX:+IgnoreUnrecognizedVMOptions");
@@ -2358,6 +2418,7 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
         WriteLog(L"Embedded JVM failed after startup; terminating host process to avoid JVM/native reuse");
         StopLogTailers();
         CreateCrashReportZip(exeDir, L"Java exception after Minecraft startup");
+        WriteLauncherCrashTxt(gameDir, L"Java exception after Minecraft startup", javaLog, stderrLogPath);
         // the local crash screen links to the zip written above
         telemetry::ReportSoftCrash(exeDir);
         telemetry::EndLaunch();
