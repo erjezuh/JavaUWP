@@ -116,8 +116,16 @@ public final class LegacyGlSanitizer {
         boolean loaded = false;
         try {
             if (shaderPackLoadedField == null) {
-                final Class<?> cls = Class.forName("shadersmod.client.Shaders", false,
-                    LegacyGlSanitizer.class.getClassLoader());
+                // OptiFine E3 keeps the old shadersmod package; G5 moved the
+                // classes under net.optifine.shaders. Try both.
+                Class<?> cls;
+                try {
+                    cls = Class.forName("shadersmod.client.Shaders", false,
+                        LegacyGlSanitizer.class.getClassLoader());
+                } catch (Throwable older) {
+                    cls = Class.forName("net.optifine.shaders.Shaders", false,
+                        LegacyGlSanitizer.class.getClassLoader());
+                }
                 shaderPackLoadedField = cls.getField("shaderPackLoaded");
             }
             loaded = shaderPackLoadedField.getBoolean(null);
