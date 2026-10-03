@@ -879,6 +879,16 @@ public:
         if (blockedRemoved > 0) {
             WriteLogF(L"Removed %d blocked mod(s) from active profile before launch", blockedRemoved);
         }
+        {
+            // Legacy 1.12.2: prefer OptiFine G5 (RenderLib/Nothirium expect the
+            // G5 OptiFine layout). Older jars are retired with a backup.
+            std::wstring ofUpgradeDetail;
+            const OptiFineUpgradeResult ofUpgrade =
+                UpgradeLegacyOptiFine(exeDir, activeProfile, versionInfo.targetId, ofUpgradeDetail);
+            if (ofUpgrade != OptiFineUpgradeResult::NotApplicable) {
+                WriteLogF(L"OptiFine G5 auto-upgrade: %s", ofUpgradeDetail.c_str());
+            }
+        }
         WriteLogF(L"java.exe  exists=%d", GetFileAttributesW(javaExe.c_str()) != INVALID_FILE_ATTRIBUTES);
         WriteLogF(L"gameDir   exists=%d", GetFileAttributesW(gameDir.c_str()) != INVALID_FILE_ATTRIBUTES);
         WriteLogF(L"clientJar exists=%d", GetFileAttributesW(clientJar.c_str()) != INVALID_FILE_ATTRIBUTES);

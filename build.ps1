@@ -1006,6 +1006,30 @@ if (-not $SkipVersionManifests) {
     Write-Host "Skipping extra per-version manifests (-SkipVersionManifests)"
 }
 
+# ---- Optional OptiFine G5 staging for legacy 1.12.2 instance seeding --------
+# OptiFine has no stable direct download (optifine.net uses ad links), so the
+# jar must come from this PC. Drop OptiFine_1.12.2_HD_U_G5.jar into the repo
+# root, an "optifine" subfolder, Downloads or Desktop and it ships inside the
+# package at runtime\optifine. Every new 1.12.2 profile then auto-seeds G5,
+# and existing profiles upgrade E3/F5 -> G5 automatically at launch.
+$optifineG5Name = "OptiFine_1.12.2_HD_U_G5.jar"
+$optifineG5Src = $null
+foreach ($ofDir in @($root, (Join-Path $root "optifine"), "$HOME\Downloads", "$HOME\Desktop")) {
+    if (-not (Test-Path -LiteralPath $ofDir)) { continue }
+    $ofHit = Get-ChildItem -LiteralPath $ofDir -Filter "OptiFine_1.12.2*G5*.jar" -File -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($ofHit) { $optifineG5Src = $ofHit.FullName; break }
+}
+$optifineCacheDir = Join-Path $pkg "runtime\optifine"
+Ensure-Dir $optifineCacheDir
+if ($optifineG5Src) {
+    Copy-Item -LiteralPath $optifineG5Src -Destination (Join-Path $optifineCacheDir $optifineG5Name) -Force
+    Write-Host "Staged OptiFine G5 for legacy 1.12.2 seeding: $optifineG5Src"
+} else {
+    Write-Host "NOTE: OptiFine G5 jar not found on this PC (searched: repo root, optifine\, Downloads, Desktop)."
+    Write-Host "      New 1.12.2 profiles will seed whichever OptiFine exists on the console. To make G5"
+    Write-Host "      the default, download $optifineG5Name from optifine.net into Downloads and rebuild."
+}
+
 if (-not $SkipVersionCompat) {
     $versionModsRoot = Join-Path $pkg "runtime\version-mods"
     Ensure-Dir $versionModsRoot

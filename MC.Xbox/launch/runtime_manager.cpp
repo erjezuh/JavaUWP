@@ -21,7 +21,7 @@
 #include "third_party/miniz/miniz.h"
 
 static std::wstring RuntimeSeedStamp(const std::wstring& packageDir) {
-    return std::wstring(L"seedVersion=6\n") +
+    return std::wstring(L"seedVersion=7\n") +
         L"packageDir=" + packageDir + L"\n" +
         L"exe=" + FileStamp(packageDir + L"\\MC.Xbox.exe") + L"\n" +
         L"manifest=" + FileStamp(packageDir + L"\\AppxManifest.xml") + L"\n" +
@@ -43,6 +43,7 @@ static std::wstring RuntimeSeedStamp(const std::wstring& packageDir) {
         L"secureJarHandlerPatch=" + FileStamp(packageDir + L"\\securejarhandler-uwp-patch.jar") + L"\n" +
         L"patchedFabricLoader=" + FileStamp(packageDir + L"\\runtime\\libraries\\net\\fabricmc\\fabric-loader\\" + a2w(kFabricLoaderVersion) + L"\\fabric-loader-" + a2w(kFabricLoaderVersion) + L".jar") + L"\n" +
         L"bundledMods=" + FileStamp(packageDir + L"\\runtime\\bundled-mods") + L"\n" +
+        L"optifineCache=" + FileStamp(packageDir + L"\\runtime\\optifine") + L"\n" +
         L"logConfig=" + FileStamp(packageDir + L"\\runtime\\log_configs\\client-uwp.xml") + L"\n" +
         L"nativeGlfw=" + FileStamp(packageDir + L"\\natives\\glfw.dll") + L"\n" +
         L"nativeLwjgl=" + FileStamp(packageDir + L"\\natives\\lwjgl.dll") + L"\n" +
@@ -276,6 +277,9 @@ bool SeedLocalRuntime(
     CopyDirectoryContentsIfNeeded(packageDir + L"\\runtime\\bundled-mods", localDir + L"\\game\\mods");
     CopyDirectoryContentsIfNeeded(packageDir + L"\\runtime\\log_configs", localDir + L"\\game\\log_configs");
     CopyFileIfNeeded(packageDir + L"\\runtime\\version_catalog.tsv", localDir + L"\\runtime\\version_catalog.tsv");
+    // Legacy 1.12.2 OptiFine G5 cache (staged by build.ps1 when the jar is
+    // present on the build PC): profile creation/upgrade copies from here.
+    CopyDirectoryContentsIfNeeded(packageDir + L"\\runtime\\optifine", localDir + L"\\runtime\\optifine");
     if (progress) {
         progress(L"Copying Java runtime", L"Preparing JVM files", 0.52f);
     }

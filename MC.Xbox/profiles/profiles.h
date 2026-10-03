@@ -52,12 +52,21 @@ std::wstring CreateProfile(const std::wstring& runtimeRoot, const std::wstring& 
 std::wstring CreateProfile(const std::wstring& runtimeRoot, const std::wstring& name);
 std::wstring CreateAutoProfile(const std::wstring& runtimeRoot, const LaunchTarget& target);
 
-// Legacy 1.12.2: every new profile auto-gets OptiFine by copying the jar that
-// already exists on this console (optifine.net has no stable direct download,
-// so the jar is user-supplied once and shared automatically from then on).
+// Legacy 1.12.2: every new profile auto-gets OptiFine by copying the best jar
+// available on this console (G5 preferred; the build can also stage G5 at
+// runtime\optifine - optifine.net has no stable direct download, so the jar is
+// user-supplied on the PC once and shared automatically from then on).
 enum class OptiFineAutoInstall { NotApplicable, Installed, AlreadyPresent, NotFound };
 OptiFineAutoInstall AutoInstallLegacyOptiFine(const std::wstring& runtimeRoot,
     const std::wstring& profileId, const LaunchTarget& target, std::wstring& detail);
+
+// Launch-time: if a legacy 1.12.2 profile runs a non-G5 OptiFine while a newer
+// revision (normally G5) exists on this console, swap it in. The old jar is
+// renamed to "*.bandit-optifine-old" (kept, never deleted) and duplicates are
+// retired so Forge only ever loads one OptiFine jar.
+enum class OptiFineUpgradeResult { NotApplicable, AlreadyBest, Upgraded, Failed };
+OptiFineUpgradeResult UpgradeLegacyOptiFine(const std::wstring& runtimeRoot,
+    const std::wstring& profileId, const std::wstring& targetId, std::wstring& detail);
 
 bool BackupProfile(const std::wstring& runtimeRoot, const std::wstring& id, std::wstring& backupDir);
 bool RestoreProfileBackup(const std::wstring& runtimeRoot, const std::wstring& backupDir, bool removeBackup, std::wstring& restoredName);

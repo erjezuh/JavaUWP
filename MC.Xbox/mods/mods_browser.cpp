@@ -3148,7 +3148,7 @@ void ShowModsPage(
                         } else if (of == OptiFineAutoInstall::AlreadyPresent) {
                             state.status = L"New profile ready. OptiFine is installed (" + ofDetail + L").";
                         } else if (of == OptiFineAutoInstall::NotFound) {
-                            state.status = L"New profile ready. Put OptiFine_1.12.2_HD_U_G5.jar in its mods folder to enable OptiFine.";
+                            state.status = L"New profile ready. OptiFine G5 is not on this console yet - put OptiFine_1.12.2_HD_U_G5.jar in your PC Downloads folder and rebuild to auto-seed it.";
                         } else {
                             state.status = L"New profile ready. Browse mods to fill it.";
                         }

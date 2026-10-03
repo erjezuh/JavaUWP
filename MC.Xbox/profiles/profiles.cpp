@@ -435,13 +435,71 @@ bool IsLegacyOptiFineJarName(const std::wstring& name) {
         lower.find(L"1.12.2") != std::wstring::npos;
 }
 
-std::wstring FindLegacyOptiFineJar(
+// "optifine_1.12.2_hd_u_g5 (1).jar" -> letter 'g', number 5. Higher is newer.
+struct OptiFineRev { bool valid = false; wchar_t letter = 0; int number = 0; };
+
+OptiFineRev ParseLegacyOptiFineRev(const std::wstring& name) {
+    const std::wstring lower = LowerAsciiCopy(name);
+    OptiFineRev rev;
+    const size_t p = lower.find(L"hd_u_");
+    if (p == std::wstring::npos) return rev;
+    size_t i = p + 5;
+    if (i >= lower.size() || lower[i] < L'a' || lower[i] > L'z') return rev;
+    rev.letter = lower[i];
+    ++i;
+    int num = 0;
+    bool any = false;
+    while (i < lower.size() && lower[i] >= L'0' && lower[i] <= L'9') {
+        num = num * 10 + (lower[i] - L'0');
+        ++i;
+        any = true;
+    }
+    if (!any) return rev;
+    rev.valid = true;
+    rev.number = num;
+    return rev;
+}
+
+// > 0 when a should be preferred over b. G5 beats E3; clean names beat " (1)" copies.
+int CompareLegacyOptiFineJars(const std::wstring& a, const std::wstring& b) {
+    const OptiFineRev ar = ParseLegacyOptiFineRev(a);
+    const OptiFineRev br = ParseLegacyOptiFineRev(b);
+    if (ar.valid != br.valid) return ar.valid ? 1 : -1;
+    if (ar.valid && br.valid) {
+        if (ar.letter != br.letter) return ar.letter > br.letter ? 1 : -1;
+        if (ar.number != br.number) return ar.number > br.number ? 1 : -1;
+    }
+    const bool aClean = a.find(L" (") == std::wstring::npos;
+    const bool bClean = b.find(L" (") == std::wstring::npos;
+    if (aClean != bClean) return aClean ? 1 : -1;
+    if (a.size() != b.size()) return a.size() > b.size() ? -1 : 1;
+    return a.compare(b) > 0 ? -1 : (a.compare(b) < 0 ? 1 : 0);
+}
+
+std::vector<std::wstring> ListOptiFineJarsInDir(const std::wstring& dir) {
+    std::vector<std::wstring> out;
+    WIN32_FIND_DATAW fd{};
+    HANDLE h = FindFirstFileW((dir + L"\\*.jar").c_str(), &fd);
+    if (h == INVALID_HANDLE_VALUE) return out;
+    do {
+        if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) &&
+            IsLegacyOptiFineJarName(fd.cFileName)) {
+            out.push_back(fd.cFileName);
+        }
+    } while (FindNextFileW(h, &fd));
+    FindClose(h);
+    return out;
+}
+
+std::vector<std::wstring> CollectLegacyOptiFineJars(
     const std::wstring& runtimeRoot,
     const std::wstring& targetId,
     const std::wstring& skipModsDir) {
     std::vector<std::wstring> dirs;
-    // Packaged per-target bundle dir, then every other profile's mods folders
-    // (both current and legacy layout), then the old shared mods folder.
+    // Build-staged G5 cache, packaged per-target bundle dir, then every other
+    // profile's mods folders (both current and legacy layout), then the old
+    // shared mods folder.
+    dirs.push_back(runtimeRoot + L"\\runtime\\optifine");
     dirs.push_back(runtimeRoot + L"\\runtime\\version-mods\\" + targetId);
     for (const Profile& p : LoadProfiles(runtimeRoot)) {
         const std::wstring modsDir = ProfileModsDir(runtimeRoot, p.id);
@@ -450,20 +508,44 @@ std::wstring FindLegacyOptiFineJar(
         if (_wcsicmp(legacyDir.c_str(), skipModsDir.c_str()) != 0) dirs.push_back(legacyDir);
     }
     dirs.push_back(runtimeRoot + L"\\mods");
+    std::vector<std::wstring> out;
     for (const std::wstring& dir : dirs) {
-        WIN32_FIND_DATAW fd{};
-        HANDLE h = FindFirstFileW((dir + L"\\*.jar").c_str(), &fd);
-        if (h == INVALID_HANDLE_VALUE) continue;
-        do {
-            if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) &&
-                IsLegacyOptiFineJarName(fd.cFileName)) {
-                FindClose(h);
-                return dir + L"\\" + fd.cFileName;
-            }
-        } while (FindNextFileW(h, &fd));
-        FindClose(h);
+        for (const std::wstring& name : ListOptiFineJarsInDir(dir)) {
+            out.push_back(dir + L"\\" + name);
+        }
     }
-    return {};
+    return out;
+}
+
+std::wstring BestLegacyOptiFinePath(const std::vector<std::wstring>& paths) {
+    std::wstring best;
+    for (const std::wstring& p : paths) {
+        if (best.empty() ||
+            CompareLegacyOptiFineJars(GetFileName(p), GetFileName(best)) > 0) {
+            best = p;
+        }
+    }
+    return best;
+}
+
+std::wstring CanonicalLegacyOptiFineName(const std::wstring& srcName) {
+    const OptiFineRev rev = ParseLegacyOptiFineRev(srcName);
+    if (!rev.valid) return srcName;
+    std::wstring out = L"OptiFine_1.12.2_HD_U_";
+    out += static_cast<wchar_t>(rev.letter - L'a' + L'A');
+    out += std::to_wstring(rev.number);
+    out += L".jar";
+    return out;
+}
+
+std::wstring FindLegacyOptiFineJar(
+    const std::wstring& runtimeRoot,
+    const std::wstring& targetId,
+    const std::wstring& skipModsDir) {
+    // Prefer the newest OptiFine revision available (G5 > F5 > E3), not just
+    // the first jar found: new profiles should always get the best one.
+    return BestLegacyOptiFinePath(
+        CollectLegacyOptiFineJars(runtimeRoot, targetId, skipModsDir));
 }
 
 } // namespace
@@ -494,6 +576,56 @@ OptiFineAutoInstall AutoInstallLegacyOptiFine(
     }
     if (!CopyFileW(src.c_str(), dest.c_str(), TRUE)) return OptiFineAutoInstall::NotFound;
     return OptiFineAutoInstall::Installed;
+}
+
+OptiFineUpgradeResult UpgradeLegacyOptiFine(
+    const std::wstring& runtimeRoot,
+    const std::wstring& profileId,
+    const std::wstring& targetId,
+    std::wstring& detail) {
+    detail.clear();
+    if (targetId.rfind(L"1.12.2", 0) != 0) return OptiFineUpgradeResult::NotApplicable;
+
+    const std::wstring destDir = ProfileModsDir(runtimeRoot, profileId);
+    const std::vector<std::wstring> ownNames = ListOptiFineJarsInDir(destDir);
+    if (ownNames.empty()) return OptiFineUpgradeResult::NotApplicable;
+
+    std::wstring bestOwnName = ownNames.front();
+    for (const std::wstring& n : ownNames) {
+        if (CompareLegacyOptiFineJars(n, bestOwnName) > 0) bestOwnName = n;
+    }
+
+    const std::wstring bestPoolPath = BestLegacyOptiFinePath(
+        CollectLegacyOptiFineJars(runtimeRoot, targetId, destDir));
+    const std::wstring bestPoolName = bestPoolPath.empty() ? L"" : GetFileName(bestPoolPath);
+    const bool poolWins = !bestPoolName.empty() &&
+        CompareLegacyOptiFineJars(bestPoolName, bestOwnName) > 0;
+
+    // Retire older/duplicate OptiFine jars in this profile (rename, never
+    // delete) so Forge only ever loads one OptiFine jar.
+    for (const std::wstring& n : ownNames) {
+        if (!poolWins && n == bestOwnName) continue;
+        const std::wstring retired = destDir + L"\\" + n + L".bandit-optifine-old";
+        DeleteFileW(retired.c_str());
+        if (!MoveFileW((destDir + L"\\" + n).c_str(), retired.c_str())) {
+            detail = L"could not retire " + n + L" (err=" + std::to_wstring(GetLastError()) + L")";
+            return OptiFineUpgradeResult::Failed;
+        }
+    }
+
+    if (!poolWins) {
+        detail = L"already using " + bestOwnName;
+        return OptiFineUpgradeResult::AlreadyBest;
+    }
+
+    const std::wstring destName = CanonicalLegacyOptiFineName(bestPoolName);
+    const std::wstring dest = destDir + L"\\" + destName;
+    if (!CopyFileW(bestPoolPath.c_str(), dest.c_str(), FALSE)) {
+        detail = L"copy of " + destName + L" failed (err=" + std::to_wstring(GetLastError()) + L")";
+        return OptiFineUpgradeResult::Failed;
+    }
+    detail = L"upgraded " + bestOwnName + L" -> " + destName;
+    return OptiFineUpgradeResult::Upgraded;
 }
 
 std::wstring ProfileBackupsRoot(const std::wstring& runtimeRoot) {
