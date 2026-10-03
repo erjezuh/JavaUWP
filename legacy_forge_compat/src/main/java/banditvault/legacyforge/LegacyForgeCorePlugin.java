@@ -15,7 +15,8 @@ public final class LegacyForgeCorePlugin implements IFMLLoadingPlugin {
         return new String[] {
             "banditvault.legacyforge.LegacyZipFsTransformer",
             "banditvault.legacyforge.LegacyWorldRenderGuard",
-            "banditvault.legacyforge.LegacyMultiDrawSanitizer"
+            "banditvault.legacyforge.LegacyMultiDrawSanitizer",
+            "banditvault.legacyforge.LegacyOpenAlRetry"
         };
     }
 

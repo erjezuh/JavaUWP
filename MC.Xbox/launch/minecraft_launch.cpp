@@ -1858,6 +1858,19 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
         SetEnvironmentVariableW(L"ALSOFT_LOGLEVEL", L"3");
         SetEnvironmentVariableW(L"ALSOFT_LOGFILE", alsoftLog.c_str());
         WriteLogF(L"OpenAL: ALSOFT_LOGLEVEL=3 ALSOFT_LOGFILE=%s", alsoftLog.c_str());
+        // Sound kill switches (mesa_env.txt) for MC-9974 experiments: force an
+        // OpenAL backend without rebuilding (MC_ALSOFT_DRIVERS=wasapi|winmm|dsound)
+        // and/or a channel layout (MC_ALSOFT_CHANNELS=stereo).
+        const std::wstring alsoftDrivers = GetEnvVarString(L"MC_ALSOFT_DRIVERS");
+        if (!alsoftDrivers.empty()) {
+            SetEnvironmentVariableW(L"ALSOFT_DRIVERS", alsoftDrivers.c_str());
+            WriteLogF(L"OpenAL: ALSOFT_DRIVERS=%s (from MC_ALSOFT_DRIVERS)", alsoftDrivers.c_str());
+        }
+        const std::wstring alsoftChannels = GetEnvVarString(L"MC_ALSOFT_CHANNELS");
+        if (!alsoftChannels.empty()) {
+            SetEnvironmentVariableW(L"ALSOFT_CHANNELS", alsoftChannels.c_str());
+            WriteLogF(L"OpenAL: ALSOFT_CHANNELS=%s (from MC_ALSOFT_CHANNELS)", alsoftChannels.c_str());
+        }
     }
     // The integrated JVM renders on this process; ask the console scheduler for
     // stable frame pacing on the shared cores.
