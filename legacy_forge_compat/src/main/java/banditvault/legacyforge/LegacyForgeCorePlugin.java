@@ -35,6 +35,8 @@ public final class LegacyForgeCorePlugin implements IFMLLoadingPlugin {
         // First HTTPS request happens well after coremod setup; repair the
         // trust store now so skins and session lookups can authenticate.
         LegacySslFixer.ensure();
+        // Shader packs are read much later; rewrite Mesa-hostile GLSL now.
+        LegacyShaderPackCompat.ensure();
         removeLwjglClassLoaderExclusion();
     }
 
