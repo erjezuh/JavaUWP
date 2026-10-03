@@ -1420,6 +1420,27 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
             WriteLogF(L"Failed to write %s err=%u", splashConfigPath.c_str(), GetLastError());
         }
 
+        // Nothirium (modern chunk renderer) documented partial incompatibility:
+        // VanillaFix 'textureFixes' must be disabled. Flip it in place when the
+        // config exists; a missing key is left alone.
+        const std::wstring vanillaFixCfg = gameDir + L"\\config\\vanillafix.cfg";
+        std::wstring vfText;
+        if (ReadTextFile(vanillaFixCfg, vfText)) {
+            const std::wstring vfKey = L"B:textureFixes=";
+            const size_t vfPos = vfText.find(vfKey);
+            if (vfPos != std::wstring::npos) {
+                size_t valStart = vfPos + vfKey.size();
+                size_t valEnd = valStart;
+                while (valEnd < vfText.size() && vfText[valEnd] != L'\r' && vfText[valEnd] != L'\n') valEnd++;
+                if (vfText.substr(valStart, valEnd - valStart) != L"false") {
+                    vfText.replace(valStart, valEnd - valStart, L"false");
+                    if (WriteTextFile(vanillaFixCfg, vfText)) {
+                        WriteLog(L"VanillaFix textureFixes forced false (Nothirium compatibility)");
+                    }
+                }
+            }
+        }
+
         // Also force the startup resolution at the GameSettings layer:
         // overrideWidth/overrideHeight in options.txt make Minecraft adopt
         // 1920x1080 no matter how its command line parsed. Upsert the two keys
@@ -1537,6 +1558,7 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
                 line.rfind(L"ofLazyChunkLoading:", 0) == 0 ||
                 line.rfind(L"ofSmoothFps:", 0) == 0 ||
                 line.rfind(L"ofFastMath:", 0) == 0 ||
+                line.rfind(L"ofSmartAnimations:", 0) == 0 ||
                 (shaderMode && line.rfind(L"ofFastRender:", 0) == 0)) {
                 continue;
             }
@@ -1553,6 +1575,9 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
         ofRewritten += L"ofLazyChunkLoading:false\r\n";
         ofRewritten += L"ofSmoothFps:true\r\n";
         ofRewritten += L"ofFastMath:true\r\n";
+        // Nothirium's README: Smart Animations must stay off together with the
+        // modern chunk renderer; costs nothing on its own either.
+        ofRewritten += L"ofSmartAnimations:false\r\n";
         if (shaderMode) {
             // OptiFine requires Fast Render OFF with shaders; the launcher
             // used to leave it to the user and it silently came back on.

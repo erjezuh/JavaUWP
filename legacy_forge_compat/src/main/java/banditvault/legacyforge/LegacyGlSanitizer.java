@@ -45,7 +45,25 @@ public final class LegacyGlSanitizer {
     private static final boolean quadsEnabled =
         readEnv("MC_QUADS_AS_TRIANGLES", true);
     private static final boolean unbindEachDraw =
-        readEnv("MC_IBO_UNBIND", false);
+        readEnv("MC_IBO_UNBIND", false) || nothiriumPresent();
+
+    /** Nothirium rewrites chunk rendering and binds its own element buffers. */
+    private static boolean nothiriumPresent() {
+        try {
+            java.io.File mods = new java.io.File(System.getProperty("user.dir", "."), "mods");
+            java.io.File[] files = mods.listFiles();
+            if (files == null) {
+                return false;
+            }
+            for (java.io.File file : files) {
+                if (file.getName().toLowerCase(java.util.Locale.ROOT).contains("nothirium")) {
+                    return true;
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return false;
+    }
 
     static {
         // Build/config fingerprint in mc_launch.log: proves which draw path
