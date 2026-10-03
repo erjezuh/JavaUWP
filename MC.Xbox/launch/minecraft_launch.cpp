@@ -1487,6 +1487,29 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
         const std::wstring optiFinePath = gameDir + L"\\optionsof.txt";
         std::wstring optiFineText;
         ReadTextFile(optiFinePath, optiFineText);
+        // Shader-pack compatibility (documented OptiFine conflict: shader
+        // glitches / black lighting with "Fast Render" and "Render Regions"
+        // enabled - Video Settings > Performance). The selected pack lives in
+        // optionsshaders.txt as shaderPack=<zip|OFF>. When a pack is selected
+        // the forced profile becomes shader-safe: render regions OFF and fast
+        // render OFF. MC_RENDER_REGIONS=1 still forces regions on for tests.
+        std::wstring shaderPackName;
+        {
+            std::wstring shaderOptionsText;
+            if (ReadTextFile(gameDir + L"\\optionsshaders.txt", shaderOptionsText)) {
+                const size_t sp = shaderOptionsText.find(L"shaderPack=");
+                if (sp != std::wstring::npos) {
+                    const size_t valStart = sp + 11;
+                    size_t valEnd = shaderOptionsText.find_first_of(L"\r\n", valStart);
+                    if (valEnd == std::wstring::npos) valEnd = shaderOptionsText.size();
+                    shaderPackName = TrimWhitespace(shaderOptionsText.substr(valStart, valEnd - valStart));
+                }
+            }
+        }
+        const bool shaderMode = !shaderPackName.empty() && shaderPackName != L"OFF";
+        if (shaderMode) {
+            WriteLogF(L"Shader pack '%s' selected: shader-safe OptiFine profile (RenderRegions=false FastRender=false)", shaderPackName.c_str());
+        }
         wchar_t rrEnv[8] = {};
         const DWORD rrLen = GetEnvironmentVariableW(L"MC_RENDER_REGIONS", rrEnv, ARRAYSIZE(rrEnv));
         // Render Regions: the draw merger (16 chunks -> 1 VBO per layer, one
@@ -1496,8 +1519,8 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
         // LegacyGlSanitizer range validator installed at GL14.glMultiDrawArrays.
         // Default ON; MC_RENDER_REGIONS=0 in mesa_env.txt disables it instantly
         // if anything looks wrong (chunks invisible, new crash).
-        std::wstring ofRenderRegionsValue = L"true";
-        std::wstring ofRenderRegionsSource = L"sanitized-default";
+        std::wstring ofRenderRegionsValue = shaderMode ? L"false" : L"true";
+        std::wstring ofRenderRegionsSource = shaderMode ? L"shader-pack-compat" : L"sanitized-default";
         if (rrLen > 0 && rrLen < ARRAYSIZE(rrEnv)) {
             const std::wstring rr(rrEnv);
             if (rr == L"0") { ofRenderRegionsValue = L"false"; ofRenderRegionsSource = L"MC_RENDER_REGIONS=0"; }
@@ -1513,7 +1536,8 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
             if (line.rfind(L"ofRenderRegions:", 0) == 0 ||
                 line.rfind(L"ofLazyChunkLoading:", 0) == 0 ||
                 line.rfind(L"ofSmoothFps:", 0) == 0 ||
-                line.rfind(L"ofFastMath:", 0) == 0) {
+                line.rfind(L"ofFastMath:", 0) == 0 ||
+                (shaderMode && line.rfind(L"ofFastRender:", 0) == 0)) {
                 continue;
             }
             if (!line.empty()) {
@@ -1529,6 +1553,11 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
         ofRewritten += L"ofLazyChunkLoading:false\r\n";
         ofRewritten += L"ofSmoothFps:true\r\n";
         ofRewritten += L"ofFastMath:true\r\n";
+        if (shaderMode) {
+            // OptiFine requires Fast Render OFF with shaders; the launcher
+            // used to leave it to the user and it silently came back on.
+            ofRewritten += L"ofFastRender:false\r\n";
+        }
         if (!hasTrees) ofRewritten += L"ofTrees:0\r\n";
         if (!hasAa) ofRewritten += L"ofAaLevel:0\r\n";
         if (!hasAf) ofRewritten += L"ofAfLevel:0\r\n";
