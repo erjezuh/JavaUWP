@@ -417,6 +417,11 @@ static GLFWcharfun            g_char_cb        = NULL;
 static GLFWcharmodsfun        g_charmods_cb    = NULL;
 static GLFWmousebuttonfun     g_mousebutton_cb = NULL;
 static GLFWcursorposfun       g_cursorpos_cb   = NULL;
+// Set at window creation: the CoreWindow owns the real size, so the sizing
+// callbacks must be re-delivered once the game registered them (vanilla keeps
+// its Window.width/height at the requested 854x480 otherwise, and menus
+// divide cursor coords by that stale extent).
+static bool                   g_metrics_replay_pending = false;
 static GLFWscrollfun          g_scroll_cb      = NULL;
 static GLFWcursorenterfun     g_cursorenter_cb = NULL;
 static GLFWwindowfocusfun     g_focus_cb       = NULL;
@@ -1904,6 +1909,15 @@ static bool UseRawScaledFramebuffer() {
     return !EnvFlagDisabled(L"MC_USE_RAW_SCALED_FRAMEBUFFER");
 }
 
+// Game-facing cursor coordinates must live in GLFW window space (the extent
+// glfwGetWindowSize reports; vanilla MouseHandler divides cursor coords by
+// Window.getScreenWidth() = the window-size callback value). The historical
+// menu=framebuffer mapping desynced 1.20.1 menus whenever the framebuffer was
+// raw-scaled (4K TV). MC_CURSOR_WINDOW_SPACE=0 reverts to menu=framebuffer.
+static bool GameCursorWindowSpace() {
+    return !EnvFlagDisabled(L"MC_CURSOR_WINDOW_SPACE");
+}
+
 static void QueryDisplayScale(double& scaleX, double& scaleY) {
     scaleX = 1.0;
     scaleY = 1.0;
@@ -2002,8 +2016,15 @@ static void RefreshWindowMetrics(bool fireCallbacks) {
 
     g_window_width = newWindowWidth;
     g_window_height = newWindowHeight;
-    g_menu_window_width = g_framebuffer_width;
-    g_menu_window_height = g_framebuffer_height;
+    if (GameCursorWindowSpace()) {
+        // Window space: matches glfwGetWindowSize and vanilla's
+        // Window.getScreenWidth() mouse divisor.
+        g_menu_window_width = newWindowWidth;
+        g_menu_window_height = newWindowHeight;
+    } else {
+        g_menu_window_width = g_framebuffer_width;
+        g_menu_window_height = g_framebuffer_height;
+    }
     g_framebuffer_width = newFramebufferWidth;
     g_framebuffer_height = newFramebufferHeight;
     g_content_scale_x = newContentScaleX;
@@ -2023,6 +2044,22 @@ static void RefreshWindowMetrics(bool fireCallbacks) {
         if (g_fbsize_cb) g_fbsize_cb((GLFWwindow*)&g_fake_window, g_framebuffer_width, g_framebuffer_height);
         if (g_contentscale_cb) g_contentscale_cb((GLFWwindow*)&g_fake_window, g_content_scale_x, g_content_scale_y);
     }
+}
+
+// Re-delivers the current window metrics once, deferred to the event pump so
+// it can never fire inside the game's constructor. Without this, a game that
+// sizes its window at creation (Minecraft asks 854x480) never learns the real
+// CoreWindow size: Window.width/height stay stale and vanilla menu mouse math
+// (cursor * guiScaled / getScreenWidth()) drifts away from the drawn cursor.
+static void ReplayWindowMetricsIfPending() {
+    if (!g_metrics_replay_pending) return;
+    g_metrics_replay_pending = false;
+    if (!GameCursorWindowSpace()) return;
+    if (g_winsize_cb) g_winsize_cb((GLFWwindow*)&g_fake_window, g_window_width, g_window_height);
+    if (g_fbsize_cb) g_fbsize_cb((GLFWwindow*)&g_fake_window, g_framebuffer_width, g_framebuffer_height);
+    if (g_contentscale_cb) g_contentscale_cb((GLFWwindow*)&g_fake_window, g_content_scale_x, g_content_scale_y);
+    ShimLog("Window metrics replayed: %dx%d, framebuffer %dx%d",
+        g_window_width, g_window_height, g_framebuffer_width, g_framebuffer_height);
 }
 
 static bool BuildNativeWindowPropertySet() {
@@ -3139,11 +3176,13 @@ GLFWwindow* glfwCreateWindow(int w, int h, const char* title, GLFWmonitor*, GLFW
     RefreshWindowMetrics(false);
     // Legacy LWJGL 2 passes no size (0x0): the CoreWindow owns the surface.
     // Keep the menu-protocol sizes tracking the real framebuffer like
-    // RefreshWindowMetrics does when the metrics change.
-    if (w <= 0 || h <= 0) {
+    // RefreshWindowMetrics does when the metrics change (old behavior only;
+    // window-space cursor mode keeps menu == window).
+    if ((w <= 0 || h <= 0) && !GameCursorWindowSpace()) {
         g_menu_window_width = g_framebuffer_width;
         g_menu_window_height = g_framebuffer_height;
     }
+    g_metrics_replay_pending = true;
     if (!CreateEglContext()) {
         ShimLog("CreateEglContext FAILED");
         return NULL;
@@ -3370,6 +3409,7 @@ extern "C" __declspec(dllexport) void glfwPollEvents(void) {
     }
     PollCoreWindowPointerPosition();
     RefreshWindowMetrics(true);
+    ReplayWindowMetricsIfPending();
 }
 extern "C" __declspec(dllexport) void glfwWaitEvents(void) {
     if (g_wait_log_count < 8) {

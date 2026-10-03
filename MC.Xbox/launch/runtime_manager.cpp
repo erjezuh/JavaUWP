@@ -21,7 +21,7 @@
 #include "third_party/miniz/miniz.h"
 
 static std::wstring RuntimeSeedStamp(const std::wstring& packageDir) {
-    return std::wstring(L"seedVersion=7\n") +
+    return std::wstring(L"seedVersion=8\n") +
         L"packageDir=" + packageDir + L"\n" +
         L"exe=" + FileStamp(packageDir + L"\\MC.Xbox.exe") + L"\n" +
         L"manifest=" + FileStamp(packageDir + L"\\AppxManifest.xml") + L"\n" +
@@ -44,6 +44,8 @@ static std::wstring RuntimeSeedStamp(const std::wstring& packageDir) {
         L"patchedFabricLoader=" + FileStamp(packageDir + L"\\runtime\\libraries\\net\\fabricmc\\fabric-loader\\" + a2w(kFabricLoaderVersion) + L"\\fabric-loader-" + a2w(kFabricLoaderVersion) + L".jar") + L"\n" +
         L"bundledMods=" + FileStamp(packageDir + L"\\runtime\\bundled-mods") + L"\n" +
         L"optifineCache=" + FileStamp(packageDir + L"\\runtime\\optifine") + L"\n" +
+        L"securityProps=" + FileStamp(packageDir + L"\\xbox_security.properties") + L"\n" +
+        L"securityProps9=" + FileStamp(packageDir + L"\\xbox_security_java9.properties") + L"\n" +
         L"logConfig=" + FileStamp(packageDir + L"\\runtime\\log_configs\\client-uwp.xml") + L"\n" +
         L"nativeGlfw=" + FileStamp(packageDir + L"\\natives\\glfw.dll") + L"\n" +
         L"nativeLwjgl=" + FileStamp(packageDir + L"\\natives\\lwjgl.dll") + L"\n" +
@@ -287,22 +289,24 @@ bool SeedLocalRuntime(
     CopyDirectoryContentsIfNeeded(packageDir + L"\\jre8", localDir + L"\\jre8");
     CopyDirectoryContentsIfNeeded(packageDir + L"\\jre21", localDir + L"\\jre21");
     CopyDirectoryContentsIfNeeded(packageDir + L"\\jre17", localDir + L"\\jre17");
-    std::wstring xboxSecurityProperties;
-    if (ReadTextFile(packageDir + L"\\xbox_security.properties", xboxSecurityProperties)) {
+    // Security overrides: mirror the packaged JRE's own security files (written
+    // at build time with the provider names that JRE's Java version supports).
+    // The old single Java 8 override was written into EVERY JRE; its legacy
+    // JSSE provider name (com.sun.net.ssl.internal.ssl.Provider) does not exist
+    // in JDK 15+ -> "Default SSLContext not available" on every https request
+    // (skins, session keys, authlib).
+    {
         const std::wstring runtimeDirs[] = { L"jre", L"jre8", L"jre21", L"jre17" };
         for (const std::wstring& runtimeDir : runtimeDirs) {
-            const std::wstring localSecurityDir = localDir + L"\\" + runtimeDir +
-                (runtimeDir == L"jre8" ? L"\\lib\\security" : L"\\conf\\security");
+            const std::wstring relSecurity = (runtimeDir == L"jre8")
+                ? L"\\lib\\security"
+                : L"\\conf\\security";
+            const std::wstring pkgSecurityDir = packageDir + L"\\" + runtimeDir + relSecurity;
+            const std::wstring localSecurityDir = localDir + L"\\" + runtimeDir + relSecurity;
             if (GetFileAttributesW(localSecurityDir.c_str()) == INVALID_FILE_ATTRIBUTES) continue;
-            if (!WriteTextFile(localSecurityDir + L"\\java.security", xboxSecurityProperties)) {
-                WriteLogF(L"Failed to rewrite LocalState %s java.security err=%u", runtimeDir.c_str(), GetLastError());
-            }
-            if (!WriteTextFile(localSecurityDir + L"\\xbox.properties", xboxSecurityProperties)) {
-                WriteLogF(L"Failed to write LocalState %s xbox.properties err=%u", runtimeDir.c_str(), GetLastError());
-            }
+            CopyFileAlways(pkgSecurityDir + L"\\java.security", localSecurityDir + L"\\java.security");
+            CopyFileAlways(pkgSecurityDir + L"\\xbox.properties", localSecurityDir + L"\\xbox.properties");
         }
-    } else {
-        WriteLogF(L"Failed to read packaged xbox_security.properties err=%u", GetLastError());
     }
     if (progress) {
         progress(L"Copying native libraries", L"Preparing graphics and input runtime", 0.80f);

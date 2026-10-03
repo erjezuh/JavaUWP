@@ -1155,7 +1155,8 @@ function Copy-PackagedJre {
     param(
         [Parameter(Mandatory = $true)][string]$JavaHome,
         [Parameter(Mandatory = $true)][string]$PackageRelativeDir,
-        [Parameter(Mandatory = $true)][string]$SecurityPropertiesPath
+        [Parameter(Mandatory = $true)][string]$SecurityPropertiesPath,
+        [Parameter(Mandatory = $false)][string]$SecurityPropertiesPath9
     )
 
     $dest = Join-Path $pkg $PackageRelativeDir
@@ -1168,8 +1169,22 @@ function Copy-PackagedJre {
     $securityDir = Join-Path $dest "conf\security"
     if (-not (Test-Path $securityDir)) { $securityDir = Join-Path $dest "lib\security" }
     if (-not (Test-Path $securityDir)) { throw "Java security directory not found under $dest" }
-    Copy-Item $SecurityPropertiesPath (Join-Path $securityDir "xbox.properties") -Force
-    Copy-Item $SecurityPropertiesPath (Join-Path $securityDir "java.security") -Force
+    # The Java 8 override lists provider names that were REMOVED in JDK 15
+    # (com.sun.net.ssl.internal.ssl.Provider, JDK-8240974): on a modern JRE
+    # that kills SunJSSE and every https request ("Default SSLContext not
+    # available" -> broken skins). Pick the override by the JRE's real version.
+    $securityProps = $SecurityPropertiesPath
+    $major = 0
+    $release = Join-Path $JavaHome "release"
+    if (Test-Path $release) {
+        foreach ($line in Get-Content $release) {
+            if ($line -match '^JAVA_VERSION="(\d+)') { $major = [int]$Matches[1]; break }
+        }
+    }
+    if ($major -ge 9 -and $SecurityPropertiesPath9) { $securityProps = $SecurityPropertiesPath9 }
+    Copy-Item $securityProps (Join-Path $securityDir "xbox.properties") -Force
+    Copy-Item $securityProps (Join-Path $securityDir "java.security") -Force
+    Write-Host "Security override for $PackageRelativeDir (Java major $major): $(Split-Path -Leaf $securityProps)"
 }
 
 function Build-JavaBaseUwpFilesystemPatch {
@@ -1741,6 +1756,9 @@ function Build-SecureJarHandlerUwpPatch {
 Write-Host "Copying JRE..."
 $xboxSecurityProperties = Join-Path $root "xbox_security.properties"
 Copy-Item $xboxSecurityProperties (Join-Path $pkg "xbox_security.properties") -Force
+$xboxSecurityProperties9 = Join-Path $root "xbox_security_java9.properties"
+if (-not (Test-Path $xboxSecurityProperties9)) { throw "xbox_security_java9.properties missing at $xboxSecurityProperties9" }
+Copy-Item $xboxSecurityProperties9 (Join-Path $pkg "xbox_security_java9.properties") -Force
 # CurseForge API key is never committed to git (public repo). Set
 # MC_CURSEFORGE_API_KEY in the shell before building and the packaged
 # launcher picks the bundled curseforge_api_key.txt up from its exe dir.
@@ -1751,12 +1769,12 @@ if ($cfApiKey -and $cfApiKey.Trim().Length -gt 0) {
 } else {
     Write-Host "MC_CURSEFORGE_API_KEY not set; CurseForge browsing needs a key file at runtime"
 }
-Copy-PackagedJre -JavaHome $jreSrc -PackageRelativeDir "jre" -SecurityPropertiesPath $xboxSecurityProperties
+Copy-PackagedJre -JavaHome $jreSrc -PackageRelativeDir "jre" -SecurityPropertiesPath $xboxSecurityProperties -SecurityPropertiesPath9 $xboxSecurityProperties9
 # Java 8 ZipFS patch ships whenever the catalog advertises Forge 1.12.2.
 $isLegacyForge122Build = $legacyForge1122Advertised
 try {
     $jre8Src = Resolve-JavaRuntimeHomeExact -MajorVersion 8
-    Copy-PackagedJre -JavaHome $jre8Src -PackageRelativeDir "jre8" -SecurityPropertiesPath $xboxSecurityProperties
+    Copy-PackagedJre -JavaHome $jre8Src -PackageRelativeDir "jre8" -SecurityPropertiesPath $xboxSecurityProperties -SecurityPropertiesPath9 $xboxSecurityProperties9
     Write-Host "Packaged Java 8 runtime for Forge 1.12.2: $jre8Src"
     if ($isLegacyForge122Build) {
         $legacyZipfsPatchOutput = Join-Path $pkg "java-zipfs-realpath-8.jar"
@@ -1772,10 +1790,10 @@ try {
     }
     Write-Warning "Java 8 runtime not packaged: $($_.Exception.Message). Forge 1.12.2 requires a Java 8 runtime."
 }
-Copy-PackagedJre -JavaHome $jre21Src -PackageRelativeDir "jre21" -SecurityPropertiesPath $xboxSecurityProperties
+Copy-PackagedJre -JavaHome $jre21Src -PackageRelativeDir "jre21" -SecurityPropertiesPath $xboxSecurityProperties -SecurityPropertiesPath9 $xboxSecurityProperties9
 try {
     $jre17Src = Resolve-JavaHomeExact -MajorVersion 17
-    Copy-PackagedJre -JavaHome $jre17Src -PackageRelativeDir "jre17" -SecurityPropertiesPath $xboxSecurityProperties
+    Copy-PackagedJre -JavaHome $jre17Src -PackageRelativeDir "jre17" -SecurityPropertiesPath $xboxSecurityProperties -SecurityPropertiesPath9 $xboxSecurityProperties9
     Build-JavaBaseUwpFilesystemPatch -JavaHome $jre17Src -OutputJar (Join-Path $pkg "java-base-uwp-filesystem-17.jar") -WorkName "java_base_uwp_filesystem_patch_17"
     Build-JavaZipfsRealpathPatch -JavaHome $jre17Src -OutputJar (Join-Path $pkg "java-zipfs-realpath-17.jar") -WorkName "java_zipfs_realpath_patch_17"
     Build-JavaDesktopUwpAwtPatch -JavaHome $jre17Src -OutputJar (Join-Path $pkg "java-desktop-uwp-awt-17.jar") -WorkName "java_desktop_uwp_awt_patch_17"
