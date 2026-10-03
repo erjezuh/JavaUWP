@@ -45,6 +45,30 @@ public final class LegacyWorldRenderGuard implements net.minecraft.launchwrapper
     private static final String RENDER_WORLD = "func_78471_a";
     private static final String HUD_OVERLAY = "func_175180_a";
     private static final String NULL_POINTER = "java/lang/NullPointerException";
+    private static final String CLASS_CAST = "java/lang/ClassCastException";
+    private static final String GUARD = "banditvault/legacyforge/LegacyWorldRenderGuard";
+
+    /** Frames skipped so far; render errors can repeat every frame. */
+    private static int skipReports;
+
+    /**
+     * Called from the generated wrappers when a render frame is skipped.
+     * Mods can fail EVERY frame (example: MoBends casting the player renderer
+     * while UBM replaced it -> ClassCastException), so log the first few stack
+     * traces and then only a periodic summary instead of flooding the log.
+     */
+    public static void report(Throwable error) {
+        skipReports++;
+        if (skipReports <= 3) {
+            System.err.println(
+                "[BanditVault] Skipped render frame after a render/mod error #"
+                + skipReports + " (game keeps running; disable the crashing mod):");
+            error.printStackTrace();
+        } else if (skipReports % 200 == 0) {
+            System.err.println(
+                "[BanditVault] " + skipReports + " render frames skipped due to " + error);
+        }
+    }
 
     /** One guarded method: runtime name, wrapper-visible name, rename target. */
     private static final class GuardTarget {
@@ -172,6 +196,10 @@ public final class LegacyWorldRenderGuard implements net.minecraft.launchwrapper
         Label tryEnd = new Label();
         Label handler = new Label();
         mv.visitTryCatchBlock(tryStart, tryEnd, handler, NULL_POINTER);
+        // Mod renderer conflicts (e.g. MoBends vs UBM: "RenderPlayerSwimming
+        // cannot be cast to RenderPlayer") throw ClassCastException from the
+        // same render path; skip the frame instead of killing the session.
+        mv.visitTryCatchBlock(tryStart, tryEnd, handler, CLASS_CAST);
 
         mv.visitLabel(tryStart);
         mv.visitVarInsn(Opcodes.ALOAD, 0);
@@ -222,19 +250,11 @@ public final class LegacyWorldRenderGuard implements net.minecraft.launchwrapper
         mv.visitLabel(tryEnd);
 
         mv.visitLabel(handler);
-        mv.visitFrame(Opcodes.F_SAME1, 0, null, 1, new Object[] {NULL_POINTER});
+        mv.visitFrame(Opcodes.F_SAME1, 0, null, 1, new Object[] {"java/lang/Throwable"});
         mv.visitVarInsn(Opcodes.ASTORE, localIndex);
-        mv.visitFieldInsn(
-            Opcodes.GETSTATIC, "java/lang/System", "err", "Ljava/io/PrintStream;");
-        mv.visitLdcInsn(
-            "[BanditVault] Skipped render frame during load race"
-            + " (player/view entity not spawned yet).");
-        mv.visitMethodInsn(
-            Opcodes.INVOKEVIRTUAL, "java/io/PrintStream", "println",
-            "(Ljava/lang/String;)V", false);
         mv.visitVarInsn(Opcodes.ALOAD, localIndex);
         mv.visitMethodInsn(
-            Opcodes.INVOKEVIRTUAL, NULL_POINTER, "printStackTrace", "()V", false);
+            Opcodes.INVOKESTATIC, GUARD, "report", "(Ljava/lang/Throwable;)V", false);
         emitDefaultReturn(mv, descriptor.charAt(paramsEnd + 1));
         mv.visitMaxs(0, 0); // ClassWriter(COMPUTE_MAXS) fills these in.
     }
