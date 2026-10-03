@@ -605,9 +605,9 @@ OptiFineUpgradeResult UpgradeLegacyOptiFine(
     // delete) so Forge only ever loads one OptiFine jar.
     for (const std::wstring& n : ownNames) {
         if (!poolWins && n == bestOwnName) continue;
-        const std::wstring retired = destDir + L"\\" + n + L".bandit-optifine-old";
-        DeleteFileW(retired.c_str());
-        if (!MoveFileW((destDir + L"\\" + n).c_str(), retired.c_str())) {
+        const std::wstring src = destDir + L"\\" + n;
+        const std::wstring retired = src + L".bandit-optifine-old";
+        if (!MoveFileExW(src.c_str(), retired.c_str(), MOVEFILE_REPLACE_EXISTING)) {
             detail = L"could not retire " + n + L" (err=" + std::to_wstring(GetLastError()) + L")";
             return OptiFineUpgradeResult::Failed;
         }
