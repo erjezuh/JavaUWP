@@ -1938,14 +1938,21 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
     vmOptionStorage.reserve(64);
     // 5120 MB app budget on series s dev mode. Shaders multiply the graphics
     // side (float framebuffers + shadow maps + mipmap chains), so the JVM must
-    // not reserve everything up front: -Xmx4096M is the ceiling for modded
-    // heap spikes (3072M died with "OutOfMemoryError: Java heap space" on big
-    // packs) but -Xms2048M keeps the committed floor low and lets the heap
-    // GROW into the budget only when the game really uses it. Direct keeps its
-    // 1024M on-demand cap (the old 512M cap died at world join with
-    // "Direct buffer memory").
-    vmOptionStorage.push_back("-Xmx4096M");
-    vmOptionStorage.push_back("-Xms2048M");
+    // not reserve everything up front. Legacy 1.12.2 keeps -Xmx4096M: 3072M
+    // died there with "OutOfMemoryError: Java heap space" on big packs. But
+    // 1.20.1+ shares the same budget with Mesa/D3D12 + Embeddium buffers, and
+    // a 4096M ceiling let the heap grow until the PACKAGE crossed the UWP
+    // limit: the OS then failed file ops with "Not enough memory resources"
+    // (Win32 1450) and killed the process with no Java crash report. So modern
+    // MC runs a tighter heap (-Xmx3072M) and a lower floor. jvm_args.txt is
+    // appended AFTER these lines, so a user override there always wins.
+    if (minecraftVersion == L"1.12.2" && loaderId == LoaderId::Forge) {
+        vmOptionStorage.push_back("-Xmx4096M");
+        vmOptionStorage.push_back("-Xms2048M");
+    } else {
+        vmOptionStorage.push_back("-Xmx3072M");
+        vmOptionStorage.push_back("-Xms1024M");
+    }
     vmOptionStorage.push_back("-XX:MaxDirectMemorySize=1024M");
     // Native crashes must land where crash_advice::AnalyzeLastRun looks for
     // them: the game dir. %p is the JVM's pid placeholder.
@@ -1971,7 +1978,9 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
     vmOptionStorage.push_back("-XX:InitiatingHeapOccupancyPercent=15");
     // hsperfdata is mmapped and rewritten every collection, on console storage that is a frame hitch
     vmOptionStorage.push_back("-XX:+PerfDisableSharedMem");
-    WriteLog(L"JVM heap: -Xmx4096M -Xms2048M (grows on demand) -XX:MaxDirectMemorySize=1024M, G1 at 50ms pause target + refproc/string dedup");
+    WriteLog((minecraftVersion == L"1.12.2" && loaderId == LoaderId::Forge)
+        ? L"JVM heap: legacy 1.12.2 -Xmx4096M -Xms2048M (grows on demand) -XX:MaxDirectMemorySize=1024M, G1 at 50ms pause target + refproc/string dedup"
+        : L"JVM heap: modern -Xmx3072M -Xms1024M (grows on demand) -XX:MaxDirectMemorySize=1024M, G1 at 50ms pause target + refproc/string dedup");
     const bool legacyJava8 = packagedJreRelativeDir == L"jre8";
     if (!legacyJava8) {
         vmOptionStorage.push_back("--enable-native-access=ALL-UNNAMED");
