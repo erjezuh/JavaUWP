@@ -1121,15 +1121,37 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
     // OpenAL64.dll/32.dll mirror the variant picked with MC_OPENAL_VARIANT
     // (default: openal-soft; "lwjgl3": the openal-soft modern Minecraft uses).
     if (legacyForge122Natives) {
-        const std::wstring variant = GetEnvVarString(L"MC_OPENAL_VARIANT") == L"lwjgl3"
-            ? L"openal-lwjgl3.dll" : L"openal-soft.dll";
-        const std::wstring variantPath = lwjglNativeDir + L"\\" + variant;
-        if (GetFileAttributesW(variantPath.c_str()) != INVALID_FILE_ATTRIBUTES) {
-            CopyFileW(variantPath.c_str(), (lwjglNativeDir + L"\\OpenAL64.dll").c_str(), FALSE);
-            CopyFileW(variantPath.c_str(), (lwjglNativeDir + L"\\OpenAL32.dll").c_str(), FALSE);
-            WriteLogF(L"OpenAL variant selected: %s -> OpenAL64.dll + OpenAL32.dll", variant.c_str());
+        const bool wantLwjgl3 = GetEnvVarString(L"MC_OPENAL_VARIANT") == L"lwjgl3";
+        const std::wstring variant = wantLwjgl3 ? L"openal-lwjgl3.dll" : L"openal-soft.dll";
+        // The variant binaries ship in the PACKAGE natives dir (build.ps1).
+        // The writable runtime natives dir may not have them, and worse: it
+        // can hold a stale OpenAL64.dll from earlier experiments (the LWJGL3
+        // binary crashes inside AL.create() at the Mojang screen). Always
+        // overwrite from the package so the game can never boot poisoned.
+        std::wstring src;
+        for (const std::wstring& dir : { packagedNativesDir, lwjglNativeDir }) {
+            const std::wstring p = dir + L"\\" + variant;
+            if (GetFileAttributesW(p.c_str()) != INVALID_FILE_ATTRIBUTES) {
+                src = p;
+                break;
+            }
+        }
+        if (src.empty() && !wantLwjgl3) {
+            const std::wstring pristine = packagedNativesDir + L"\\OpenAL64.dll";
+            if (GetFileAttributesW(pristine.c_str()) != INVALID_FILE_ATTRIBUTES) {
+                src = pristine;
+            }
+        }
+        if (!src.empty()) {
+            const BOOL ok64 = CopyFileW(src.c_str(), (lwjglNativeDir + L"\\OpenAL64.dll").c_str(), FALSE);
+            const BOOL ok32 = CopyFileW(src.c_str(), (lwjglNativeDir + L"\\OpenAL32.dll").c_str(), FALSE);
+            WriteLogF(L"OpenAL variant selected: %s -> OpenAL64.dll ok=%d OpenAL32.dll ok=%d (src=%s)",
+                variant.c_str(), ok64 ? 1 : 0, ok32 ? 1 : 0, src.c_str());
+            if (!ok64) {
+                WriteLogF(L"WARNING: could not overwrite OpenAL64.dll (locked?). Delete it in %s if the game dies at the Mojang screen.", lwjglNativeDir.c_str());
+            }
         } else {
-            WriteLogF(L"OpenAL variant %s not found in %s; keeping the current OpenAL64.dll", variant.c_str(), lwjglNativeDir.c_str());
+            WriteLogF(L"OpenAL variant %s not found in package or natives dir; keeping the current OpenAL64.dll", variant.c_str());
         }
     }
     const std::wstring lwjglGlfwDll = lwjglNativeDir + L"\\glfw.dll";
