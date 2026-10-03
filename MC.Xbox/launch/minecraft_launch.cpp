@@ -1911,14 +1911,16 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
 
     std::vector<std::string> vmOptionStorage;
     vmOptionStorage.reserve(64);
-    // 5120 MB app budget on series s dev mode. Heap+direct was 3.5G total
-    // (2560M/1024M) and the heap ran dry on modded packs ("OutOfMemoryError:
-    // Java heap space") while the direct cap sat half used, so the split grows
-    // to 4G total (3072M/1024M): still inside the budget with JVM native and
-    // launcher overhead, chunk render setup keeps its 1024M direct room
-    // (the old 512M cap died at world join with "Direct buffer memory").
-    vmOptionStorage.push_back("-Xmx3072M");
-    vmOptionStorage.push_back("-Xms3072M");
+    // 5120 MB app budget on series s dev mode. Shaders multiply the graphics
+    // side (float framebuffers + shadow maps + mipmap chains), so the JVM must
+    // not reserve everything up front: -Xmx4096M is the ceiling for modded
+    // heap spikes (3072M died with "OutOfMemoryError: Java heap space" on big
+    // packs) but -Xms2048M keeps the committed floor low and lets the heap
+    // GROW into the budget only when the game really uses it. Direct keeps its
+    // 1024M on-demand cap (the old 512M cap died at world join with
+    // "Direct buffer memory").
+    vmOptionStorage.push_back("-Xmx4096M");
+    vmOptionStorage.push_back("-Xms2048M");
     vmOptionStorage.push_back("-XX:MaxDirectMemorySize=1024M");
     // Native crashes must land where crash_advice::AnalyzeLastRun looks for
     // them: the game dir. %p is the JVM's pid placeholder.
@@ -1933,9 +1935,18 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
     vmOptionStorage.push_back("-XX:G1NewSizePercent=20");
     vmOptionStorage.push_back("-XX:G1ReservePercent=20");
     vmOptionStorage.push_back("-XX:G1HeapRegionSize=32M");
+    // Modpack-friendly G1 extras (Aikar family, Java 8): parallel reference
+    // processing (mods churn weak/soft refs), string dedup (configs/lang data),
+    // and earlier mixed collections so a spike never falls through to a full
+    // GC pause mid-game.
+    vmOptionStorage.push_back("-XX:+ParallelRefProcEnabled");
+    vmOptionStorage.push_back("-XX:+UseStringDeduplication");
+    vmOptionStorage.push_back("-XX:G1HeapWastePercent=5");
+    vmOptionStorage.push_back("-XX:G1MixedGCCountTarget=4");
+    vmOptionStorage.push_back("-XX:InitiatingHeapOccupancyPercent=15");
     // hsperfdata is mmapped and rewritten every collection, on console storage that is a frame hitch
     vmOptionStorage.push_back("-XX:+PerfDisableSharedMem");
-    WriteLog(L"JVM heap: -Xmx3072M -Xms3072M -XX:MaxDirectMemorySize=1024M, G1 at 50ms pause target");
+    WriteLog(L"JVM heap: -Xmx4096M -Xms2048M (grows on demand) -XX:MaxDirectMemorySize=1024M, G1 at 50ms pause target + refproc/string dedup");
     const bool legacyJava8 = packagedJreRelativeDir == L"jre8";
     if (!legacyJava8) {
         vmOptionStorage.push_back("--enable-native-access=ALL-UNNAMED");
@@ -2140,7 +2151,6 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
     }
     vmOptionStorage.push_back("-Duser.dir=" + w2a(fwd(gameDir)));
     vmOptionStorage.push_back("-Dlog4j.configurationFile=" + w2a(FileUriFromPath(logConfigPath)));
-    vmOptionStorage.push_back("-XX:ErrorFile=" + w2a(fwd(gameDir + L"\\hs_err_pid%p.log")));
 
     // appended last on purpose, hotspot takes the last occurrence so this overrides the built ins
     const std::wstring jvmArgsPath = exeDir + L"\\jvm_args.txt";
