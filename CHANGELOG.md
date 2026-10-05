@@ -2,6 +2,12 @@
 
 Notable changes to Bandit Launcher. Nightly packages are numbered by build revision rather than by release, so entries here are dated.
 
+## 2026-10-05
+
+### Fixed
+
+**NeoForge could never finish downloading on the native (mouse) launcher.** Every NeoForge target stopped one file short of a complete download (4091 of 4092 files on the report that led to this fix) and then looped on `Could not prepare Minecraft files. Retrying in 10 seconds`, and repairing or restarting changed nothing. The last file was NeoForge's guava dependency, which has by far the longest library path in any manifest at 153 characters. The native package identity adds about 18 characters of `LocalState` path that the relay package does not have, and the downloader's temporary `.download` suffix pushed that one path past the 260 character Win32 limit, so the file could never be written and the retry could never succeed. The launcher now calls file APIs with the extended length form of the path (`\\?\`), which lifts the limit, while the JVM, mods, and logs keep the plain path. Vanilla, Fabric, and Forge were never affected because none of their libraries come close to the limit, which is why only NeoForge was reported broken.
+
 ## 2026-09-04
 
 ### Security

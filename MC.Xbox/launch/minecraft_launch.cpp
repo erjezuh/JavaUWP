@@ -518,8 +518,11 @@ void CollectManifestLibraryJars(
         if (rel.find(L"-installer.jar") != std::wstring::npos) continue;
         const std::wstring libraryRelative = e.relativePath.substr(wcslen(L"game\\libraries\\"));
         const std::wstring packagedOverride = packageDir + L"\\runtime\\libraries\\" + libraryRelative;
+        // the packaged copy is probed with the extended-length form (packaged
+        // paths plus the longest library are close to MAX_PATH) but the JVM gets
+        // the plain path
         const std::wstring abs =
-            GetFileAttributesW(packagedOverride.c_str()) != INVALID_FILE_ATTRIBUTES
+            GetFileAttributesW(ExtendedLengthPath(packagedOverride).c_str()) != INVALID_FILE_ATTRIBUTES
                 ? packagedOverride
                 : JoinRuntimeRelativePath(runtimeRoot, e.relativePath);
         if (!abs.empty()) jars.push_back(abs);

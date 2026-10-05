@@ -7,6 +7,8 @@
 #include <string>
 #include <vector>
 
+#include "long_path.h"
+
 extern std::wstring g_logDir;
 
 std::wstring GetExecutableDir();

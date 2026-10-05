@@ -88,6 +88,7 @@ flowchart TD
 - Verifies SHA1 hashes under `LocalState`.
 - Downloads missing or stale official libraries, client metadata, and assets.
 - Prepares native library folders for the selected target.
+- Calls Win32 file APIs with extended length (`\\?\`) paths, because a `LocalState` library path plus the downloader's staging suffix can pass the 260 character limit. See `common/long_path.h`.
 
 When version JSON needs loader specific fields, `ResolveVersionInfo()` delegates to `LoaderFinalizeVersionInfo()` in `launch/loaders/loader.cpp`.
 
