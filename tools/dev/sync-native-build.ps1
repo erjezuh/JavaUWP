@@ -14,8 +14,9 @@
 #   -SkipBuild                sync and patch only, no compile
 
 param(
-    [string[]]$McVersions = @('1.21.1', '1.21.11'),
+    [string[]]$McVersions = @(),
     [switch]$BuildEverything,
+    [string]$AppxVersion = '1.0.0.200',
     [switch]$SkipBuild
 )
 
@@ -96,8 +97,8 @@ if ($changed) {
 }
 
 Write-Host '== Filtrando el catalogo de versiones' -ForegroundColor Cyan
-if ($BuildEverything) {
-    Write-Host '   -BuildEverything: se compila el catalogo entero' -ForegroundColor DarkGray
+if ($BuildEverything -or $McVersions.Count -eq 0) {
+    Write-Host '   catalogo completo, igual que el paquete oficial' -ForegroundColor DarkGray
 } else {
     $catalogPath = (Resolve-Path '.\config\versions.tsv').Path
     $lines = @([System.IO.File]::ReadAllText($catalogPath) -split "`n")
@@ -146,14 +147,37 @@ if ($SkipBuild) {
 }
 
 Write-Host '== Compilando (esto tarda; lo ya compilado se salta)' -ForegroundColor Cyan
-& powershell -NoProfile -ExecutionPolicy Bypass -File '.\build.ps1'
+# La version importa: la consola no reemplaza un paquete instalado por otro de version
+# igual o mayor. Un build local sin .local\app_build.txt pondria 1.0.0.0 y no se
+# instalaria encima del nightly, asi que se fija una version superior a proposito.
+Write-Host "   version del paquete: $AppxVersion" -ForegroundColor DarkGray
+& powershell -NoProfile -ExecutionPolicy Bypass -File '.\build.ps1' -AppxVersion $AppxVersion
 if ($LASTEXITCODE) { throw "El build fallo con codigo $LASTEXITCODE. Copia el error de arriba y mandamelo." }
 
 $appx = Get-ChildItem '.\output' -Filter '*.appx' -ErrorAction SilentlyContinue |
     Sort-Object LastWriteTime -Descending | Select-Object -First 1
 Write-Host ''
-if ($appx) {
-    Write-Host ('APPX lista: ' + $appx.FullName) -ForegroundColor Green
-} else {
-    Write-Host 'El build termino pero no encuentro ninguna APPX en output\.' -ForegroundColor Yellow
+if (-not $appx) {
+    throw 'El build termino pero no encuentro ninguna APPX en output\.'
+}
+
+# el certificado con el que se firmo, para poder confiarlo en el PC o en la consola
+$cerPath = [System.IO.Path]::ChangeExtension($appx.FullName, '.cer')
+try {
+    $signature = Get-AuthenticodeSignature -FilePath $appx.FullName
+    if ($signature.SignerCertificate) {
+        Export-Certificate -Cert $signature.SignerCertificate -FilePath $cerPath -Force | Out-Null
+    }
+} catch {
+    Write-Warning "No pude exportar el certificado: $($_.Exception.Message)"
+}
+
+Write-Host ('APPX lista:        ' + $appx.FullName) -ForegroundColor Green
+if (Test-Path $cerPath) {
+    Write-Host ('Certificado:       ' + $cerPath) -ForegroundColor Green
+    Write-Host ''
+    Write-Host 'Para instalarla en el PC, confia primero en el certificado:' -ForegroundColor Gray
+    Write-Host ('  Import-Certificate -FilePath "' + $cerPath + '" -CertStoreLocation Cert:\LocalMachine\TrustedPeople') -ForegroundColor Gray
+    Write-Host 'En la consola, instala la APPX desde el Device Portal; si la instala pero no' -ForegroundColor Gray
+    Write-Host 'abre, confia tambien en ese certificado en la consola.' -ForegroundColor Gray
 }

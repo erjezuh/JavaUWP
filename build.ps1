@@ -1335,6 +1335,22 @@ if (-not $signingSucceeded) {
 }
 if (-not (Test-Path $appx)) { throw "Appx package was not created" }
 
+# A self signed package cannot be launched until its certificate is trusted on the
+# console, so export the public certificate next to the package, the same way the
+# nightly workflow does.
+try {
+    $appxSignature = Get-AuthenticodeSignature -FilePath $appx
+    if ($appxSignature.SignerCertificate) {
+        $cerPath = [System.IO.Path]::ChangeExtension($appx, '.cer')
+        Export-Certificate -Cert $appxSignature.SignerCertificate -FilePath $cerPath -Force | Out-Null
+        Write-Host "Signing certificate: $cerPath"
+    } else {
+        Write-Warning "The signed package has no signer certificate, so no .cer was exported."
+    }
+} catch {
+    Write-Warning "Could not export the signing certificate: $($_.Exception.Message)"
+}
+
 if (-not $KeepStaging) {
     Remove-Item -Recurse -Force $pkg -ErrorAction SilentlyContinue
     Write-Host "Removed staging package directory"
