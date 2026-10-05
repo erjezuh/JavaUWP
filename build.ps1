@@ -1236,24 +1236,49 @@ foreach ($name in $appxAssetNames) {
 Write-Host "=== Packaging ==="
 $cert = Join-Path $certDir $ProjectConfig.CertificateFileName
 $certName = if ($env:APPX_CERT_SUBJECT) { $env:APPX_CERT_SUBJECT } else { $ProjectConfig.DefaultCertificateSubject }
+$certPassword = ConvertTo-SecureString $ProjectConfig.CertificatePassword -AsPlainText -Force
 
-if (-not (Test-Path $cert)) {
-    $c = New-SelfSignedCertificate -Type CodeSigningCert -Subject $certName `
-        -KeyUsage DigitalSignature -CertStoreLocation "Cert:\CurrentUser\My" `
-        -TextExtension @("2.5.29.37={text}1.3.6.1.5.5.7.3.3","2.5.29.19={text}")
-    Export-PfxCertificate -Cert $c -FilePath $cert `
-        -Password (ConvertTo-SecureString $ProjectConfig.CertificatePassword -AsPlainText -Force) | Out-Null
-    Write-Host "Generated cert"
+# The dev certificate is exported so repeated builds sign with the same certificate and
+# keep the package family name, and therefore LocalState, stable. Reuse the exported file
+# first: looking the certificate up again by subject in the store fails on non English
+# Windows, because the enhanced key usage list is named in the system language there.
+$signingCertCandidates = @()
+if (Test-Path $cert) {
+    try {
+        $reusedCert = Import-PfxCertificate -FilePath $cert -CertStoreLocation "Cert:\CurrentUser\My" `
+            -Password $certPassword -ErrorAction Stop
+        $normalizedCertName = ($certName -replace '\s', '').ToLowerInvariant()
+        if ($reusedCert -and (($reusedCert.Subject -replace '\s', '').ToLowerInvariant()) -eq $normalizedCertName) {
+            $signingCertCandidates = @($reusedCert)
+        } elseif ($reusedCert) {
+            Write-Host "Ignoring $cert: its subject '$($reusedCert.Subject)' does not match '$certName'"
+        }
+    } catch {
+        Write-Host "Could not reuse $cert ($($_.Exception.Message)); a new certificate will be created"
+    }
 }
 
-$allSigningCertCandidates = Get-ChildItem Cert:\CurrentUser\My |
-    Where-Object {
-        $_.HasPrivateKey -and
-        ($_.EnhancedKeyUsageList | Where-Object { $_.FriendlyName -eq 'Code Signing' })
-    }
-$exactSigningCertCandidates = $allSigningCertCandidates | Where-Object { $_.Subject -eq $certName } | Sort-Object NotBefore -Descending
-$banditVaultSigningCertCandidates = $allSigningCertCandidates | Where-Object { $_.Subject -like '*BanditVault*' -and $_.Subject -ne $certName } | Sort-Object NotBefore -Descending
-$signingCertCandidates = @($exactSigningCertCandidates) + @($banditVaultSigningCertCandidates)
+if (-not $signingCertCandidates) {
+    $createdCert = New-SelfSignedCertificate -Type CodeSigningCert -Subject $certName `
+        -KeyUsage DigitalSignature -CertStoreLocation "Cert:\CurrentUser\My" `
+        -TextExtension @("2.5.29.37={text}1.3.6.1.5.5.7.3.3","2.5.29.19={text}")
+    Export-PfxCertificate -Cert $createdCert -FilePath $cert -Password $certPassword | Out-Null
+    Write-Host "Generated cert"
+    $signingCertCandidates = @($createdCert)
+}
+
+if (-not $signingCertCandidates) {
+    # last resort: a code signing certificate already in the store for this publisher. The
+    # usage is matched by object id, not by its display name, which is localized.
+    $allSigningCertCandidates = Get-ChildItem Cert:\CurrentUser\My |
+        Where-Object {
+            $_.HasPrivateKey -and
+            ($_.EnhancedKeyUsageList | Where-Object { $_.ObjectId.Value -eq '1.3.6.1.5.5.7.3.3' })
+        }
+    $exactSigningCertCandidates = $allSigningCertCandidates | Where-Object { $_.Subject -eq $certName } | Sort-Object NotBefore -Descending
+    $banditVaultSigningCertCandidates = $allSigningCertCandidates | Where-Object { $_.Subject -like '*BanditVault*' -and $_.Subject -ne $certName } | Sort-Object NotBefore -Descending
+    $signingCertCandidates = @($exactSigningCertCandidates) + @($banditVaultSigningCertCandidates)
+}
 if (-not $signingCertCandidates) {
     throw "No signing certificate for '$certName' in Cert:\CurrentUser\My. Restore the BanditVault certificate, or set APPX_CERT_SUBJECT to the subject you want to sign with. Signing with an unrelated certificate changes the package family name and loses LocalState."
 }
