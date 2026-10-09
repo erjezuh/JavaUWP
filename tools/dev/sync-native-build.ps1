@@ -1,22 +1,24 @@
 # sync-native-build.ps1
 #
-# Builds the native (mouse) package from upstream/main-native with the local fixes
-# that are still waiting to be merged. Lives in the repo on purpose: the launcher
-# for it fetches this very file, so it never has to be copied around by hand.
+# Builds the native (mouse) package from upstream/main-native, optionally with the
+# local fixes that are not merged yet. Lives in the repo on purpose: the bootstrap
+# below fetches this very file, so it never has to be copied around by hand.
 #
-# Usual one line, from the folder that has build.ps1:
+# One line, from the folder that has build.ps1:
 #
 #   powershell -NoProfile -ExecutionPolicy Bypass -Command "git fetch --force https://github.com/erjezuh/JavaUWP.git 'refs/heads/arena/01a10d2a-javauwp:refs/remotes/sync/fix'; git show refs/remotes/sync/fix:tools/dev/sync-native-build.ps1 | Set-Content .\sync-native-build.ps1 -Encoding UTF8; & .\sync-native-build.ps1"
 #
-# Options, when run directly:
-#   -McVersions 1.21.1        only build the NeoForge target of that Minecraft version
-#   -BuildEverything          build the whole catalog, like a normal release
-#   -SkipBuild                sync and patch only, no compile
+# Options:
+#   -NoFixes          build upstream main-native exactly as it is, without any local
+#                     change. Use this to tell a local fix from a local build problem.
+#   -McVersions 1.21.1  trim the catalog to the NeoForge targets of those versions
+#   -AppxVersion ...    package version (default 1.0.0.200, above the published nightly)
+#   -SkipBuild        sync and patch only, no compile
 
 param(
     [string[]]$McVersions = @(),
-    [switch]$BuildEverything,
     [string]$AppxVersion = '1.0.0.200',
+    [switch]$NoFixes,
     [switch]$SkipBuild
 )
 
@@ -31,64 +33,86 @@ if (-not (Test-Path '.\build.ps1') -or -not (Test-Path '.\MC.Xbox\App.cpp')) {
     throw 'Esta carpeta no es la del repositorio. Abre la carpeta JavaUWP (la que tiene build.ps1) y ejecutalo ahi.'
 }
 
+if ($NoFixes) {
+    Write-Host '== -NoFixes: se compila el codigo original de main-native, sin ningun cambio local' -ForegroundColor Yellow
+}
+
 Write-Host '== Sincronizando con GitHub' -ForegroundColor Cyan
 & git fetch --force $upstreamUrl "refs/heads/main-native:$nativeRef"
 if ($LASTEXITCODE) { throw 'No pude descargar main-native.' }
 & git fetch --force $forkUrl "refs/heads/arena/01a10d2a-javauwp:$fixRef"
 if ($LASTEXITCODE) { throw 'No pude descargar la rama de los arreglos.' }
 
-Write-Host '== Preparando la rama native con los arreglos' -ForegroundColor Cyan
+Write-Host '== Preparando la rama native' -ForegroundColor Cyan
 & git checkout --force -B arreglo-neoforge $nativeRef
 if ($LASTEXITCODE) { throw 'No pude preparar la rama de compilacion.' }
 
-# MC.Xbox\common y MC.Xbox\launch son identicos entre main y main-native, asi que los
-# archivos de los arreglos se pueden superponer sin conflictos
-& git checkout $fixRef -- MC.Xbox/common MC.Xbox/launch CHANGELOG.md
-if ($LASTEXITCODE) { throw 'No pude traer los archivos de los arreglos.' }
+if (-not $NoFixes) {
+    Write-Host '== Superponiendo los arreglos' -ForegroundColor Cyan
+    # MC.Xbox\common y MC.Xbox\launch son identicos entre main y main-native, asi que los
+    # archivos de los arreglos se pueden superponer sin conflictos
+    & git checkout $fixRef -- MC.Xbox/common MC.Xbox/launch CHANGELOG.md
+    if ($LASTEXITCODE) { throw 'No pude traer los archivos de los arreglos.' }
+}
 
 Write-Host '== Parcheando build.ps1' -ForegroundColor Cyan
 $p = (Resolve-Path '.\build.ps1').Path
 $t = [System.IO.File]::ReadAllText($p)
 $changed = $false
 
-# 1) compilar el helper de rutas largas
-if ($t -notmatch 'common\\long_path\.cpp') {
-    $t = $t -replace '(common\\launcher_common\.cpp)', '$1 common\long_path.cpp'
-    $changed = $true
-    Write-Host '   long_path.cpp anyadido a las fuentes' -ForegroundColor Green
+if ($NoFixes) {
+    Write-Host '   -NoFixes: build.ps1 se queda como esta' -ForegroundColor DarkGray
 } else {
-    Write-Host '   long_path.cpp ya estaba' -ForegroundColor DarkGray
+    # 1) compilar el helper de rutas largas
+    if ($t -notmatch 'common\\long_path\.cpp') {
+        $t = $t -replace '(common\\launcher_common\.cpp)', '$1 common\long_path.cpp'
+        $changed = $true
+        Write-Host '   long_path.cpp anyadido a las fuentes' -ForegroundColor Green
+    } else {
+        Write-Host '   long_path.cpp ya estaba' -ForegroundColor DarkGray
+    }
+
+    # 2) el uso extendido de clave "Code Signing" tiene nombre traducido en Windows no ingles,
+    #    asi que el certificado recien creado no se encontraba y el build moria en Packaging
+    $oldEku = "`$_.EnhancedKeyUsageList | Where-Object { `$_.FriendlyName -eq 'Code Signing' }"
+    $newEku = "`$_.EnhancedKeyUsageList | Where-Object { `$_.ObjectId.Value -eq '1.3.6.1.5.5.7.3.3' }"
+    if ($t.Contains($oldEku)) {
+        $t = $t.Replace($oldEku, $newEku)
+        $changed = $true
+        Write-Host '   filtro del certificado por OID en vez de por nombre traducido' -ForegroundColor Green
+    } else {
+        Write-Host '   el filtro del certificado ya era correcto' -ForegroundColor DarkGray
+    }
 }
 
-# 2) el uso extendido de clave "Code Signing" tiene nombre traducido en Windows no ingles,
-#    asi que el certificado recien creado no se encontraba y el build moria en Packaging
-$oldEku = "`$_.EnhancedKeyUsageList | Where-Object { `$_.FriendlyName -eq 'Code Signing' }"
-$newEku = "`$_.EnhancedKeyUsageList | Where-Object { `$_.ObjectId.Value -eq '1.3.6.1.5.5.7.3.3' }"
-if ($t.Contains($oldEku)) {
-    $t = $t.Replace($oldEku, $newEku)
-    $changed = $true
-    Write-Host '   filtro del certificado por OID en vez de por nombre traducido' -ForegroundColor Green
-} else {
-    Write-Host '   el filtro del certificado ya era correcto' -ForegroundColor DarkGray
+# 3) exportar el certificado junto a la APPX (lo hace el nightly y hace falta para confiar
+#    en el paquete). Se aplica siempre, tambien con -NoFixes, porque no cambia el codigo.
+$oldAnchor = 'if (-not $KeepStaging) {'
+$cerBlock = @'
+# A self signed package cannot be launched until its certificate is trusted on the
+# console, so export the public certificate next to the package, the same way the
+# nightly workflow does.
+try {
+    $appxSignature = Get-AuthenticodeSignature -FilePath $appx
+    if ($appxSignature.SignerCertificate) {
+        $cerPath = [System.IO.Path]::ChangeExtension($appx, '.cer')
+        Export-Certificate -Cert $appxSignature.SignerCertificate -FilePath $cerPath -Force | Out-Null
+        Write-Host "Signing certificate: $cerPath"
+    }
+} catch {
+    Write-Warning "Could not export the signing certificate: $($_.Exception.Message)"
 }
 
-# 3) red de seguridad: si el certificado esperado no esta en el almacen, usar el pfx del repo
-$oldPick = '$signingCertCandidates = @($exactSigningCertCandidates)'
-$pickCount = ([regex]::Matches($t, [regex]::Escape($oldPick))).Count
-if ($pickCount -eq 1 -and -not $t.Contains('Import-PfxCertificate -FilePath $cert')) {
-    $newPick = @'
-$signingCertCandidates = @($exactSigningCertCandidates)
-if (-not $signingCertCandidates -and (Test-Path $cert)) {
-    $signingCertCandidates = @(Import-PfxCertificate -FilePath $cert -CertStoreLocation "Cert:\CurrentUser\My" -Password (ConvertTo-SecureString $ProjectConfig.CertificatePassword -AsPlainText -Force))
-}
+if (-not $KeepStaging) {
 '@
-    $t = $t.Replace($oldPick, $newPick)
+if ($t.Contains($oldAnchor) -and -not $t.Contains('Get-AuthenticodeSignature -FilePath $appx')) {
+    $t = $t.Replace($oldAnchor, $cerBlock, 1)
     $changed = $true
-    Write-Host '   red de seguridad: se reutiliza el pfx de staging\certs' -ForegroundColor Green
-} elseif ($t.Contains('Import-PfxCertificate -FilePath $cert')) {
-    Write-Host '   el pfx ya se reutilizaba' -ForegroundColor DarkGray
+    Write-Host '   exporta el .cer junto a la APPX' -ForegroundColor Green
+} elseif ($t.Contains('Get-AuthenticodeSignature -FilePath $appx')) {
+    Write-Host '   el .cer ya se exportaba' -ForegroundColor DarkGray
 } else {
-    Write-Host "   aviso: no encontre la linea del certificado ($pickCount coincidencias); el build puede pararse en Packaging" -ForegroundColor Yellow
+    Write-Host '   aviso: no encontre donde insertar la exportacion del .cer' -ForegroundColor Yellow
 }
 
 if ($changed) {
@@ -97,7 +121,7 @@ if ($changed) {
 }
 
 Write-Host '== Filtrando el catalogo de versiones' -ForegroundColor Cyan
-if ($BuildEverything -or $McVersions.Count -eq 0) {
+if ($McVersions.Count -eq 0) {
     Write-Host '   catalogo completo, igual que el paquete oficial' -ForegroundColor DarkGray
 } else {
     $catalogPath = (Resolve-Path '.\config\versions.tsv').Path
@@ -156,28 +180,47 @@ if ($LASTEXITCODE) { throw "El build fallo con codigo $LASTEXITCODE. Copia el er
 
 $appx = Get-ChildItem '.\output' -Filter '*.appx' -ErrorAction SilentlyContinue |
     Sort-Object LastWriteTime -Descending | Select-Object -First 1
+if (-not $appx) { throw 'El build termino pero no encuentro ninguna APPX en output\.' }
+
 Write-Host ''
-if (-not $appx) {
-    throw 'El build termino pero no encuentro ninguna APPX en output\.'
-}
-
-# el certificado con el que se firmo, para poder confiarlo en el PC o en la consola
-$cerPath = [System.IO.Path]::ChangeExtension($appx.FullName, '.cer')
+Write-Host '== Comprobando el paquete' -ForegroundColor Cyan
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+$zip = [System.IO.Compression.ZipFile]::OpenRead($appx.FullName)
 try {
-    $signature = Get-AuthenticodeSignature -FilePath $appx.FullName
-    if ($signature.SignerCertificate) {
-        Export-Certificate -Cert $signature.SignerCertificate -FilePath $cerPath -Force | Out-Null
+    $entries = @($zip.Entries | ForEach-Object { $_.FullName })
+} finally {
+    $zip.Dispose()
+}
+Write-Host ("   entradas en el paquete: " + $entries.Count)
+foreach ($needle in @('MC.Xbox.exe', 'opengl32.dll', 'libgallium_wgl.dll', 'dxil.dll',
+                      'spirv_to_dxil.dll', 'z-1.dll', 'vulkan_dzn.dll', 'glfw.dll',
+                      'jnidispatch.dll', 'runtime/version_catalog.tsv',
+                      'xbox_security.properties', 'securejarhandler-uwp-patch.jar')) {
+    $hit = $entries | Where-Object { $_ -like "*$needle*" } | Select-Object -First 1
+    if ($hit) {
+        Write-Host ("   OK      " + $needle) -ForegroundColor DarkGray
+    } else {
+        Write-Host ("   FALTA   " + $needle) -ForegroundColor Red
     }
-} catch {
-    Write-Warning "No pude exportar el certificado: $($_.Exception.Message)"
 }
 
-Write-Host ('APPX lista:        ' + $appx.FullName) -ForegroundColor Green
-if (Test-Path $cerPath) {
-    Write-Host ('Certificado:       ' + $cerPath) -ForegroundColor Green
+Write-Host ''
+Write-Host '== Certificado' -ForegroundColor Cyan
+$signature = Get-AuthenticodeSignature -FilePath $appx.FullName
+$cerPath = [System.IO.Path]::ChangeExtension($appx.FullName, '.cer')
+if ($signature.SignerCertificate) {
+    Export-Certificate -Cert $signature.SignerCertificate -FilePath $cerPath -Force | Out-Null
+    Write-Host ('   firmado con: ' + $signature.SignerCertificate.Subject)
+    Write-Host ('   huella:      ' + $signature.SignerCertificate.Thumbprint)
+    Write-Host ('   .cer:        ' + $cerPath) -ForegroundColor Green
     Write-Host ''
-    Write-Host 'Para instalarla en el PC, confia primero en el certificado:' -ForegroundColor Gray
-    Write-Host ('  Import-Certificate -FilePath "' + $cerPath + '" -CertStoreLocation Cert:\LocalMachine\TrustedPeople') -ForegroundColor Gray
-    Write-Host 'En la consola, instala la APPX desde el Device Portal; si la instala pero no' -ForegroundColor Gray
-    Write-Host 'abre, confia tambien en ese certificado en la consola.' -ForegroundColor Gray
+    Write-Host '   Si la consola no confia en este certificado, la app se instala pero no abre.' -ForegroundColor Gray
+    Write-Host '   Para confiar en el en el PC:' -ForegroundColor Gray
+    Write-Host ('     Import-Certificate -FilePath "' + $cerPath + '" -CertStoreLocation Cert:\LocalMachine\TrustedPeople') -ForegroundColor Gray
+} else {
+    Write-Warning 'El paquete no tiene certificado de firma.'
 }
+
+Write-Host ''
+Write-Host ('APPX lista: ' + $appx.FullName) -ForegroundColor Green
+Write-Host ('Version:    ' + $AppxVersion + '  (el nightly publicado va por 1.0.0.99)') -ForegroundColor Green
