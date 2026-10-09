@@ -106,9 +106,15 @@ try {
 if (-not $KeepStaging) {
 '@
 if ($t.Contains($oldAnchor) -and -not $t.Contains('Get-AuthenticodeSignature -FilePath $appx')) {
-    $t = $t.Replace($oldAnchor, $cerBlock, 1)
-    $changed = $true
-    Write-Host '   exporta el .cer junto a la APPX' -ForegroundColor Green
+    # String.Replace has no count overload, so splice the first occurrence by hand
+    $anchorIndex = $t.IndexOf($oldAnchor, [System.StringComparison]::Ordinal)
+    if ($anchorIndex -lt 0) {
+        Write-Host '   aviso: no encontre el punto de insercion para el .cer' -ForegroundColor Yellow
+    } else {
+        $t = $t.Substring(0, $anchorIndex) + $cerBlock + $t.Substring($anchorIndex + $oldAnchor.Length)
+        $changed = $true
+        Write-Host '   exporta el .cer junto a la APPX' -ForegroundColor Green
+    }
 } elseif ($t.Contains('Get-AuthenticodeSignature -FilePath $appx')) {
     Write-Host '   el .cer ya se exportaba' -ForegroundColor DarkGray
 } else {
@@ -209,10 +215,14 @@ Write-Host '== Certificado' -ForegroundColor Cyan
 $signature = Get-AuthenticodeSignature -FilePath $appx.FullName
 $cerPath = [System.IO.Path]::ChangeExtension($appx.FullName, '.cer')
 if ($signature.SignerCertificate) {
-    Export-Certificate -Cert $signature.SignerCertificate -FilePath $cerPath -Force | Out-Null
     Write-Host ('   firmado con: ' + $signature.SignerCertificate.Subject)
     Write-Host ('   huella:      ' + $signature.SignerCertificate.Thumbprint)
-    Write-Host ('   .cer:        ' + $cerPath) -ForegroundColor Green
+    try {
+        Export-Certificate -Cert $signature.SignerCertificate -FilePath $cerPath -Force | Out-Null
+        Write-Host ('   .cer:        ' + $cerPath) -ForegroundColor Green
+    } catch {
+        Write-Warning ("No pude exportar el .cer: " + $_.Exception.Message)
+    }
     Write-Host ''
     Write-Host '   Si la consola no confia en este certificado, la app se instala pero no abre.' -ForegroundColor Gray
     Write-Host '   Para confiar en el en el PC:' -ForegroundColor Gray
