@@ -1,11 +1,19 @@
 param(
     [string]$MinecraftVersion,
     [string]$FabricLoaderVersion,
-    [string]$AssetIndex
+    [string]$AssetIndex,
+    [switch]$NeoForgeOnly
 )
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 
+if ($NeoForgeOnly) {
+    if (($MinecraftVersion -and $MinecraftVersion -ne "1.21.1") -or $FabricLoaderVersion) {
+        throw "-NeoForgeOnly prepares Minecraft 1.21.1 without Fabric."
+    }
+    $MinecraftVersion = "1.21.1"
+    $env:BANDIT_BUILD_GAME_DIR = "staging/cache/neoforge-1.21.1/gameDir"
+}
 if ($MinecraftVersion) { $env:MC_VERSION = $MinecraftVersion }
 if ($FabricLoaderVersion) { $env:FABRIC_LOADER_VERSION = $FabricLoaderVersion }
 if ($AssetIndex) { $env:MC_ASSET_INDEX = $AssetIndex }
@@ -17,7 +25,7 @@ $gameDir = Get-ConfigPath "GameDir"
 $assetsDir = Get-ConfigPath "AssetsDir"
 $version = if ($MinecraftVersion) { $MinecraftVersion } else { $ProjectConfig.MinecraftVersion }
 $loaderVersion = if ($FabricLoaderVersion) { $FabricLoaderVersion } else { $ProjectConfig.FabricLoaderVersion }
-$nativesDir = if ($MinecraftVersion -and $MinecraftVersion -ne $ProjectConfig.MinecraftVersion) {
+$nativesDir = if ($NeoForgeOnly -or ($MinecraftVersion -and $MinecraftVersion -ne $ProjectConfig.MinecraftVersion)) {
     Join-Path (Get-ConfigPath "CacheDir") ("natives-" + ($MinecraftVersion -replace '[^A-Za-z0-9_.-]', '_'))
 } else {
     Get-ConfigPath "NativesDir"
@@ -25,7 +33,7 @@ $nativesDir = if ($MinecraftVersion -and $MinecraftVersion -ne $ProjectConfig.Mi
 $toolsDir = Get-ConfigPath "ToolsDir"
 $notesDir = Get-ConfigPath "NotesDir"
 $assetIndex = if ($AssetIndex) { $AssetIndex } else { "" }
-$javaHome = Resolve-JavaHomeForMinecraft -MinecraftVersion $version
+$javaHome = if ($NeoForgeOnly) { Resolve-JavaHomeExact -MajorVersion 21 } else { Resolve-JavaHomeForMinecraft -MinecraftVersion $version }
 $javaExe = Join-Path $javaHome "bin\java.exe"
 
 function Get-SafeFileName {
@@ -262,6 +270,11 @@ foreach ($library in $versionJson.libraries) {
 $nativeDlls = @(Get-ChildItem -LiteralPath $nativesDir -Filter "*.dll" -ErrorAction SilentlyContinue)
 if (-not $nativeDlls) {
     throw "No native DLLs were prepared under $nativesDir."
+}
+
+if ($NeoForgeOnly) {
+    Write-Host "Minecraft 1.21.1 libraries/natives ready. Skipping Fabric installer, remap and compat."
+    return
 }
 
 Write-Host "=== Downloading Fabric installer ==="

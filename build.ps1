@@ -11,7 +11,8 @@ param(
     [switch]$SkipVersionManifests,
     [switch]$SkipVersionCompat,
     [switch]$IncludePrebuiltNeoForgeArtifacts,
-    [switch]$StrictTargets
+    [switch]$StrictTargets,
+    [switch]$NeoForgeOnly
 )
 
 $ErrorActionPreference = "Stop"
@@ -28,6 +29,8 @@ try {
     throw "Another Bandit Launcher build is already using this checkout."
 }
 
+$inheritedJavaHome = $env:JAVA_HOME
+$inheritedBuildGameDir = $env:BANDIT_BUILD_GAME_DIR
 try {
 
 $script:BuildFailures = @()
@@ -37,6 +40,7 @@ function Add-BuildFailure {
         [Parameter(Mandatory = $true)][string]$Target,
         [Parameter(Mandatory = $true)][string]$Reason
     )
+    if ($NeoForgeOnly) { throw "${Stage} failed for ${Target}: $Reason" }
     $script:BuildFailures += [pscustomobject]@{ Stage = $Stage; Target = $Target; Reason = $Reason }
     Write-Warning "${Stage} skipped for ${Target}: $Reason"
 }
@@ -45,6 +49,15 @@ function Add-BuildFailure {
 $inheritedMcVersion     = $env:MC_VERSION
 $inheritedFabricLoader  = $env:FABRIC_LOADER_VERSION
 $inheritedAssetIndex    = $env:MC_ASSET_INDEX
+
+# A selected-only build must not silently retain Fabric or skip its only controller.
+if ($NeoForgeOnly) {
+    if (($McVersion -and $McVersion -ne "1.21.1") -or $FabricLoader -or $SkipVersionCompat -or $IncludePrebuiltNeoForgeArtifacts) {
+        throw "-NeoForgeOnly cannot be combined with another MC/loader, -SkipVersionCompat or prebuilt game artifacts."
+    }
+    $McVersion = "1.21.1"
+    $env:BANDIT_BUILD_GAME_DIR = "staging/cache/neoforge-1.21.1/gameDir"
+}
 
 # Push command-line overrides into the environment before sourcing config.
 # scripts/config.ps1 honors these so every downstream script (compat mod,
@@ -63,6 +76,28 @@ $buildDir = Get-ConfigPath "BuildDir"
 $outDir = Get-ConfigPath "OutputDir"
 $gameDir = Get-ConfigPath "GameDir"
 $nativesSourceDir = Get-ConfigPath "NativesDir"
+$versionCatalogSource = Join-Path $root $ProjectConfig.VersionCatalog
+$catalog = @(Import-Csv -Path $versionCatalogSource -Delimiter "`t")
+$defaultLoader = "fabric"
+$defaultLoaderVersion = $ProjectConfig.FabricLoaderVersion
+$defaultJavaRuntime = "current"
+if ($NeoForgeOnly) {
+    $selectedTarget = Select-NeoForge1211Target -Catalog $catalog
+    $catalog = @($selectedTarget)
+    $defaultLoader = $selectedTarget.loader
+    $defaultLoaderVersion = $selectedTarget.loaderVersion
+    $defaultJavaRuntime = $selectedTarget.javaRuntime
+    $nativesSourceDir = Join-Path (Get-ConfigPath "CacheDir") "natives-1.21.1"
+    # Do not inherit the default target's asset index or JNA DLL version.
+    $entry = (Get-MinecraftVersionManifest).versions | Where-Object { $_.id -eq "1.21.1" } | Select-Object -First 1
+    if (-not $entry) { throw "Minecraft 1.21.1 metadata missing" }
+    $metadata = Get-CachedRemoteJson -Uri $entry.url
+    $jna = @($metadata.libraries | Where-Object { $_.name -like "net.java.dev.jna:jna:*" })
+    if (-not $metadata.assetIndex.id -or $jna.Count -ne 1) { throw "Minecraft 1.21.1 asset index/JNA metadata missing" }
+    $ProjectConfig.MinecraftAssetIndex = [string]$metadata.assetIndex.id
+    $ProjectConfig.JnaVersion = ([string]$jna[0].name).Split(":")[2]
+    Write-Host "Selected-only build: Minecraft 1.21.1 / NeoForge $defaultLoaderVersion / Java 21"
+}
 $certDir = Get-ConfigPath "CertificateDir"
 $mcBuildDir = Join-Path $buildDir "MC.Xbox"
 $glfwBuildDir = Join-Path $buildDir "glfw_shim"
@@ -71,8 +106,9 @@ $mouseSupportDll = Join-Path $mouseSupportBuildDir "mouse_support.dll"
 $mouseSupportLib = Join-Path $mouseSupportBuildDir "mouse_support.lib"
 $mcExe = Join-Path $mcBuildDir "MC.Xbox.exe"
 $shimDll = Join-Path $glfwBuildDir "glfw.dll"
-$jreSrc = Resolve-JavaHome
 $jre21Src = Resolve-JavaHomeExact -MajorVersion 21
+if ($NeoForgeOnly) { $env:JAVA_HOME = $jre21Src }
+$jreSrc = if ($NeoForgeOnly) { $jre21Src } else { Resolve-JavaHome }
 $jarExe = Join-Path $jreSrc "bin\jar.exe"
 if (-not (Test-Path $jarExe)) { $jarExe = "jar" }
 $tools = Resolve-VSTools
@@ -133,13 +169,6 @@ $mcVersionSource = if ($McVersion) {
 } else {
     "config.ps1 default"
 }
-$fabricLoaderSource = if ($FabricLoader) {
-    "-FabricLoader"
-} elseif ($inheritedFabricLoader) {
-    "FABRIC_LOADER_VERSION inherited from this shell"
-} else {
-    "config.ps1 default"
-}
 $appVersionSource = if ($AppxVersion) {
     "-AppxVersion"
 } elseif ($verFileExisted) {
@@ -151,7 +180,7 @@ $appVersionSource = if ($AppxVersion) {
 Write-Host ""
 Write-Host "Resolved build target:"
 Write-Host ("  MC version      {0}  ({1})" -f $ProjectConfig.MinecraftVersion, $mcVersionSource)
-Write-Host ("  Fabric loader   {0}  ({1})" -f $ProjectConfig.FabricLoaderVersion, $fabricLoaderSource)
+Write-Host ("  Loader          {0} {1}" -f $defaultLoader, $defaultLoaderVersion)
 Write-Host ("  Asset index     {0}" -f $ProjectConfig.MinecraftAssetIndex)
 Write-Host ("  Appx version    {0}  ({1})" -f $appVersion, $appVersionSource)
 Write-Host ""
@@ -160,6 +189,7 @@ foreach ($inherited in @(
     @{ Name = "MC_VERSION";            Value = $inheritedMcVersion;    Param = $McVersion },
     @{ Name = "FABRIC_LOADER_VERSION"; Value = $inheritedFabricLoader; Param = $FabricLoader },
     @{ Name = "MC_ASSET_INDEX";        Value = $inheritedAssetIndex;   Param = $AssetIndex })) {
+    if ($NeoForgeOnly -and $inherited.Name -ne "MC_VERSION") { continue }
     if ($inherited.Value -and -not $inherited.Param) {
         Write-Warning ("{0}={1} was already set in this shell and is retargeting this build. Clear it with `$env:{0} = `$null, or open a new terminal." -f $inherited.Name, $inherited.Value)
     }
@@ -385,9 +415,12 @@ $runtimeConfigContent = [System.IO.File]::ReadAllText($runtimeConfigTemplate)
 $runtimeConfigContent = $runtimeConfigContent.Replace('@@MC_VERSION@@',           $ProjectConfig.MinecraftVersion)
 $runtimeConfigContent = $runtimeConfigContent.Replace('@@FABRIC_LOADER_VERSION@@', $ProjectConfig.FabricLoaderVersion)
 $runtimeConfigContent = $runtimeConfigContent.Replace('@@MC_ASSET_INDEX@@',       $ProjectConfig.MinecraftAssetIndex)
+$runtimeConfigContent = $runtimeConfigContent.Replace('@@DEFAULT_LOADER@@', $defaultLoader)
+$runtimeConfigContent = $runtimeConfigContent.Replace('@@DEFAULT_LOADER_VERSION@@', $defaultLoaderVersion)
+$runtimeConfigContent = $runtimeConfigContent.Replace('@@DEFAULT_JAVA_RUNTIME@@', $defaultJavaRuntime)
 if ($runtimeConfigContent -match '@@[A-Z_]+@@') { throw "runtime_config.h still contains unsubstituted tokens after generation: $($Matches[0])" }
 [System.IO.File]::WriteAllText($runtimeConfigOutput, $runtimeConfigContent)
-Write-Host "runtime_config.h written for MC $($ProjectConfig.MinecraftVersion) / fabric-loader $($ProjectConfig.FabricLoaderVersion) / asset index $($ProjectConfig.MinecraftAssetIndex)"
+Write-Host "runtime_config.h written for MC $($ProjectConfig.MinecraftVersion) / $defaultLoader $defaultLoaderVersion / asset index $($ProjectConfig.MinecraftAssetIndex)"
 
 Write-Host "=== Building MC.Xbox.exe ==="
 $mcSources = @(
@@ -426,17 +459,19 @@ Write-Host "=== Building GLFW CoreWindow shim ==="
 & (Join-Path $root "glfw_shim\build_glfw.ps1") -OutputDir $glfwBuildDir -MouseSupportLib $mouseSupportLib -MouseSupportInclude (Join-Path $root "mouse_support")
 if (-not (Test-Path $shimDll)) { throw "GLFW shim DLL missing after build: $shimDll" }
 
-Write-Host "=== Building Xbox compatibility mod ==="
-& (Join-Path $root "compat_mod\build_compat_mod.ps1")
+if (-not $NeoForgeOnly) {
+    Write-Host "=== Building Xbox compatibility mod ==="
+    & (Join-Path $root "compat_mod\build_compat_mod.ps1")
 
-Write-Host "=== Building default Fabric controller mod ==="
-& (Join-Path $root "controller_mod\fabric\build_fabric_controller_mod.ps1") `
-    -MinecraftVersion $ProjectConfig.MinecraftVersion `
-    -LoaderVersion $ProjectConfig.FabricLoaderVersion `
-    -OutputDir (Join-Path $gameDir "mods")
+    Write-Host "=== Building default Fabric controller mod ==="
+    & (Join-Path $root "controller_mod\fabric\build_fabric_controller_mod.ps1") `
+        -MinecraftVersion $ProjectConfig.MinecraftVersion `
+        -LoaderVersion $ProjectConfig.FabricLoaderVersion `
+        -OutputDir (Join-Path $gameDir "mods")
 
-Write-Host "=== Patching Fabric Loader for Xbox filesystem ==="
-& (Join-Path $root "scripts\patch-fabric.ps1")
+    Write-Host "=== Patching Fabric Loader for Xbox filesystem ==="
+    & (Join-Path $root "scripts\patch-fabric.ps1")
+}
 
 Write-Host "=== Assembling PackageContent ==="
 Remove-Item -Recurse -Force $pkg -ErrorAction SilentlyContinue
@@ -459,11 +494,16 @@ $manifestText = [regex]::Replace($manifestText, '(<Identity\b[^>]*\bVersion=")\d
 Write-Host "App package version: $appVersion"
 
 Write-Host "Copying launcher-owned runtime files..."
-$versionCatalogSource = Join-Path $root $ProjectConfig.VersionCatalog
-if (-not (Test-Path $versionCatalogSource)) {
-    throw "Version catalog not found at $versionCatalogSource"
+# Write a real one-row catalog, not the full catalog with an extra Fabric default.
+if ($NeoForgeOnly) {
+    $header = "minecraftVersion`tdisplayName`tloader`tloaderVersion`tjavaRuntime`tsupportLevel`tcontrollerProvider`tnotes"
+    $row = @($selectedTarget.minecraftVersion, $selectedTarget.displayName, $selectedTarget.loader,
+        $selectedTarget.loaderVersion, $selectedTarget.javaRuntime, $selectedTarget.supportLevel,
+        $selectedTarget.controllerProvider, $selectedTarget.notes) -join "`t"
+    [IO.File]::WriteAllLines((Join-Path $pkg "runtime\version_catalog.tsv"), @($header, $row), [Text.UTF8Encoding]::new($false))
+} else {
+    Copy-Item $versionCatalogSource (Join-Path $pkg "runtime\version_catalog.tsv") -Force
 }
-Copy-Item $versionCatalogSource (Join-Path $pkg "runtime\version_catalog.tsv") -Force
 Write-Host "Version catalog: $versionCatalogSource"
 
 $recommendedModsSource = Join-Path $root "config\recommended-mods.json"
@@ -476,7 +516,7 @@ Write-Host "Recommended mods: $recommendedModsSource"
 # NeoForge client jars are derived from the Minecraft client. Keep them out of normal and
 # nightly builds; opt in only for private diagnostics while on-device generation is being fixed.
 $prebuiltLibs = Join-Path $root "prebuilt\neoforge\libraries"
-if (($IncludePrebuiltNeoForgeArtifacts -or $env:BANDIT_INCLUDE_PREBUILT_NEOFORGE_ARTIFACTS -eq "1") -and (Test-Path $prebuiltLibs)) {
+if (-not $NeoForgeOnly -and ($IncludePrebuiltNeoForgeArtifacts -or $env:BANDIT_INCLUDE_PREBUILT_NEOFORGE_ARTIFACTS -eq "1") -and (Test-Path $prebuiltLibs)) {
     $prebuiltDst = Join-Path $pkg "runtime\libraries"
     Get-ChildItem $prebuiltLibs -Recurse -File | ForEach-Object {
         $rel = $_.FullName.Substring($prebuiltLibs.Length).TrimStart('\')
@@ -596,7 +636,6 @@ function Ensure-TinyRemapperJar {
     Write-Host "Packaged patched TinyRemapper $TinyRemapperVersion"
 }
 
-$catalog = @(Import-Csv -Path $versionCatalogSource -Delimiter "`t")
 $manifestTargets = @(
     $catalog |
         Where-Object { $_.loader -and $_.loaderVersion -and $_.loaderVersion -ne "selected" -and $_.loaderVersion -ne "none" }
@@ -622,9 +661,12 @@ function Test-NeoForgeControllerTarget {
     return $Target.loader -eq "neoforge" -and $Target.controllerProvider -eq "neoforge"
 }
 
-$fabricLoaderVersions = @($ProjectConfig.FabricLoaderVersion) + @($fabricTargets | ForEach-Object { $_.loaderVersion }) |
-    Where-Object { $_ } |
-    Select-Object -Unique
+$fabricLoaderVersions = @()
+if (-not $NeoForgeOnly) {
+    $fabricLoaderVersions = @($ProjectConfig.FabricLoaderVersion) + @($fabricTargets | ForEach-Object { $_.loaderVersion }) |
+        Where-Object { $_ } |
+        Select-Object -Unique
+}
 foreach ($loaderVersion in $fabricLoaderVersions) {
     try {
         Ensure-FabricLoaderJar -LoaderVersion $loaderVersion
@@ -640,7 +682,9 @@ if ($fabricLoaderVersions -contains "0.14.25") {
 }
 # Bundled mods (compat mod, optionally diagnostics) live under runtime\bundled-mods.
 # App.cpp copies them into LocalState\game\mods on launch.
-Copy-Item -Recurse (Join-Path $gameDir "mods\*") (Join-Path $pkg "runtime\bundled-mods\") -Force
+if (-not $NeoForgeOnly) {
+    Copy-Item -Recurse (Join-Path $gameDir "mods\*") (Join-Path $pkg "runtime\bundled-mods\") -Force
+} # Never import cached Fabric/user mods into a NeoForge-only package.
 
 Write-Host "Copying natives..."
 Copy-Item (Join-Path $nativesSourceDir "*.dll") (Join-Path $pkg "natives\")
@@ -720,13 +764,13 @@ function Copy-CachedVersionManifest {
 $defaultDownloadManifest = Join-Path $pkg "download_manifest.tsv"
 Copy-CachedVersionManifest `
     -MinecraftVersion $ProjectConfig.MinecraftVersion `
-    -Loader "fabric" `
-    -LoaderVersion $ProjectConfig.FabricLoaderVersion `
+    -Loader $defaultLoader `
+    -LoaderVersion $defaultLoaderVersion `
     -OutputPath $defaultDownloadManifest
 
 $manifestsDir = Join-Path $pkg "runtime\manifests"
 Ensure-Dir $manifestsDir
-$defaultTargetId = "$($ProjectConfig.MinecraftVersion)-fabric-$($ProjectConfig.FabricLoaderVersion)"
+$defaultTargetId = "$($ProjectConfig.MinecraftVersion)-$defaultLoader-$defaultLoaderVersion"
 Copy-Item -Force $defaultDownloadManifest (Join-Path $manifestsDir "$defaultTargetId.tsv")
 Write-Host "Default per-version manifest: $defaultTargetId.tsv"
 
@@ -1168,6 +1212,7 @@ function Build-SecureJarHandlerUwpPatch {
     if (-not (Test-Path $runtimeJarExe)) { $runtimeJarExe = $jarExe }
 
     $secureJar = Resolve-SecureJarHandlerJar -Version $Version
+    $asmJar = Resolve-UwpGuardAsmJar
     $patchSourceRoot = Join-Path $root "patch\securejarhandler"
     $patchSources = @(Get-ChildItem -LiteralPath $patchSourceRoot -Recurse -Filter "*.java" | ForEach-Object { $_.FullName })
     if ($patchSources.Count -eq 0) {
@@ -1179,7 +1224,7 @@ function Build-SecureJarHandlerUwpPatch {
     $stamp = New-BuildStamp `
         -Values @("securejarhandler_uwp_patch", $Version, $JavaHome) `
         -ContentFiles (@($PSCommandPath) + $patchSources) `
-        -DependencyFiles @($secureJar)
+        -DependencyFiles @($secureJar, $asmJar)
     if (Test-BuildStampCurrent -StampPath $stampPath -Stamp $stamp -RequiredOutputs @($cacheJar)) {
         Copy-Item $cacheJar $OutputJar -Force
         Write-Host "securejarhandler UWP patch up to date: $OutputJar"
@@ -1191,7 +1236,7 @@ function Build-SecureJarHandlerUwpPatch {
     Remove-Item -Recurse -Force $patchDir -ErrorAction SilentlyContinue
     Ensure-Dir $classesDir
 
-    & $javacExe --release 21 -cp $secureJar -d $classesDir $patchSources
+    & $javacExe --release 21 -cp "$secureJar;$asmJar" -d $classesDir $patchSources
     if ($LASTEXITCODE -ne 0) { throw "securejarhandler UWP patch compile failed" }
 
     & $runtimeJarExe cf $cacheJar -C $classesDir .
@@ -1204,23 +1249,27 @@ function Build-SecureJarHandlerUwpPatch {
 Write-Host "Copying JRE..."
 $xboxSecurityProperties = Join-Path $root "xbox_security.properties"
 Copy-Item $xboxSecurityProperties (Join-Path $pkg "xbox_security.properties") -Force
-Copy-PackagedJre -JavaHome $jreSrc -PackageRelativeDir "jre" -SecurityPropertiesPath $xboxSecurityProperties
-Copy-PackagedJre -JavaHome $jre21Src -PackageRelativeDir "jre21" -SecurityPropertiesPath $xboxSecurityProperties
-try {
-    $jre17Src = Resolve-JavaHomeExact -MajorVersion 17
-    Copy-PackagedJre -JavaHome $jre17Src -PackageRelativeDir "jre17" -SecurityPropertiesPath $xboxSecurityProperties
-    Build-JavaBaseUwpFilesystemPatch -JavaHome $jre17Src -OutputJar (Join-Path $pkg "java-base-uwp-filesystem-17.jar") -WorkName "java_base_uwp_filesystem_patch_17"
-    Build-JavaZipfsRealpathPatch -JavaHome $jre17Src -OutputJar (Join-Path $pkg "java-zipfs-realpath-17.jar") -WorkName "java_zipfs_realpath_patch_17"
-    Build-JavaDesktopUwpAwtPatch -JavaHome $jre17Src -OutputJar (Join-Path $pkg "java-desktop-uwp-awt-17.jar") -WorkName "java_desktop_uwp_awt_patch_17"
-    Write-Host "Packaged Java 17 runtime for 1.18.x / 1.20.2-1.20.4 targets"
-} catch {
-    Add-BuildFailure -Stage "Java 17 JRE" -Target "javaRuntime=java17 targets" -Reason "$($_.Exception.Message). Needs JDK 17 on the build machine."
+if (-not $NeoForgeOnly) {
+    Copy-PackagedJre -JavaHome $jreSrc -PackageRelativeDir "jre" -SecurityPropertiesPath $xboxSecurityProperties
 }
-Build-JavaBaseUwpFilesystemPatch -JavaHome $jreSrc -OutputJar (Join-Path $pkg "java-base-uwp-filesystem.jar") -WorkName "java_base_uwp_filesystem_patch_current"
+Copy-PackagedJre -JavaHome $jre21Src -PackageRelativeDir "jre21" -SecurityPropertiesPath $xboxSecurityProperties
+if (-not $NeoForgeOnly) {
+    try {
+        $jre17Src = Resolve-JavaHomeExact -MajorVersion 17
+        Copy-PackagedJre -JavaHome $jre17Src -PackageRelativeDir "jre17" -SecurityPropertiesPath $xboxSecurityProperties
+        Build-JavaBaseUwpFilesystemPatch -JavaHome $jre17Src -OutputJar (Join-Path $pkg "java-base-uwp-filesystem-17.jar") -WorkName "java_base_uwp_filesystem_patch_17"
+        Build-JavaZipfsRealpathPatch -JavaHome $jre17Src -OutputJar (Join-Path $pkg "java-zipfs-realpath-17.jar") -WorkName "java_zipfs_realpath_patch_17"
+        Build-JavaDesktopUwpAwtPatch -JavaHome $jre17Src -OutputJar (Join-Path $pkg "java-desktop-uwp-awt-17.jar") -WorkName "java_desktop_uwp_awt_patch_17"
+        Write-Host "Packaged Java 17 runtime for 1.18.x / 1.20.2-1.20.4 targets"
+    } catch {
+        Add-BuildFailure -Stage "Java 17 JRE" -Target "javaRuntime=java17 targets" -Reason "$($_.Exception.Message). Needs JDK 17 on the build machine."
+    }
+    Build-JavaBaseUwpFilesystemPatch -JavaHome $jreSrc -OutputJar (Join-Path $pkg "java-base-uwp-filesystem.jar") -WorkName "java_base_uwp_filesystem_patch_current"
+    Build-JavaZipfsRealpathPatch -JavaHome $jreSrc -OutputJar (Join-Path $pkg "java-zipfs-realpath.jar") -WorkName "java_zipfs_realpath_patch_current"
+    Build-JavaDesktopUwpAwtPatch -JavaHome $jreSrc -OutputJar (Join-Path $pkg "java-desktop-uwp-awt.jar") -WorkName "java_desktop_uwp_awt_patch_current"
+}
 Build-JavaBaseUwpFilesystemPatch -JavaHome $jre21Src -OutputJar (Join-Path $pkg "java-base-uwp-filesystem-21.jar") -WorkName "java_base_uwp_filesystem_patch_21"
-Build-JavaZipfsRealpathPatch -JavaHome $jreSrc -OutputJar (Join-Path $pkg "java-zipfs-realpath.jar") -WorkName "java_zipfs_realpath_patch_current"
 Build-JavaZipfsRealpathPatch -JavaHome $jre21Src -OutputJar (Join-Path $pkg "java-zipfs-realpath-21.jar") -WorkName "java_zipfs_realpath_patch_21"
-Build-JavaDesktopUwpAwtPatch -JavaHome $jreSrc -OutputJar (Join-Path $pkg "java-desktop-uwp-awt.jar") -WorkName "java_desktop_uwp_awt_patch_current"
 Build-JavaDesktopUwpAwtPatch -JavaHome $jre21Src -OutputJar (Join-Path $pkg "java-desktop-uwp-awt-21.jar") -WorkName "java_desktop_uwp_awt_patch_21"
 Build-SecureJarHandlerUwpPatch -JavaHome $jre21Src -Version "3.0.8" -OutputJar (Join-Path $pkg "securejarhandler-uwp-patch.jar")
 
@@ -1233,6 +1282,9 @@ foreach ($name in $appxAssetNames) {
     Copy-Item -Force $source (Join-Path $pkg "Assets\$name")
 }
 
+if ($NeoForgeOnly) {
+    Assert-NeoForge1211Package -PackageDir $pkg -Target $selectedTarget
+}
 Write-Host "=== Packaging ==="
 $cert = Join-Path $certDir $ProjectConfig.CertificateFileName
 $certName = if ($env:APPX_CERT_SUBJECT) { $env:APPX_CERT_SUBJECT } else { $ProjectConfig.DefaultCertificateSubject }
@@ -1378,5 +1430,7 @@ if ($script:BuildFailures.Count -gt 0) {
     }
 }
 } finally {
+    $env:JAVA_HOME = $inheritedJavaHome
+    $env:BANDIT_BUILD_GAME_DIR = $inheritedBuildGameDir
     $buildLock.Dispose()
 }

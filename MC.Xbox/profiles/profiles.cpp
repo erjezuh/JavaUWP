@@ -71,12 +71,12 @@ std::wstring MakeTargetId(const std::wstring& minecraftVersion, const std::wstri
 LaunchTarget DefaultLaunchTarget() {
     LaunchTarget t;
     t.minecraftVersion = kDefaultMinecraftVersionW;
-    t.loader = L"fabric";
-    t.loaderVersion = a2w(kDefaultFabricLoaderVersion);
+    t.loader = kDefaultLoaderW;
+    t.loaderVersion = kDefaultLoaderVersionW;
     t.targetId = MakeTargetId(t.minecraftVersion, t.loader, t.loaderVersion);
-    t.displayName = t.minecraftVersion + L" Fabric";
-    t.javaRuntime = L"current";
-    t.supportLevel = L"supported";
+    t.displayName = t.minecraftVersion + (t.loader == L"neoforge" ? L" NeoForge" : L" Fabric");
+    t.javaRuntime = kDefaultJavaRuntimeW;
+    t.supportLevel = t.loader == L"neoforge" ? L"experimental" : L"supported";
     t.notes = L"Current launcher default";
     return t;
 }

@@ -671,3 +671,74 @@ function Ensure-Dir {
 
     New-Item -ItemType Directory -Force -Path $Path | Out-Null
 }
+
+# The narrow workflow deliberately selects exactly one catalog row. Do not fall
+# back to Fabric or silently pick another NeoForge release when the catalog drifts.
+function Select-NeoForge1211Target {
+    param([Parameter(Mandatory = $true)][AllowEmptyCollection()][object[]]$Catalog)
+    $targets = @($Catalog | Where-Object { $_.minecraftVersion -eq "1.21.1" -and $_.loader -eq "neoforge" })
+    if ($targets.Count -ne 1 -or $targets[0].loaderVersion -notmatch '^21\.1\.[0-9]+$' -or
+        $targets[0].javaRuntime -ne "java21" -or $targets[0].controllerProvider -ne "neoforge") {
+        throw "The catalog must contain exactly one Minecraft 1.21.1 / NeoForge 21.1.x / Java 21 controller target."
+    }
+    return $targets[0]
+}
+
+function Resolve-UwpGuardAsmJar {
+    # Compile/test dependency only; NeoForge already places ASM on its module path
+    # and securejarhandler requires org.objectweb.asm. Never bundle a second ASM.
+    $version = "9.7.1"
+    $path = Join-Path (Get-ConfigPath "ToolsDir") "asm-$version.jar"
+    $url = "https://repo.maven.apache.org/maven2/org/ow2/asm/asm/$version/asm-$version.jar"
+    $hashPath = "$path.sha1"
+    Ensure-Dir (Split-Path $path -Parent)
+    if (-not (Test-Path $hashPath)) {
+        $response = Invoke-WebRequest -UseBasicParsing -Uri "$url.sha1" -TimeoutSec 60
+        $text = if ($response.Content -is [byte[]]) { [Text.Encoding]::ASCII.GetString($response.Content) } else { [string]$response.Content }
+        $expected = $text.Trim()
+        if ($expected -notmatch '^[a-fA-F0-9]{40}$') { throw "Invalid ASM checksum response" }
+        [IO.File]::WriteAllText($hashPath, $expected)
+    }
+    $expected = ([IO.File]::ReadAllText($hashPath)).Trim()
+    if ($expected -notmatch '^[a-fA-F0-9]{40}$') { throw "Invalid cached ASM checksum: $hashPath" }
+    if ((Test-Path $path) -and (Get-FileHash -LiteralPath $path -Algorithm SHA1).Hash -eq $expected) { return $path }
+    $temp = "$path.download"
+    try {
+        Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $temp -TimeoutSec 60
+        if ((Get-FileHash -LiteralPath $temp -Algorithm SHA1).Hash -ne $expected) { throw "ASM checksum mismatch" }
+        Move-Item -LiteralPath $temp -Destination $path -Force
+    } finally {
+        if (Test-Path $temp) { Remove-Item -LiteralPath $temp -Force }
+    }
+    return $path
+}
+
+function Assert-NeoForge1211Package {
+    param(
+        [Parameter(Mandatory = $true)][string]$PackageDir,
+        [Parameter(Mandatory = $true)]$Target
+    )
+    $targetId = "$($Target.minecraftVersion)-$($Target.loader)-$($Target.loaderVersion)"
+    $rows = @(Import-Csv -Path (Join-Path $PackageDir "runtime\version_catalog.tsv") -Delimiter "`t")
+    $selected = Select-NeoForge1211Target -Catalog $rows
+    if ($rows.Count -ne 1 -or $selected.loaderVersion -ne $Target.loaderVersion) { throw "Selected-only package catalog mismatch" }
+    $manifests = @(Get-ChildItem (Join-Path $PackageDir "runtime\manifests") -File)
+    if ($manifests.Count -ne 1 -or $manifests[0].Name -ne "$targetId.tsv") { throw "Selected-only package contains unexpected manifests" }
+    $mods = @(Get-ChildItem (Join-Path $PackageDir "runtime\version-mods") -Directory)
+    if ($mods.Count -ne 1 -or $mods[0].Name -ne $targetId) { throw "Selected-only package contains unexpected mod targets" }
+    if (@(Get-ChildItem (Join-Path $PackageDir "runtime\bundled-mods") -Recurse -File).Count -ne 0) {
+        throw "Cached/default mods leaked into the NeoForge-only package"
+    }
+    foreach ($unexpected in @("jre", "jre17", "runtime\libraries\net\fabricmc", "java-base-uwp-filesystem.jar")) {
+        if (Test-Path (Join-Path $PackageDir $unexpected)) { throw "Unexpected runtime in NeoForge-only package: $unexpected" }
+    }
+    foreach ($required in @(
+        "jre21\bin\server\jvm.dll", "jre21\conf\security\java.security",
+        "java-base-uwp-filesystem-21.jar", "java-zipfs-realpath-21.jar", "java-desktop-uwp-awt-21.jar",
+        "securejarhandler-uwp-patch.jar", "natives\lwjgl.dll", "natives\glfw.dll", "natives\jnidispatch.dll",
+        "runtime\version-mods\$targetId\banditvault-neoforge-controller-1.0.0.jar"
+    )) {
+        if (-not (Test-Path -LiteralPath (Join-Path $PackageDir $required) -PathType Leaf)) { throw "NeoForge-only package missing $required" }
+    }
+    Write-Host "NEOFORGE_1211_PACKAGE_OK"
+}

@@ -8,6 +8,8 @@
 #   MC_VERSION              -> MinecraftVersion
 #   MC_ASSET_INDEX          -> MinecraftAssetIndex
 #   FABRIC_LOADER_VERSION   -> FabricLoaderVersion
+#   BANDIT_BUILD_GAME_DIR   -> isolated build library cache (repo-relative path),
+#                              selected by the NeoForge-only workflow
 $ProjectConfig = [ordered]@{
     DefaultMinecraftVersion  = if ($env:DEFAULT_MC_VERSION)    { $env:DEFAULT_MC_VERSION }    else { "1.21.11" }
     DefaultLoader            = if ($env:DEFAULT_MC_LOADER)     { $env:DEFAULT_MC_LOADER }     else { "fabric" }
@@ -24,7 +26,7 @@ $ProjectConfig = [ordered]@{
     CacheDir                 = "staging/cache"
     BuildDir                 = "staging/build"
     OutputDir                = "output"
-    GameDir                  = "staging/cache/gameDir"
+    GameDir                  = if ($env:BANDIT_BUILD_GAME_DIR) { $env:BANDIT_BUILD_GAME_DIR } else { "staging/cache/gameDir" }
     AssetsDir                = "staging/cache/assets"
     NativesDir               = "staging/cache/natives-1.21"
     MesaRuntimeDir           = "mesa-runtime"

@@ -508,6 +508,10 @@ void NeoForgeAddJvmOptions(const LoaderJvmContext& ctx, std::vector<std::string>
     if (GetFileAttributesW(secureJarHandlerPatch.c_str()) != INVALID_FILE_ATTRIBUTES) {
         vmOptions.push_back("--patch-module=cpw.mods.securejarhandler=" + w2a(fwd(secureJarHandlerPatch)));
         WriteLogF(L"NeoForge securejarhandler UWP patch enabled: %s", secureJarHandlerPatch.c_str());
+        if (ctx.minecraftVersion == L"1.21.1") {
+            vmOptions.push_back("-Dbanditvault.neoforge.nativeGuards=true");
+            WriteLog(L"NeoForge 1.21.1 early UWP native guards enabled (Sodium/OSHI/Controlify 2.x)");
+        }
     } else {
         WriteLogF(L"NeoForge securejarhandler UWP patch missing: %s", secureJarHandlerPatch.c_str());
     }

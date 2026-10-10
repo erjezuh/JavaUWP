@@ -424,7 +424,10 @@ public class ModuleClassLoader extends ClassLoader {
     }
 
     private Class<?> defineClassBytes(final ModuleReference ref, final String name, final byte[] rawBytes) {
-        var bytes = maybeTransformClassBytes(rawBytes, name, null);
+        // Bootstrap service modules (including SodiumWorkarounds) load before Mixin.
+        // Apply the narrow native-probe guards at definition time in both loader types,
+        // even when TransformingClassLoader overrides maybeTransformClassBytes.
+        var bytes = UwpNativeGuards.transform(name, maybeTransformClassBytes(rawBytes, name, null));
         if (bytes.length == 0) return null;
         var cname = name.replace('.','/')+".class";
         var modroot = ref == null ? null : this.resolvedRoots.get(ref.descriptor().name());

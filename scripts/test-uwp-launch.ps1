@@ -1,4 +1,5 @@
 # Small regression suite; does not start Minecraft, sign in, or package an APPX.
+param([switch]$NeoForgeOnly)
 $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "common.ps1")
 
@@ -16,6 +17,12 @@ $exe = Join-Path $outDir "launch_policy_tests.exe"
 if ($LASTEXITCODE -ne 0) { throw "Launch policy test compile failed" }
 & $exe
 if ($LASTEXITCODE -ne 0) { throw "Launch policy tests failed" }
+
+if ($NeoForgeOnly) {
+    & (Join-Path $PSScriptRoot "test-neoforge-native-guards.ps1")
+    Write-Host "UWP_NEOFORGE_LAUNCH_TESTS_OK"
+    return
+}
 
 $javaHome = Resolve-JavaHome
 $javac = Join-Path $javaHome "bin\javac.exe"

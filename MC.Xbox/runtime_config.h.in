@@ -2,7 +2,7 @@
 //
 // The build script replaces the placeholders below with values from
 // scripts/config.ps1 (overridable via the -McVersion, -FabricLoader,
-// -AssetIndex parameters on build.ps1). The substituted output is written to
+// -AssetIndex and -NeoForgeOnly parameters on build.ps1). The substituted output is written to
 // the build directory as runtime_config.h and picked up via the compiler
 // INCLUDE path.
 //
@@ -10,6 +10,9 @@
 
 #pragma once
 
+static constexpr wchar_t kDefaultLoaderW[] = L"@@DEFAULT_LOADER@@";
+static constexpr wchar_t kDefaultLoaderVersionW[] = L"@@DEFAULT_LOADER_VERSION@@";
+static constexpr wchar_t kDefaultJavaRuntimeW[] = L"@@DEFAULT_JAVA_RUNTIME@@";
 static constexpr wchar_t kDefaultMinecraftVersionW[] = L"@@MC_VERSION@@";
 static constexpr char    kDefaultMinecraftVersion[]  = "@@MC_VERSION@@";
 static constexpr char    kDefaultFabricLoaderVersion[] = "@@FABRIC_LOADER_VERSION@@";

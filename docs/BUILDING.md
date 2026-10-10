@@ -8,7 +8,43 @@ The build produces a signed UWP package at:
 output\BanditLauncher_<appx-version>.appx
 ```
 
-## Requirements
+## Only Minecraft 1.21.1 + NeoForge
+
+For this target, use the focused workflow instead of the full version matrix:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-neoforge-1.21.1.ps1
+```
+
+It prepares dependencies, runs the focused regression tests and builds/signs the
+APPX. The execution-policy bypass applies only to that PowerShell process; it
+changes neither UWP permissions nor Microsoft/Xbox authentication.
+
+- Selects only `1.21.1 / NeoForge 21.1.250 / java21` from `config/versions.tsv`.
+- Requires **only an exact JDK 21**, including `javac.exe` and `lib/src.zip`, plus
+  the Windows/MSVC/SDK requirements below. Set `JAVA21_HOME` if needed.
+- Skips Fabric installation/remapping/mod builds, Forge and the other catalog
+  targets. Packages only `jre21` and its matching patches, not Java 17 or 25.
+- Uses a separate `staging/cache/neoforge-1.21.1/gameDir` library cache and
+  `staging/cache/natives-1.21.1`. Asset-index and JNA versions come from the selected
+  Minecraft metadata, not the multi-target defaults.
+- Writes a one-row package catalog, a NeoForge compiled default, and one target
+  manifest/controller directory. Cached Fabric/user mods are not bundled.
+- Enables the early native guards described in [SHADERS.md](SHADERS.md), without
+  depending on Fabric mixins or waiting for NeoForge's Mixin stage.
+- Stops on failure of the selected target and audits package contents **before**
+  signing. Derived Minecraft clients remain compile-only, even if the old
+  prebuilt-artifact environment override is set.
+
+The equivalent low-level switches are `scripts/setup.ps1 -NeoForgeOnly`,
+`scripts/test-uwp-launch.ps1 -NeoForgeOnly` and `build.ps1 -NeoForgeOnly`.
+`-McVersion 1.21.1` alone still requests the multi-target/Fabric workflow.
+The focused wrapper restores its build-cache and Java environment overrides.
+It does not delete existing profiles/worlds or update Git by itself. Preserve
+local source edits before updating the checkout; keep any Git stash until those
+changes have been reviewed rather than automatically applying it over a new build.
+
+## Requirements (full multi-target build)
 
 Install these, then run one command. Everything else the build needs is downloaded for you by `scripts\setup.ps1`.
 

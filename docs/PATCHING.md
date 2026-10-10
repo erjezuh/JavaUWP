@@ -71,7 +71,9 @@ The optional native guards are registered for both the main and 26.x Fabric vari
 All these targets are `@Pseudo` and `remap = false`, and their callbacks only run
 when the host supplies `-Dbanditvault.uwp=true`. The game and optional mods do not
 need to be on the compile classpath for these guards. These are Fabric mixins;
-they do not claim to intercept NeoForge's earlier graphics bootstrap service.
+they do not intercept NeoForge's earlier graphics bootstrap service. For
+NeoForge 1.21.1, the separate securejarhandler class-definition guards below cover
+that earlier path without bundling or relying on the Fabric compatibility mod.
 
 Build it directly with:
 
@@ -169,6 +171,20 @@ patch\securejarhandler\
 ```
 
 The patch is applied during NeoForge startup with `--patch-module=cpw.mods.securejarhandler=...`.
+
+For Minecraft **1.21.1**, `ModuleClassLoader.defineClassBytes` also applies
+`UwpNativeGuards` after any loader transformations but before defining a class.
+This covers Sodium's early graphics-service loader as well as game classes in the
+transforming loader; an ordinary compat mixin can start too late for the former.
+The allowlist contains only native diagnostic/controller backend methods, gated
+by both UWP and the NeoForge-1.21.1 launcher marker. See [SHADERS.md](SHADERS.md)
+for the supported signatures, log messages and validation limits.
+
+The patch compiler uses ASM 9.7.1 as a checksum-verified build dependency. ASM is
+already a required module of securejarhandler and supplied by NeoForge: do not
+bundle a duplicate ASM JAR or add a global module-read/signature-check workaround.
+Run `scripts/test-uwp-launch.ps1 -NeoForgeOnly` for the focused tests. The tests
+never invoke Minecraft or alter the normal authenticated launch path.
 
 The main goals are:
 

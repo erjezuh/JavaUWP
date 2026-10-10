@@ -4,6 +4,21 @@ Notable changes to Bandit Launcher. Nightly packages are numbered by build revis
 
 ## 2026-10-10
 
+### Focused NeoForge 1.21.1 workflow
+
+- Add `scripts/build-neoforge-1.21.1.ps1`: setup, focused tests and an APPX containing
+  only the catalog's NeoForge 21.1.250 target and Java 21. Skip the Fabric/default
+  and other-version builds, isolate its library/native caches, select matching
+  asset-index/JNA metadata, and audit package contents before signing.
+- Set the compiled default and packaged catalog/manifest to the selected loader;
+  allow runtime seeding without an unrelated current-Java runtime.
+- Guard NeoForge 1.21.1 native probes at module class-definition time, including
+  Sodium's pre-Mixin bootstrap, OSHI/SystemReport hardware diagnostics and the
+  verified Controlify 2.x SDL/HID fallback entry points. Rendering capabilities,
+  shader activation, authentication and signature verification are unchanged.
+- Add synthetic class-definition/bytecode-verifier tests and document the still
+  required Windows APPX and real Xbox/mod/shader validation.
+
 ### UWP launch and shader stability
 
 - Size the JVM heap against the app memory budget, with extra native headroom

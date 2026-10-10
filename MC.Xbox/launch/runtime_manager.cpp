@@ -63,14 +63,17 @@ bool IsLocalRuntimeSeedCurrent(const std::wstring& packageDir, const std::wstrin
     const bool hasNatives = GetFileAttributesW((localDir + L"\\natives").c_str()) != INVALID_FILE_ATTRIBUTES;
     const bool hasGraphics = GetFileAttributesW((localDir + L"\\graphics").c_str()) != INVALID_FILE_ATTRIBUTES ||
         GetFileAttributesW((localDir + L"\\natives\\opengl32.dll").c_str()) != INVALID_FILE_ATTRIBUTES;
-    const bool hasJre =
+    // Selected-only packages may contain jre21 without the "current" runtime.
+    const bool packageHasJre =
+        GetFileAttributesW((packageDir + L"\\jre\\bin\\server\\jvm.dll").c_str()) != INVALID_FILE_ATTRIBUTES;
+    const bool hasJre = !packageHasJre || (
         GetFileAttributesW((localDir + L"\\jre\\bin\\server\\jvm.dll").c_str()) != INVALID_FILE_ATTRIBUTES &&
-        GetFileAttributesW((localDir + L"\\jre\\conf\\security\\java.security").c_str()) != INVALID_FILE_ATTRIBUTES;
-    const bool hasJavaBasePatch =
+        GetFileAttributesW((localDir + L"\\jre\\conf\\security\\java.security").c_str()) != INVALID_FILE_ATTRIBUTES);
+    const bool hasJavaBasePatch = !packageHasJre ||
         GetFileAttributesW((localDir + L"\\java-base-uwp-filesystem.jar").c_str()) != INVALID_FILE_ATTRIBUTES;
-    const bool hasJavaZipfsPatch =
+    const bool hasJavaZipfsPatch = !packageHasJre ||
         GetFileAttributesW((localDir + L"\\java-zipfs-realpath.jar").c_str()) != INVALID_FILE_ATTRIBUTES;
-    const bool hasJavaDesktopPatch =
+    const bool hasJavaDesktopPatch = !packageHasJre ||
         GetFileAttributesW((localDir + L"\\java-desktop-uwp-awt.jar").c_str()) != INVALID_FILE_ATTRIBUTES;
     const bool packageHasJre21 =
         GetFileAttributesW((packageDir + L"\\jre21\\bin\\server\\jvm.dll").c_str()) != INVALID_FILE_ATTRIBUTES;
@@ -265,6 +268,9 @@ bool SeedLocalRuntime(
     if (progress) {
         progress(L"Copying launcher files", L"Preparing mods and log configuration", 0.12f);
     }
+    // APPX may omit empty directories in a selected-only package. Keep the seed
+    // invariant even when all bundled mods live under runtime/version-mods.
+    EnsureDirectoryTree(localDir + L"\\game\\mods");
     CopyDirectoryContentsIfNeeded(packageDir + L"\\runtime\\bundled-mods", localDir + L"\\game\\mods");
     CopyDirectoryContentsIfNeeded(packageDir + L"\\runtime\\log_configs", localDir + L"\\game\\log_configs");
     CopyFileIfNeeded(packageDir + L"\\runtime\\version_catalog.tsv", localDir + L"\\runtime\\version_catalog.tsv");
@@ -1198,7 +1204,7 @@ MinecraftVersionInfo ResolveVersionInfo(const std::wstring& packageDir, const st
     }
 
     if (info.assetIndex.empty() && isDefault) info.assetIndex = a2w(kMinecraftAssetIndex);
-    if (info.launchVersion.empty() && isDefault) info.launchVersion = a2w(kFabricLaunchVersion);
+    if (info.launchVersion.empty() && isDefault && info.loader == L"fabric") info.launchVersion = a2w(kFabricLaunchVersion);
 
     const std::wstring perVersionMods = packageDir + L"\\runtime\\version-mods\\" + target.targetId;
     if (GetFileAttributesW(perVersionMods.c_str()) != INVALID_FILE_ATTRIBUTES) {
