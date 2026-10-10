@@ -2,6 +2,18 @@
 
 Notable changes to Bandit Launcher. Nightly packages are numbered by build revision rather than by release, so entries here are dated.
 
+## 2026-10-05
+
+### Fixed
+
+**A local build stamped the package with a version the console already had.** Without a `.local\app_build.txt` the local build numbers the package `1.0.0.0`, and neither Windows nor the console replaces an installed package with the same or a lower version, so a locally built package silently does not install over the nightly. `tools/dev/sync-native-build.ps1` now passes an explicit higher version.
+
+**The build did not export the certificate it signed with.** Nightly releases ship the public certificate next to the APPX, but a local build produced only the package, so there was nothing to trust on the console and a freshly installed package could fail to launch. `build.ps1` now writes the `.cer` next to the APPX.
+
+**A local build could not sign the package on a non English Windows.** The build looked for its code signing certificate by scanning the store for a certificate whose enhanced key usage was named `Code Signing`. That name is localized, so on a Spanish or German Windows the certificate the build had just created did not match and packaging stopped with `No code signing certificate for ...`. The usage is now matched by its object id, and the build reuses the `.pfx` it already exported into `staging\certs` instead of searching the store by subject, which also keeps the package family name stable across builds. CI was unaffected because GitHub runners are English.
+
+**NeoForge could never finish downloading on the native (mouse) launcher.** Every NeoForge target stopped one file short of a complete download (4091 of 4092 files on the report that led to this fix) and then looped on `Could not prepare Minecraft files. Retrying in 10 seconds`, and repairing or restarting changed nothing. The last file was NeoForge's guava dependency, which has by far the longest library path in any manifest at 153 characters. The native package identity adds about 18 characters of `LocalState` path that the relay package does not have, and the downloader's temporary `.download` suffix pushed that one path past the 260 character Win32 limit, so the file could never be written and the retry could never succeed. The launcher now calls file APIs with the extended length form of the path (`\\?\`), which lifts the limit, while the JVM, mods, and logs keep the plain path. Vanilla, Fabric, and Forge were never affected because none of their libraries come close to the limit, which is why only NeoForge was reported broken.
+
 ## 2026-09-04
 
 ### Security

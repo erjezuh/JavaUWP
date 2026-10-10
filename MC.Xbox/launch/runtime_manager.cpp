@@ -363,7 +363,7 @@ bool Sha1File(const std::wstring& path, std::string* outHex) {
     if (!outHex) return false;
 
     FILE* f = nullptr;
-    if (_wfopen_s(&f, path.c_str(), L"rb") != 0 || !f) {
+    if (_wfopen_s(&f, ExtendedLengthPath(path).c_str(), L"rb") != 0 || !f) {
         return false;
     }
 
@@ -719,8 +719,11 @@ bool DownloadUrlToFileWithHeaders(
 
         EnsureDirectoryTree(GetParentDir(destination));
         FILE* out = nullptr;
-        if (_wfopen_s(&out, destination.c_str(), L"wb") != 0 || !out) {
-            WriteLogF(L"Could not open download output %s err=%u", destination.c_str(), GetLastError());
+        if (_wfopen_s(&out, ExtendedLengthPath(destination).c_str(), L"wb") != 0 || !out) {
+            // the char count matters: a path over MAX_PATH that the extended-length
+            // helper cannot fix fails here
+            WriteLogF(L"Could not open download output %s err=%u chars=%zu",
+                destination.c_str(), GetLastError(), destination.size());
             WinHttpCloseHandle(request);
             WinHttpCloseHandle(connect);
             WinHttpCloseHandle(session);
@@ -869,7 +872,11 @@ bool EnsureRuntimeDownloads(
             const auto& entry = entries[entryIndex];
             const std::wstring finalPath = JoinRuntimeRelativePath(runtimeRoot, entry.relativePath);
             const std::wstring tempPath = finalPath + L".download";
-            DeleteFileW(tempPath.c_str());
+            // the staging name is the longest path the launcher ever writes, so
+            // every file API call here goes through the extended-length helper
+            const std::wstring extendedTempPath = ExtendedLengthPath(tempPath);
+            const std::wstring extendedFinalPath = ExtendedLengthPath(finalPath);
+            DeleteFileW(extendedTempPath.c_str());
 
             if (entryIndex < 25 || entryIndex % 100 == 0) {
                 WriteLogF(L"Downloading [%zu/%zu] %s", entryIndex + 1, entries.size(), entry.relativePath.c_str());
@@ -893,7 +900,7 @@ bool EnsureRuntimeDownloads(
                     inProgressBytes[entryIndex] = 0;
                 }
 
-                DeleteFileW(tempPath.c_str());
+                DeleteFileW(extendedTempPath.c_str());
                 if (attempt > 1) {
                     const DWORD delayMs = kDownloadRetryBaseDelayMs * static_cast<DWORD>(attempt - 1);
                     WriteLogF(L"Retrying download attempt=%d/%d delayMs=%u file=%s",
@@ -916,7 +923,7 @@ bool EnsureRuntimeDownloads(
             }
 
             if (!downloadedOk) {
-                DeleteFileW(tempPath.c_str());
+                DeleteFileW(extendedTempPath.c_str());
                 std::lock_guard<std::mutex> lock(stateMutex);
                 failed = true;
                 failureStatus = L"Download failed after retries";
@@ -931,7 +938,7 @@ bool EnsureRuntimeDownloads(
                     entry.relativePath.c_str(),
                     a2w(entry.sha1.c_str()).c_str(),
                     a2w(actual.c_str()).c_str());
-                DeleteFileW(tempPath.c_str());
+                DeleteFileW(extendedTempPath.c_str());
                 std::lock_guard<std::mutex> lock(stateMutex);
                 failed = true;
                 failureStatus = L"File verification failed";
@@ -940,10 +947,11 @@ bool EnsureRuntimeDownloads(
             }
 
             EnsureDirectoryTree(GetParentDir(finalPath));
-            DeleteFileW(finalPath.c_str());
-            if (!MoveFileExW(tempPath.c_str(), finalPath.c_str(), MOVEFILE_REPLACE_EXISTING)) {
-                WriteLogF(L"MoveFileEx failed for %s err=%u", finalPath.c_str(), GetLastError());
-                DeleteFileW(tempPath.c_str());
+            DeleteFileW(extendedFinalPath.c_str());
+            if (!MoveFileExW(extendedTempPath.c_str(), extendedFinalPath.c_str(), MOVEFILE_REPLACE_EXISTING)) {
+                WriteLogF(L"MoveFileEx failed for %s err=%u chars=%zu",
+                    finalPath.c_str(), GetLastError(), finalPath.size());
+                DeleteFileW(extendedTempPath.c_str());
                 std::lock_guard<std::mutex> lock(stateMutex);
                 failed = true;
                 failureStatus = L"Download install failed";

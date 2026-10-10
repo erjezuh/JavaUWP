@@ -406,7 +406,7 @@ if ($mcNeedsBuild) {
     $env:INCLUDE = "$mcBuildDir;$($tools.MsvcRoot)\include;${sdkRoot}Include\$sdkVer\ucrt;${sdkRoot}Include\$sdkVer\shared;${sdkRoot}Include\$sdkVer\um;${sdkRoot}Include\$sdkVer\winrt;${sdkRoot}Include\$sdkVer\cppwinrt;$jreSrc\include;$jreSrc\include\win32"
     $env:LIB = "$($tools.MsvcRoot)\lib\x64;${sdkRoot}Lib\$sdkVer\ucrt\x64;${sdkRoot}Lib\$sdkVer\um\x64"
 
-    & $tools.ClExe App.cpp launch\app_globals.cpp common\launcher_common.cpp common\crash_report.cpp mods\mod_defaults.cpp mods\mod_source.cpp mods\curseforge.cpp mods\manual_downloads.cpp mods\modpack_io.cpp mods\world_io.cpp net\http_client.cpp profiles\profiles.cpp net\remote_file_server.cpp net\web_relay_server.cpp auth\minecraft_auth.cpp ui\launcher_ui.cpp ui\launcher_mouse.cpp ui\mods_ui_globals.cpp mods\mods_browser.cpp launch\runtime_manager.cpp launch\minecraft_launch.cpp launch\launch_internal.cpp launch\loaders\loader_common.cpp launch\loaders\loader.cpp launch\loaders\fabric.cpp launch\loaders\neoforge.cpp launch\loaders\forge.cpp telemetry\telemetry.cpp telemetry\crash_fingerprint.cpp telemetry\crash_parse.cpp telemetry\compat_feed.cpp third_party\miniz\miniz.c /std:c++17 /EHsc $CommonClFlags /O2 /GL /Gw /MP /arch:AVX2 /DNDEBUG /D_UNICODE /DUNICODE /D_WIN32_WINNT=0x0A00 /D_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS /DMINIZ_NO_STDIO /DMINIZ_NO_TIME /I. /Icommon /Inet /Iauth /Iui /Imods /Iprofiles /Ilaunch /Ilaunch\loaders /Itelemetry /I..\mouse_support /Fo"$mcBuildDir\" `
+    & $tools.ClExe App.cpp launch\app_globals.cpp common\launcher_common.cpp common\long_path.cpp common\crash_report.cpp mods\mod_defaults.cpp mods\mod_source.cpp mods\curseforge.cpp mods\manual_downloads.cpp mods\modpack_io.cpp mods\world_io.cpp net\http_client.cpp profiles\profiles.cpp net\remote_file_server.cpp net\web_relay_server.cpp auth\minecraft_auth.cpp ui\launcher_ui.cpp ui\launcher_mouse.cpp ui\mods_ui_globals.cpp mods\mods_browser.cpp launch\runtime_manager.cpp launch\minecraft_launch.cpp launch\launch_internal.cpp launch\loaders\loader_common.cpp launch\loaders\loader.cpp launch\loaders\fabric.cpp launch\loaders\neoforge.cpp launch\loaders\forge.cpp telemetry\telemetry.cpp telemetry\crash_fingerprint.cpp telemetry\crash_parse.cpp telemetry\compat_feed.cpp third_party\miniz\miniz.c /std:c++17 /EHsc $CommonClFlags /O2 /GL /Gw /MP /arch:AVX2 /DNDEBUG /D_UNICODE /DUNICODE /D_WIN32_WINNT=0x0A00 /D_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS /DMINIZ_NO_STDIO /DMINIZ_NO_TIME /I. /Icommon /Inet /Iauth /Iui /Imods /Iprofiles /Ilaunch /Ilaunch\loaders /Itelemetry /I..\mouse_support /Fo"$mcBuildDir\" `
         /DWINAPI_FAMILY=WINAPI_FAMILY_APP `
         /link /LTCG /SUBSYSTEM:WINDOWS /ENTRY:wWinMainCRTStartup /MACHINE:X64 `
         /OUT:"$mcExe" kernel32.lib shell32.lib runtimeobject.lib windowsapp.lib ole32.lib oleaut32.lib d2d1.lib dwrite.lib d3d11.lib dxgi.lib windowscodecs.lib winhttp.lib bcrypt.lib ws2_32.lib
@@ -1236,24 +1236,49 @@ foreach ($name in $appxAssetNames) {
 Write-Host "=== Packaging ==="
 $cert = Join-Path $certDir $ProjectConfig.CertificateFileName
 $certName = if ($env:APPX_CERT_SUBJECT) { $env:APPX_CERT_SUBJECT } else { $ProjectConfig.DefaultCertificateSubject }
+$certPassword = ConvertTo-SecureString $ProjectConfig.CertificatePassword -AsPlainText -Force
 
-if (-not (Test-Path $cert)) {
-    $c = New-SelfSignedCertificate -Type CodeSigningCert -Subject $certName `
-        -KeyUsage DigitalSignature -CertStoreLocation "Cert:\CurrentUser\My" `
-        -TextExtension @("2.5.29.37={text}1.3.6.1.5.5.7.3.3","2.5.29.19={text}")
-    Export-PfxCertificate -Cert $c -FilePath $cert `
-        -Password (ConvertTo-SecureString $ProjectConfig.CertificatePassword -AsPlainText -Force) | Out-Null
-    Write-Host "Generated cert"
+# The dev certificate is exported so repeated builds sign with the same certificate and
+# keep the package family name, and therefore LocalState, stable. Reuse the exported file
+# first: looking the certificate up again by subject in the store fails on non English
+# Windows, because the enhanced key usage list is named in the system language there.
+$signingCertCandidates = @()
+if (Test-Path $cert) {
+    try {
+        $reusedCert = Import-PfxCertificate -FilePath $cert -CertStoreLocation "Cert:\CurrentUser\My" `
+            -Password $certPassword -ErrorAction Stop
+        $normalizedCertName = ($certName -replace '\s', '').ToLowerInvariant()
+        if ($reusedCert -and (($reusedCert.Subject -replace '\s', '').ToLowerInvariant()) -eq $normalizedCertName) {
+            $signingCertCandidates = @($reusedCert)
+        } elseif ($reusedCert) {
+            Write-Host "Ignoring $cert: its subject '$($reusedCert.Subject)' does not match '$certName'"
+        }
+    } catch {
+        Write-Host "Could not reuse $cert ($($_.Exception.Message)); a new certificate will be created"
+    }
 }
 
-$allSigningCertCandidates = Get-ChildItem Cert:\CurrentUser\My |
-    Where-Object {
-        $_.HasPrivateKey -and
-        ($_.EnhancedKeyUsageList | Where-Object { $_.FriendlyName -eq 'Code Signing' })
-    }
-$exactSigningCertCandidates = $allSigningCertCandidates | Where-Object { $_.Subject -eq $certName } | Sort-Object NotBefore -Descending
-$banditVaultSigningCertCandidates = $allSigningCertCandidates | Where-Object { $_.Subject -like '*BanditVault*' -and $_.Subject -ne $certName } | Sort-Object NotBefore -Descending
-$signingCertCandidates = @($exactSigningCertCandidates) + @($banditVaultSigningCertCandidates)
+if (-not $signingCertCandidates) {
+    $createdCert = New-SelfSignedCertificate -Type CodeSigningCert -Subject $certName `
+        -KeyUsage DigitalSignature -CertStoreLocation "Cert:\CurrentUser\My" `
+        -TextExtension @("2.5.29.37={text}1.3.6.1.5.5.7.3.3","2.5.29.19={text}")
+    Export-PfxCertificate -Cert $createdCert -FilePath $cert -Password $certPassword | Out-Null
+    Write-Host "Generated cert"
+    $signingCertCandidates = @($createdCert)
+}
+
+if (-not $signingCertCandidates) {
+    # last resort: a code signing certificate already in the store for this publisher. The
+    # usage is matched by object id, not by its display name, which is localized.
+    $allSigningCertCandidates = Get-ChildItem Cert:\CurrentUser\My |
+        Where-Object {
+            $_.HasPrivateKey -and
+            ($_.EnhancedKeyUsageList | Where-Object { $_.ObjectId.Value -eq '1.3.6.1.5.5.7.3.3' })
+        }
+    $exactSigningCertCandidates = $allSigningCertCandidates | Where-Object { $_.Subject -eq $certName } | Sort-Object NotBefore -Descending
+    $banditVaultSigningCertCandidates = $allSigningCertCandidates | Where-Object { $_.Subject -like '*BanditVault*' -and $_.Subject -ne $certName } | Sort-Object NotBefore -Descending
+    $signingCertCandidates = @($exactSigningCertCandidates) + @($banditVaultSigningCertCandidates)
+}
 if (-not $signingCertCandidates) {
     throw "No signing certificate for '$certName' in Cert:\CurrentUser\My. Restore the BanditVault certificate, or set APPX_CERT_SUBJECT to the subject you want to sign with. Signing with an unrelated certificate changes the package family name and loses LocalState."
 }
@@ -1309,6 +1334,22 @@ if (-not $signingSucceeded) {
     throw "Appx signing failed with every certificate matching '$certName'. The certificate is present but signtool rejected it, so check that it has not expired and that its private key is readable. Nothing was deleted."
 }
 if (-not (Test-Path $appx)) { throw "Appx package was not created" }
+
+# A self signed package cannot be launched until its certificate is trusted on the
+# console, so export the public certificate next to the package, the same way the
+# nightly workflow does.
+try {
+    $appxSignature = Get-AuthenticodeSignature -FilePath $appx
+    if ($appxSignature.SignerCertificate) {
+        $cerPath = [System.IO.Path]::ChangeExtension($appx, '.cer')
+        Export-Certificate -Cert $appxSignature.SignerCertificate -FilePath $cerPath -Force | Out-Null
+        Write-Host "Signing certificate: $cerPath"
+    } else {
+        Write-Warning "The signed package has no signer certificate, so no .cer was exported."
+    }
+} catch {
+    Write-Warning "Could not export the signing certificate: $($_.Exception.Message)"
+}
 
 if (-not $KeepStaging) {
     Remove-Item -Recurse -Force $pkg -ErrorAction SilentlyContinue

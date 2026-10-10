@@ -241,6 +241,22 @@ Missing or stale files download with limited parallelism. The first stable
 setting is six workers so the UI stays responsive and the Xbox storage path is
 not flooded with thousands of simultaneous asset writes.
 
+Some of those paths are long. The Xbox `LocalState` root is around 105
+characters once the package family name is included, NeoForge declares a guava
+library whose relative path is 153 characters, and the downloader stages files
+with a `.download` suffix, which is how one library ended up past the 260
+character Win32 limit and could never be written. File APIs therefore receive
+the extended length form of the path (`\\?\...`) through `ExtendedLengthPath()`
+in `common\long_path.cpp`. Two rules when touching this code: Win32 file calls
+go through that helper (or a helper in `common\launcher_common.cpp` that already
+does), and anything handed to the JVM, to mods, or to the log keeps the plain
+path, because the extended form turns off path normalization. The helper has a
+standalone test:
+
+```powershell
+.\MC.Xbox\common\tests\run-long-path-tests.ps1
+```
+
 ## Generate Fabric remapped jars
 
 Fabric remapped jars are created by running the Fabric client once on the local desktop cache. This step is needed before the compatibility mod can compile.
@@ -406,7 +422,7 @@ To include all ignored files, including downloaded cache files:
 - Forge controller compile failure: ensure the patched Forge client exists in the local cache and that `config\forge-install-profile.json` is present.
 - Missing native DLLs: run `.\scripts\setup.ps1`, which downloads them into `staging\cache\natives-1.21`.
 - First launch downloads every required official file after sign in. A later launch should verify and skip files that are already downloaded.
-- Runtime download failure: check `LocalState\logs\current\mc_launch.log` for the manifest path, URL, HTTP status, or SHA1 mismatch.
+- Runtime download failure: check `LocalState\logs\current\mc_launch.log` for the manifest path, URL, HTTP status, or SHA1 mismatch. A `Could not open download output ... chars=` line reports the destination path length and means the path is over the Win32 limit even after `ExtendedLengthPath()`.
 - Modrinth browse/install failure: check `LocalState\logs\current\mc_launch.log` for `Modrinth search`, `Modrinth versions`, HTTP status, download, or SHA1 verification messages.
 - Package signing failure: delete the ignored local `.pfx` under `staging\certs` and rerun `build.ps1`, or set `APPX_CERT_SUBJECT`.
 - If you can't find your appdata folder, type `%appdata%` into your address bar in your file explorer.
