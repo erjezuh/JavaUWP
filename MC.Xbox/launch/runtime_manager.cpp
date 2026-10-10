@@ -868,7 +868,13 @@ bool EnsureRuntimeDownloads(
 
             const auto& entry = entries[entryIndex];
             const std::wstring finalPath = JoinRuntimeRelativePath(runtimeRoot, entry.relativePath);
-            const std::wstring tempPath = finalPath + L".download";
+            // Keep the temp file name SHORT. Appending ".download" pushed the
+            // longest Maven path (Guava listenablefuture-9999.0-empty-to-avoid-
+            // conflict-with-guava.jar) past Windows MAX_PATH (267 > 260) and
+            // _wfopen_s failed with err=3 (ERROR_PATH_NOT_FOUND) forever for
+            // that single manifest entry. ".dl<entryIndex>" is unique per
+            // download job (no worker collisions) and always fits.
+            const std::wstring tempPath = GetParentDir(finalPath) + L"\\.dl" + std::to_wstring(entryIndex);
             DeleteFileW(tempPath.c_str());
 
             if (entryIndex < 25 || entryIndex % 100 == 0) {
