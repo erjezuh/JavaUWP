@@ -1240,20 +1240,70 @@ $certName = if ($env:APPX_CERT_SUBJECT) { $env:APPX_CERT_SUBJECT } else { $Proje
 if (-not (Test-Path $cert)) {
     $c = New-SelfSignedCertificate -Type CodeSigningCert -Subject $certName `
         -KeyUsage DigitalSignature -CertStoreLocation "Cert:\CurrentUser\My" `
+        -NotAfter (Get-Date).AddYears(10) `
         -TextExtension @("2.5.29.37={text}1.3.6.1.5.5.7.3.3","2.5.29.19={text}")
     Export-PfxCertificate -Cert $c -FilePath $cert `
         -Password (ConvertTo-SecureString $ProjectConfig.CertificatePassword -AsPlainText -Force) | Out-Null
     Write-Host "Generated cert"
 }
 
-$allSigningCertCandidates = Get-ChildItem Cert:\CurrentUser\My |
-    Where-Object {
-        $_.HasPrivateKey -and
-        ($_.EnhancedKeyUsageList | Where-Object { $_.FriendlyName -eq 'Code Signing' })
-    }
-$exactSigningCertCandidates = $allSigningCertCandidates | Where-Object { $_.Subject -eq $certName } | Sort-Object NotBefore -Descending
-$banditVaultSigningCertCandidates = $allSigningCertCandidates | Where-Object { $_.Subject -like '*BanditVault*' -and $_.Subject -ne $certName } | Sort-Object NotBefore -Descending
+$allUserCertificates = @(Get-ChildItem Cert:\CurrentUser\My | Where-Object { $_.HasPrivateKey })
+
+# Prefer the exact configured certificate subject. This preserves the existing
+# package identity and avoids depending on localized/empty EKU FriendlyName
+# representations ("Code Signing" is localized on non-English Windows).
+$exactSigningCertCandidates = @(
+    $allUserCertificates |
+        Where-Object { $_.Subject -eq $certName } |
+        Sort-Object NotBefore -Descending
+)
+
+# For fallback certificates, require the stable Code Signing EKU OID.
+$codeSigningCertCandidates = @(
+    $allUserCertificates |
+        Where-Object {
+            $eku = @($_.EnhancedKeyUsageList)
+            @($eku | Where-Object { $_.ObjectId.Value -eq '1.3.6.1.5.5.7.3.3' }).Count -gt 0
+        } |
+        Sort-Object NotBefore -Descending
+)
+$banditVaultSigningCertCandidates = @(
+    $codeSigningCertCandidates |
+        Where-Object { $_.Subject -like '*BanditVault*' -and $_.Subject -ne $certName }
+)
 $signingCertCandidates = @($exactSigningCertCandidates) + @($banditVaultSigningCertCandidates)
+if (-not $signingCertCandidates) {
+    # Self-heal: the store certificate vanished (expired or cleaned up) while
+    # the .pfx file survived, so the block above skipped regeneration. Recreate
+    # it with long validity and retry the lookup instead of dying at packaging.
+    Write-Host "Signing certificate missing from Cert:\CurrentUser\My - regenerating '$certName'"
+    $c = New-SelfSignedCertificate -Type CodeSigningCert -Subject $certName `
+        -KeyUsage DigitalSignature -CertStoreLocation "Cert:\CurrentUser\My" `
+        -NotAfter (Get-Date).AddYears(10) `
+        -TextExtension @("2.5.29.37={text}1.3.6.1.5.5.7.3.3","2.5.29.19={text}")
+    Export-PfxCertificate -Cert $c -FilePath $cert `
+        -Password (ConvertTo-SecureString $ProjectConfig.CertificatePassword -AsPlainText -Force) | Out-Null
+    Write-Host "Regenerated signing cert"
+    $allUserCertificates = @(Get-ChildItem Cert:\CurrentUser\My | Where-Object { $_.HasPrivateKey })
+    $exactSigningCertCandidates = @(
+        $allUserCertificates |
+            Where-Object { $_.Subject -eq $certName } |
+            Sort-Object NotBefore -Descending
+    )
+    $codeSigningCertCandidates = @(
+        $allUserCertificates |
+            Where-Object {
+                $eku = @($_.EnhancedKeyUsageList)
+                @($eku | Where-Object { $_.ObjectId.Value -eq '1.3.6.1.5.5.7.3.3' }).Count -gt 0
+            } |
+            Sort-Object NotBefore -Descending
+    )
+    $banditVaultSigningCertCandidates = @(
+        $codeSigningCertCandidates |
+            Where-Object { $_.Subject -like '*BanditVault*' -and $_.Subject -ne $certName }
+    )
+    $signingCertCandidates = @($exactSigningCertCandidates) + @($banditVaultSigningCertCandidates)
+}
 if (-not $signingCertCandidates) {
     throw "No signing certificate for '$certName' in Cert:\CurrentUser\My. Restore the BanditVault certificate, or set APPX_CERT_SUBJECT to the subject you want to sign with. Signing with an unrelated certificate changes the package family name and loses LocalState."
 }
