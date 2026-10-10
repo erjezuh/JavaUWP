@@ -1091,8 +1091,11 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
     std::vector<std::string> vmOptionStorage;
     vmOptionStorage.reserve(64);
     // 5120 MB app budget on series s dev mode, so a 3G heap that never resizes fits
-    vmOptionStorage.push_back("-Xmx3G");
-    vmOptionStorage.push_back("-Xms512M");
+    // 5120 MB UWP app budget on Series S|X dev mode. The heap grows into the
+    // budget on demand: 4 GB user-requested ceiling (2026-10-09) with a 1 GB
+    // floor, so only the memory really used is ever committed.
+    vmOptionStorage.push_back("-Xmx4096M");
+    vmOptionStorage.push_back("-Xms1024M");
     vmOptionStorage.push_back("-XX:MaxDirectMemorySize=512M");
 
     // ignoreUnrecognized is JNI_FALSE, so a typo in jvm_args.txt would stop it booting
@@ -1106,7 +1109,15 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
     vmOptionStorage.push_back("-XX:G1HeapRegionSize=32M");
     // hsperfdata is mmapped and rewritten every collection, on console storage that is a frame hitch
     vmOptionStorage.push_back("-XX:+PerfDisableSharedMem");
-    WriteLog(L"JVM heap: -Xmx3G -Xms512M -XX:MaxDirectMemorySize=512M, G1 at 50ms pause target");
+    // modpack-friendly G1 extras: parallel reference processing (mods churn
+    // weak/soft refs), string dedup (configs/lang data), and earlier mixed
+    // collections so a spike never falls through to a full GC.
+    vmOptionStorage.push_back("-XX:+ParallelRefProcEnabled");
+    vmOptionStorage.push_back("-XX:+UseStringDeduplication");
+    vmOptionStorage.push_back("-XX:G1HeapWastePercent=5");
+    vmOptionStorage.push_back("-XX:G1MixedGCCountTarget=4");
+    vmOptionStorage.push_back("-XX:InitiatingHeapOccupancyPercent=15");
+    WriteLog(L"JVM heap: -Xmx4096M -Xms1024M -XX:MaxDirectMemorySize=512M, G1 tuned + string dedup + parallel refproc");
     vmOptionStorage.push_back("--enable-native-access=ALL-UNNAMED");
     vmOptionStorage.push_back("--add-opens=jdk.zipfs/jdk.nio.zipfs=ALL-UNNAMED");
     const std::wstring selectedJavaBasePatchName =
