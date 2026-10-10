@@ -1,6 +1,7 @@
 #include "mods_browser.h"
 
 #include "modpack_io.h"
+#include "mod_defaults.h"
 #include "auth_screen.h"
 #include "compat_feed.h"
 #include "curseforge.h"
@@ -1189,23 +1190,6 @@ static bool InstallModpack(const ModCard& card, const std::wstring& runtimeRoot,
     DeleteFileW(mrPath.c_str());
     if (ok && !skippedNote.empty()) error = skippedNote;
     return ok;
-}
-
-// a filename check, because install records only cover mods added through the browser
-static bool ProfileHasShaderLoader(const std::wstring& modsDir) {
-    WIN32_FIND_DATAW fd = {};
-    HANDLE h = FindFirstFileW((modsDir + L"\\*.jar").c_str(), &fd);
-    if (h == INVALID_HANDLE_VALUE) return false;
-    bool found = false;
-    do {
-        const std::wstring name = ToLowerW(fd.cFileName);
-        if (name.find(L"iris") != std::wstring::npos || name.find(L"oculus") != std::wstring::npos) {
-            found = true;
-            break;
-        }
-    } while (FindNextFileW(h, &fd));
-    FindClose(h);
-    return found;
 }
 
 static bool InstallContentPack(

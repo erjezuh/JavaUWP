@@ -2,6 +2,22 @@
 
 Notable changes to Bandit Launcher. Nightly packages are numbered by build revision rather than by release, so entries here are dated.
 
+## 2026-10-10
+
+### UWP launch and shader stability
+
+- Size the JVM heap against the app memory budget, with extra native headroom
+  whenever Iris/Oculus/OptiFine is installed. Old JVM argument files cannot
+  override the cap, but smaller heap/direct-buffer settings remain supported.
+- Create LocalState directories leaf-first and verify writable profile/temp/shader
+  paths before starting Java. Use the selected target-native directory for JNA.
+- Add optional, UWP-only Fabric guards for Sodium desktop adapter discovery and
+  OSHI GPU inventory, without disabling shader rendering or OpenGL checks.
+- Use Controlify 2.x's GLFW backend instead of unavailable desktop SDL3/hidapi
+  services. Controlify 3.x is not covered because it removed that fallback.
+- Add focused memory/storage policy and native-callback tests, plus an on-console
+  shader regression checklist in `docs/SHADERS.md`.
+
 ## 2026-09-04
 
 ### Security

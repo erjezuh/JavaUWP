@@ -28,10 +28,16 @@ The mouse relay does not lag unless you have a bad computer or *really* bad wifi
 You don't need a Game Pass subscription or anything else to play multiplayer. You can hop on any server you wish (ideally with mouse relay and a keyboard).
 
 ## I tried to add Controlify (or another controller mod) to my instance, and it didn't work. What happened?
-Before adding a different controller mod, click on the profile you're modifying and turn Bandit Controller off. That will prevent your desired controller mod from deleting itself when the game launches.
+Before adding a different controller mod, click on the profile you're modifying and turn Bandit Controller off. The launcher otherwise removes conflicting controller mods at launch.
+
+On Fabric, the Xbox compatibility mod routes Controlify 2.0.x and 2.4.x through the launcher's UWP GLFW gamepad backend. Desktop SDL3 downloads and hidapi scanning are intentionally skipped; features that depend on SDL/HID (such as advanced rumble and device identification) are unavailable. Controlify 3.x removed this GLFW fallback and is **not** covered by these guards; use Bandit Controller instead. Do not copy arbitrary desktop SDL3/hidapi/Ole32 DLLs into the app or try to grant the sandbox administrator permissions.
 
 ## How can I change the RAM allocation?
-Unfortunately, you can't allocate more than 3-4 GB of RAM, as this is the max achievable by an XBOX in Developer Mode.
+The launcher sizes the Java heap against the actual UWP app memory limit, including memory already used by the host. With an Iris, Oculus or OptiFine shader loader installed, the heap ceiling is 3 GB and the calculation leaves 2 GB for native allocations (direct buffers, JVM overhead and Mesa/shader resources). The resulting heap can be smaller than 3 GB. Without a shader loader, the ceiling is 4 GB with 1 GB of native headroom.
+
+`LocalState\jvm_args.txt` can request smaller heap/direct-buffer sizes, but cannot override these caps. Check `Effective JVM memory` in `logs\current\mc_launch.log` for the values actually passed to Java. An old `-Xmx4G` line no longer silently consumes shader headroom.
+
+See [Shader troubleshooting](SHADERS.md) for the checks to perform after updating.
 
 ## How do I upload worlds?
 Open Bandit Launcher, start Remote Files, and go to that link and upload your world to the portal.

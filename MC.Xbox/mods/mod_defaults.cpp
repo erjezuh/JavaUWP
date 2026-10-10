@@ -69,6 +69,14 @@ static bool FindModJarByFabricIdOrName(
     return false;
 }
 
+bool ProfileHasShaderLoader(const std::wstring& modsDir) {
+    if (modsDir.empty()) return false;
+    std::wstring jar;
+    return FindModJarByFabricIdOrName(modsDir, L"iris", L"iris", jar) ||
+        FindModJarByFabricIdOrName(modsDir, L"oculus", L"oculus", jar) ||
+        FindModJarByFabricIdOrName(modsDir, L"optifine", L"optifine", jar);
+}
+
 static bool JsonArrayRemoveString(winrt::Windows::Data::Json::JsonObject& root, const wchar_t* key, const std::wstring& item) {
     using namespace winrt::Windows::Data::Json;
     if (!root.HasKey(key) || root.GetNamedValue(key).ValueType() != JsonValueType::Array) return false;

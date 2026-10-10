@@ -365,6 +365,19 @@ The build script:
 13. Creates and signs `output\BanditLauncher_<appx-version>.appx`.
 14. Deletes `staging\package` unless `-KeepStaging` is set.
 
+## Focused UWP launch regression tests
+
+After setup, run the C++ memory/storage policy tests and Java native-guard callback
+unit tests without packaging an APPX:
+
+```powershell
+.\scripts\test-uwp-launch.ps1
+```
+
+An APPX build still requires the Windows SDK/MSVC toolchain above. Passing these
+unit tests alone does not establish that a particular shader pack works on Xbox;
+see [SHADERS.md](SHADERS.md) for the on-console checks.
+
 ## Clean outputs
 
 Preview cleanup:

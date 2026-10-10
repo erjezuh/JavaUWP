@@ -1,4 +1,5 @@
 #include "minecraft_launch.h"
+#include "jvm_memory.h"
 
 #include "app_globals.h"
 #include "crash_report.h"
@@ -491,14 +492,35 @@ static std::wstring FileUriFromPath(const std::wstring& path) {
 }
 
 static bool IsJvmMemoryOption(const std::wstring& arg) {
-    const std::wstring trimmed = TrimWhitespace(arg);
-    if (trimmed.empty()) return false;
-    const std::wstring lower = ToLowerW(trimmed);
-    return lower.rfind(L"-xmx", 0) == 0 ||
-        lower.rfind(L"-xms", 0) == 0 ||
-        lower.rfind(L"-xx:maxram", 0) == 0 ||
-        lower.rfind(L"-xx:initialram", 0) == 0 ||
-        lower.rfind(L"-xx:heap", 0) == 0;
+    return launchmemory::IsMemoryOption(w2a(TrimWhitespace(arg)));
+}
+
+static bool PrepareWritableDirectory(const std::wstring& path) {
+    if (!EnsureDirectoryTree(path)) {
+        WriteLogF(L"Cannot create writable launch directory: %s err=%u", path.c_str(), GetLastError());
+        return false;
+    }
+    // Checking attributes alone does not prove that an AppContainer can write here.
+    const std::wstring probe = path + L"\\.bandit-write-probe-" +
+        std::to_wstring(GetCurrentProcessId()) + L"-" + std::to_wstring(GetTickCount64());
+    CREATEFILE2_EXTENDED_PARAMETERS parameters = {};
+    parameters.dwSize = sizeof(parameters);
+    parameters.dwFileAttributes = FILE_ATTRIBUTE_TEMPORARY;
+    parameters.dwFileFlags = FILE_FLAG_DELETE_ON_CLOSE;
+    HANDLE file = CreateFile2(probe.c_str(), GENERIC_WRITE | DELETE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, CREATE_NEW, &parameters);
+    if (file == INVALID_HANDLE_VALUE) {
+        WriteLogF(L"Launch directory is not writable: %s err=%u", path.c_str(), GetLastError());
+        return false;
+    }
+    const char value = 0;
+    DWORD written = 0;
+    const bool writeSucceeded = WriteFile(file, &value, sizeof(value), &written, nullptr) != FALSE;
+    const bool writable = writeSucceeded && written == sizeof(value);
+    const DWORD error = writable ? ERROR_SUCCESS : (writeSucceeded ? ERROR_WRITE_FAULT : GetLastError());
+    CloseHandle(file); // Delete-on-close also cleans up a failed probe.
+    if (!writable) WriteLogF(L"Launch directory write probe failed: %s err=%u", path.c_str(), error);
+    return writable;
 }
 
 void CollectManifestLibraryJars(
@@ -976,8 +998,9 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
         replaceAll(L"${launcher_version}", L"1");
         return arg;
     };
-    const std::wstring jnaTmpDir = gameDir + L"\\tmp";
-    const std::wstring lwjglTmpDir = exeDir + L"\\tmp";
+    const std::wstring tmpDir = gameDir + L"\\tmp";
+    const std::wstring jnaTmpDir = tmpDir + L"\\jna";
+    const std::wstring lwjglTmpDir = tmpDir + L"\\lwjgl";
     const std::wstring launcherOverrideDir = gameDir + L"\\launcher-overrides";
     const std::wstring packagedNativesDir = packageDir + L"\\natives";
     const bool suppliedNativesReady =
@@ -989,6 +1012,15 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
     const std::wstring lwjglNativeDir =
         suppliedNativesReady ? nativesDir :
         (packagedNativesReady ? packagedNativesDir : nativesDir);
+    for (const wchar_t* dll : { L"lwjgl.dll", L"glfw.dll", L"jnidispatch.dll" }) {
+        const std::wstring nativePath = lwjglNativeDir + L"\\" + dll;
+        const DWORD attributes = GetFileAttributesW(nativePath.c_str());
+        if (attributes == INVALID_FILE_ATTRIBUTES || (attributes & FILE_ATTRIBUTE_DIRECTORY)) {
+            WriteLogF(L"Required target native library missing: %s. Repair runtime downloads before launching.", nativePath.c_str());
+            reportProgress(L"Native runtime incomplete", L"Repair downloads to restore the target's native libraries.", 0.12f);
+            return false;
+        }
+    }
     const std::wstring lwjglGlfwDll = lwjglNativeDir + L"\\glfw.dll";
     const std::wstring logConfigPath = exeDir + L"\\game\\log_configs\\client-uwp.xml";
     const std::wstring fabricLogPath = gameDir + L"\\logs\\fabric-loader.log";
@@ -1005,8 +1037,19 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
     EnsureDirectoryTree(gameDir + L"\\resourcepacks");
     EnsureDirectoryTree(gameDir + L"\\screenshots");
     EnsureDirectoryTree(gameDir + L"\\config");
-    EnsureDirectoryTree(jnaTmpDir);
-    EnsureDirectoryTree(launcherOverrideDir);
+    for (const auto& directory : { gameDir, gameDir + L"\\config", tmpDir, jnaTmpDir, lwjglTmpDir,
+        gameDir + L"\\shaderpacks", launcherOverrideDir }) {
+        if (!PrepareWritableDirectory(directory)) {
+            reportProgress(L"Cannot prepare game storage",
+                L"The profile's temporary or shader directory is not writable. See mc_launch.log for the path and error.", 0.12f);
+            return false;
+        }
+    }
+    if (!SetEnvironmentVariableW(L"TEMP", tmpDir.c_str()) || !SetEnvironmentVariableW(L"TMP", tmpDir.c_str())) {
+        WriteLogF(L"Could not set the native temporary directory err=%u", GetLastError());
+        return false;
+    }
+    WriteLogF(L"Writable native/Java temporary directory: %s", tmpDir.c_str());
     DeleteDirectoryTree(gameDir + L"\\showdown");
     DeleteDirectoryTree(exeDir + L"\\showdown");
     EnsureDirectoryTree(gameDir + L"\\showdown");
@@ -1028,7 +1071,6 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
     } else {
         WriteLogF(L"Failed to set process current directory to gameDir err=%u", GetLastError());
     }
-    EnsureDirectoryTree(lwjglTmpDir);
     DeleteFileW(javaLog.c_str());
     DeleteFileW(stderrLogPath.c_str());
     DeleteFileW(fabricLogPath.c_str());
@@ -1090,13 +1132,22 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
 
     std::vector<std::string> vmOptionStorage;
     vmOptionStorage.reserve(64);
-    // 5120 MB app budget on series s dev mode, so a 3G heap that never resizes fits
-    // 5120 MB UWP app budget on Series S|X dev mode. The heap grows into the
-    // budget on demand: 4 GB user-requested ceiling (2026-10-09) with a 1 GB
-    // floor, so only the memory really used is ever committed.
-    vmOptionStorage.push_back("-Xmx4096M");
-    vmOptionStorage.push_back("-Xms1024M");
-    vmOptionStorage.push_back("-XX:MaxDirectMemorySize=512M");
+    const bool shaderLoaderPresent = ProfileHasShaderLoader(userModsDir) || ProfileHasShaderLoader(bundledModsDir);
+    unsigned long long appLimitMb = 0;
+    unsigned long long appUsedMb = 0;
+    if (!ReadAppMemoryBudget(appLimitMb, appUsedMb)) {
+        WriteLog(L"App memory budget unavailable; using conservative JVM limits for the selected renderer");
+    }
+    auto memoryBudget = launchmemory::ChooseBudget(appLimitMb, appUsedMb, shaderLoaderPresent);
+    WriteLogF(L"JVM memory budget: app=%llu MB used=%llu MB reserve=%llu MB heapCap=%llu MB shaderLoader=%d",
+        appLimitMb, appUsedMb, memoryBudget.nativeReserveMb, memoryBudget.heapLimitMb, shaderLoaderPresent ? 1 : 0);
+    if (!memoryBudget.CanLaunch()) {
+        fclose(af);
+        reportProgress(L"Not enough app memory",
+            L"The UWP memory budget cannot fit Java and the graphics runtime. Close other apps and use Game mode in Dev Home.", 0.12f);
+        WriteLog(L"Refusing to start the JVM without memory headroom for the graphics runtime");
+        return false;
+    }
 
     // ignoreUnrecognized is JNI_FALSE, so a typo in jvm_args.txt would stop it booting
     vmOptionStorage.push_back("-XX:+IgnoreUnrecognizedVMOptions");
@@ -1117,7 +1168,6 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
     vmOptionStorage.push_back("-XX:G1HeapWastePercent=5");
     vmOptionStorage.push_back("-XX:G1MixedGCCountTarget=4");
     vmOptionStorage.push_back("-XX:InitiatingHeapOccupancyPercent=15");
-    WriteLog(L"JVM heap: -Xmx4096M -Xms1024M -XX:MaxDirectMemorySize=512M, G1 tuned + string dedup + parallel refproc");
     vmOptionStorage.push_back("--enable-native-access=ALL-UNNAMED");
     vmOptionStorage.push_back("--add-opens=jdk.zipfs/jdk.nio.zipfs=ALL-UNNAMED");
     const std::wstring selectedJavaBasePatchName =
@@ -1182,12 +1232,15 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
     if (VerboseLoggingEnabled()) {
         vmOptionStorage.push_back("-Dmixin.debug.verbose=true");
     }
-    vmOptionStorage.push_back("-Djava.io.tmpdir=" + w2a(fwd(jnaTmpDir)));
+    vmOptionStorage.push_back("-Dbanditvault.uwp=true");
+    vmOptionStorage.push_back("-Duser.home=" + w2a(fwd(exeDir)));
+    vmOptionStorage.push_back("-Djava.io.tmpdir=" + w2a(fwd(tmpDir)));
     vmOptionStorage.push_back("-Djna.tmpdir=" + w2a(fwd(jnaTmpDir)));
     vmOptionStorage.push_back("-Djna.nosys=true");
     vmOptionStorage.push_back("-Djna.nounpack=true");
     vmOptionStorage.push_back("-Djna.boot.library.name=jnidispatch");
-    vmOptionStorage.push_back("-Djna.boot.library.path=" + w2a(fwd(nativesDir)));
+    vmOptionStorage.push_back("-Djna.boot.library.path=" + w2a(fwd(lwjglNativeDir)));
+    vmOptionStorage.push_back("-Djna.library.path=" + w2a(fwd(lwjglNativeDir)));
     vmOptionStorage.push_back("-Djava.library.path=" + w2a(fwd(lwjglNativeDir)));
     vmOptionStorage.push_back("-Dorg.lwjgl.librarypath=" + w2a(fwd(lwjglNativeDir)));
     if (VerboseLoggingEnabled()) {
@@ -1226,7 +1279,7 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
     vmOptionStorage.push_back("-Dlog4j.configurationFile=" + w2a(FileUriFromPath(logConfigPath)));
     vmOptionStorage.push_back("-XX:ErrorFile=" + w2a(fwd(gameDir + L"\\hs_err_pid%p.log")));
 
-    // appended last on purpose, hotspot takes the last occurrence so this overrides the built ins
+    // User tuning is applied last, except that memory options cannot consume the graphics reserve.
     const std::wstring jvmArgsPath = exeDir + L"\\jvm_args.txt";
     if (GetFileAttributesW(jvmArgsPath.c_str()) == INVALID_FILE_ATTRIBUTES) {
         // resolved here because the template has no way to know where LocalState landed
@@ -1235,9 +1288,13 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
             L"# Bandit Launcher JVM options\n"
             L"# One option per line. Lines starting with # are ignored.\n"
             L"#\n"
-            L"# These are appended after the launcher's own options, so anything set here\n"
-            L"# overrides the built in value. The built ins are:\n"
-            L"#   -Xmx3G -Xms512M -XX:MaxDirectMemorySize=512M\n"
+            L"# Options override the built in values, except memory sizes are capped to the\n"
+            L"# UWP budget. With Iris/Oculus/OptiFine installed, the heap is at most 3 GB\n"
+            L"# and 2 GB is reserved for native allocations, including Mesa shaders.\n"
+            L"# Without a shader loader the heap ceiling is 4 GB, subject to the app limit.\n"
+            L"# Initial heap is at most 1 GB; direct buffers are capped to 512 MB.\n"
+            L"# Smaller -Xmx/-Xms/-XX:MaxDirectMemorySize values are respected.\n"
+            L"# Other built ins are:\n"
             L"#   -XX:+UseG1GC -XX:+PerfDisableSharedMem\n"
             L"#   -XX:MaxGCPauseMillis=50 -XX:G1NewSizePercent=20\n"
             L"#   -XX:G1ReservePercent=20 -XX:G1HeapRegionSize=32M\n"
@@ -1292,11 +1349,10 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
                 WriteLogF(L"jvm_args.txt ignoring line, not an option: %s", arg.c_str());
                 continue;
             }
-            vmOptionStorage.push_back(w2a(arg));
-            if (IsJvmMemoryOption(arg)) {
-                // this file is applied last, so a stale line here silently beats the built in heap
-                WriteLogF(L"jvm_args.txt OVERRIDES the built in heap setting: %s", arg.c_str());
+            if (launchmemory::ApplyUserOption(memoryBudget, w2a(arg))) {
+                WriteLogF(L"jvm_args.txt memory option constrained to UWP budget: %s", arg.c_str());
             } else {
+                vmOptionStorage.push_back(w2a(arg));
                 WriteLogF(L"jvm_args.txt applying: %s", arg.c_str());
             }
             ++applied;
@@ -1305,6 +1361,13 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
     } else {
         WriteLogF(L"jvm_args.txt not present at %s, using built in options only", jvmArgsPath.c_str());
     }
+
+    launchmemory::Normalize(memoryBudget);
+    vmOptionStorage.push_back("-Xmx" + std::to_string(memoryBudget.maxHeapMb) + "M");
+    vmOptionStorage.push_back("-Xms" + std::to_string(memoryBudget.initialHeapMb) + "M");
+    vmOptionStorage.push_back("-XX:MaxDirectMemorySize=" + std::to_string(memoryBudget.directMb) + "M");
+    WriteLogF(L"Effective JVM memory: -Xmx%lluM -Xms%lluM -XX:MaxDirectMemorySize=%lluM",
+        memoryBudget.maxHeapMb, memoryBudget.initialHeapMb, memoryBudget.directMb);
 
     std::vector<std::string> appArgs = {
         "--username", authConfig.username,

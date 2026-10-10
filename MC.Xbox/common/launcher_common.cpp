@@ -1,4 +1,5 @@
 #include "launcher_common.h"
+#include "directory_tree.h"
 
 #include <cstdarg>
 #include <algorithm>
@@ -165,36 +166,24 @@ std::wstring a2w(const char* utf8) {
 }
 
 bool EnsureDirectoryTree(const std::wstring& path) {
-    if (path.empty()) return false;
-    if (GetFileAttributesW(path.c_str()) != INVALID_FILE_ATTRIBUTES) return true;
-
-    std::wstring current;
-    size_t start = 0;
-    if (path.size() >= 2 && path[1] == L':') {
-        current = path.substr(0, 2);
-        start = 2;
-    }
-
-    while (start < path.size()) {
-        size_t next = path.find_first_of(L"\\/", start);
-        std::wstring part = path.substr(
-            start,
-            next == std::wstring::npos ? path.size() - start : next - start);
-        if (!part.empty()) {
-            if (!current.empty() && current.back() != L'\\') current += L'\\';
-            current += part;
-            if (GetFileAttributesW(current.c_str()) == INVALID_FILE_ATTRIBUTES) {
-                if (!CreateDirectoryW(current.c_str(), nullptr) &&
-                    GetLastError() != ERROR_ALREADY_EXISTS) {
-                    return false;
-                }
-            }
+    return directorytree::Ensure(path, [](const std::wstring& directory) {
+        const DWORD attrs = GetFileAttributesW(directory.c_str());
+        if (attrs != INVALID_FILE_ATTRIBUTES) {
+            if (attrs & FILE_ATTRIBUTE_DIRECTORY) return directorytree::Result::Ready;
+            SetLastError(ERROR_DIRECTORY);
+            return directorytree::Result::Failed;
         }
-        if (next == std::wstring::npos) break;
-        start = next + 1;
-    }
-
-    return GetFileAttributesW(path.c_str()) != INVALID_FILE_ATTRIBUTES;
+        if (CreateDirectoryW(directory.c_str(), nullptr)) return directorytree::Result::Ready;
+        const DWORD error = GetLastError();
+        if (error == ERROR_ALREADY_EXISTS) {
+            // Another thread may have created it. A file with this name is not a directory.
+            if (DirectoryExists(directory)) return directorytree::Result::Ready;
+            SetLastError(ERROR_DIRECTORY);
+        }
+        return error == ERROR_PATH_NOT_FOUND
+            ? directorytree::Result::MissingParent
+            : directorytree::Result::Failed;
+    });
 }
 
 bool DirectoryExists(const std::wstring& path) {

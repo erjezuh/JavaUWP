@@ -4,7 +4,7 @@ Mods that have been tested and confirmed working. Will update over time as more 
 - [AsyncParticles](https://modrinth.com/mod/asyncparticles)
 - [Balm](https://modrinth.com/mod/balm)
 - [C2ME](https://modrinth.com/mod/c2me-fabric)
-- [Controlify](https://modrinth.com/mod/controlify)
+- [Controlify](https://modrinth.com/mod/controlify) — 2.x on Fabric via the UWP GLFW fallback; see the [controller limitations](FAQ.md#i-tried-to-add-controlify-or-another-controller-mod-to-my-instance-and-it-didnt-work-what-happened).
 - [Emotecraft](https://modrinth.com/plugin/emotecraft)
 - [Essential](https://modrinth.com/mod/essential)
 - [Fabric API](https://modrinth.com/mod/fabric-api)

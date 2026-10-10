@@ -5,8 +5,14 @@
   "compatibilityLevel": "JAVA_21",
   "client": [
     "CobblemonShowdownFileSystemMixin",
+    "ControlifyGlfwMixin",
+    "ControlifyHidMixin",
+    "ControlifyLegacySdlMixin",
+    "ControlifySdlMixin",
     "MinecraftClientExitMixin",
+    "OshiGraphicsCardMixin",
     "PathUtilBypassMixin",
+    "SodiumGraphicsAdapterMixin",
     "SystemDetailsOshiBypassMixin",
     "ZipFsBypassMixin"
   ],

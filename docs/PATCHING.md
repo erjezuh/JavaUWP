@@ -53,6 +53,26 @@ Current mixins:
 - `ZipFsBypass121Mixin`
 - `ZipFsBypassMixin`
 
+The optional native guards are registered for both the main and 26.x Fabric variants:
+
+- `SodiumGraphicsAdapterMixin`: skips the desktop adapter inventory in the old
+  `me.jellysquid` and new `net.caffeinemc` namespaces, including Fabric pre-launch.
+  It returns an empty adapter collection, rather than leaving null state or
+  inventing a Windows GPU. Mesa's OpenGL capability detection and shader rendering
+  are not disabled. Merely setting `sodium.checks.*` would not skip this probe.
+- `OshiGraphicsCardMixin`: intercepts the Windows HAL before GPU inventory can
+  initialise native registry/WMI/Ole32 code. The existing Minecraft system-report
+  guard continues to cover the rest of Minecraft's diagnostic hardware probe.
+- `ControlifyGlfwMixin`, `ControlifyLegacySdlMixin`, `ControlifySdlMixin` and
+  `ControlifyHidMixin`: select Controlify 2.x's existing GLFW fallback and keep the
+  unavailable HID service marked disabled. Both the 2.0.x onboarding path and the
+  2.4.x direct SDL load path are covered. Controlify 3.x has no equivalent fallback.
+
+All these targets are `@Pseudo` and `remap = false`, and their callbacks only run
+when the host supplies `-Dbanditvault.uwp=true`. The game and optional mods do not
+need to be on the compile classpath for these guards. These are Fabric mixins;
+they do not claim to intercept NeoForge's earlier graphics bootstrap service.
+
 Build it directly with:
 
 ```powershell
@@ -205,6 +225,42 @@ securejarhandler-uwp-patch.jar
 The root `download_manifest.tsv` remains the default target manifest. The `runtime\manifests` folder contains per target manifests for cataloged Fabric, Forge, and NeoForge targets.
 
 `MC.Xbox.exe` writes a `LocalState\.download_manifest` marker containing the selected launch target and packaged manifest hash. If that marker changes, the launcher removes downloaded official runtime folders before validating the new manifest. The signed in menu's `Repair downloads` action forces this cleanup for the current target.
+
+## Writable paths and shader memory
+
+The shared UWP host creates directories leaf-first, rather than querying every
+ancestor of LocalState. It verifies actual writes to the profile, config,
+shaderpacks and temporary directories before starting Java; access failures are
+reported with their path and Win32 error instead of ignored.
+
+`TEMP`, `TMP` and `java.io.tmpdir` point inside the active profile's `tmp` directory;
+JNA and LWJGL have separate subdirectories. `user.home` points at LocalState. JNA's
+boot/library path uses the same selected target-native directory as LWJGL, and
+`jnidispatch.dll` must be present. This does not grant permission to load arbitrary
+desktop libraries: the native guards avoid those unsupported APIs instead.
+
+The heap calculation accounts for the app memory limit and existing host usage.
+A shader loader reserves additional native headroom even when its shader pack is
+currently off, because the user can enable it after launch. Existing JVM argument
+files may lower sizes but cannot increase them past the computed cap, including
+`-XX:MaxHeapSize` aliases or direct-buffer overrides. No shader selection/config
+is reset and no unsupported OpenGL version is advertised.
+
+Run the small policy and native-callback tests on Windows after setup:
+
+```powershell
+.\scripts\test-uwp-launch.ps1
+```
+
+The pure C++ policy tests also run without Windows:
+
+```sh
+g++ -std=c++17 -Wall -Wextra -Werror MC.Xbox/launch/tests/launch_policy_tests.cpp -o /tmp/launch_policy_tests
+/tmp/launch_policy_tests
+```
+
+These tests do not launch Minecraft or replace on-console validation. See
+[SHADERS.md](SHADERS.md) for the hardware regression checklist.
 
 ## Version targets
 
