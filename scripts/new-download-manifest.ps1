@@ -111,13 +111,26 @@ function Add-Entry(
     if (-not $Path -or -not $Url) {
         return
     }
-    if (-not $Sha1.Trim()) {
-        throw "No sha1 for manifest entry $Path from $Url"
+    # Normalize and validate the sha1. Some Maven repos answer `GET x.sha1`
+    # with "hash  filename" (or other trailing text); a non-hex expected hash
+    # can never match the real file, and the runtime would loop forever on
+    # "Could not prepare Minecraft files" for that single manifest entry.
+    # Accept exactly 40 hex chars, or a 40-hex token at the start of longer
+    # text. Anything else must fail the build here, loudly.
+    $normalized = $null
+    if ($Sha1) {
+        $candidate = $Sha1.Trim().ToLowerInvariant()
+        if ($candidate -match '^([0-9a-f]{40})\b') {
+            $normalized = $Matches[1]
+        }
+    }
+    if (-not $normalized) {
+        throw "Invalid sha1 '$Sha1' for manifest entry $Path from $Url"
     }
 
     $Entries.Add([pscustomobject]@{
         Path = $Path.Replace("\", "/")
-        Sha1 = $Sha1.Trim().ToLowerInvariant()
+        Sha1 = $normalized
         Size = $Size
         Url = $Url
     })
