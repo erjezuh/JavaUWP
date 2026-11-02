@@ -4,21 +4,29 @@ name: UI preview
 # Windows runner and publishes PNGs. Dispatch only: these are design artifacts,
 # not a package build. The selected screens are also committed under
 # docs/previews/<subdir> so before/after comparisons can be reviewed in-repo.
+# workflow_dispatch only reads workflow files from the repository's default
+# branch, so this workflow also runs on pushes to the fork branch. The desired
+# destination folder is read from docs/previews/.render (a tiny text file that
+# doubles as the render trigger).
 on:
   workflow_dispatch:
     inputs:
       subdir:
         description: "Destination folder under docs/previews (e.g. before / after)"
         type: string
-        default: "before"
-      commit_previews:
-        description: "Commit the selected PNGs to docs/previews"
-        type: boolean
-        default: true
+        default: ""
       language:
         description: "Language code for the preview (empty = default)"
         type: string
         default: ""
+  push:
+    branches:
+      - arena/16fba603-javauwp
+    paths:
+      - ".github/workflows/ui-preview.yml"
+      - "tools/ui-preview/**"
+      - "MC.Xbox/ui/**"
+      - "docs/previews/.render"
 
 concurrency:
   group: ui-preview
@@ -51,18 +59,31 @@ jobs:
           PREVIEW_LANGUAGE: ${{ inputs.language }}
         run: .\tools\ui-preview\render.ps1 -OutDir ui-preview-out -Language $env:PREVIEW_LANGUAGE
 
+      - name: Resolve preview destination
+        id: destination
+        shell: powershell
+        env:
+          INPUT_SUBDIR: ${{ inputs.subdir }}
+        run: |
+          $subdir = $env:INPUT_SUBDIR
+          if (-not $subdir) {
+            $marker = "docs\previews\.render"
+            if (Test-Path $marker) { $subdir = (Get-Content $marker -Raw).Trim() }
+          }
+          if (-not $subdir) { $subdir = "latest" }
+          "subdir=$subdir" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
       - name: Upload all preview PNGs
         uses: actions/upload-artifact@v6
         with:
-          name: ui-preview-${{ inputs.subdir }}
+          name: ui-preview-${{ steps.destination.outputs.subdir }}
           path: ui-preview-out/*.png
           if-no-files-found: error
 
       - name: Commit selected previews
-        if: ${{ inputs.commit_previews == true }}
         shell: powershell
         env:
-          PREVIEW_SUBDIR: ${{ inputs.subdir }}
+          PREVIEW_SUBDIR: ${{ steps.destination.outputs.subdir }}
         run: |
           $dest = Join-Path "docs\previews" $env:PREVIEW_SUBDIR
           New-Item -ItemType Directory -Force -Path $dest | Out-Null
