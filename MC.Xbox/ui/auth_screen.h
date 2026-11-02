@@ -56,7 +56,7 @@ constexpr float kHeaderH     = 64.0f;
 constexpr float kFooterH     = 56.0f;
 constexpr float kRowH        = 64.0f;
 constexpr float kRowGap      = 10.0f;
-constexpr float kSectionH    = 30.0f;
+constexpr float kSectionH    = 26.0f;
 constexpr float kSectionGap  = 18.0f;
 constexpr float kHeroH       = 132.0f;
 constexpr float kCorner      = 14.0f;
@@ -898,10 +898,11 @@ public:
             DrawText(Tr(L"Settings"), titleFormat_.Get(),
                 D2D1::RectF(back.right + 16.0f, top, right, top + 58.0f), white.Get());
 
-            const float rowH = 60.0f;
-            float rowY = top + 96.0f;
+            const float rowH = layout::kRowH;
+            float rowY = top + 78.0f;
             auto drawSection = [&](const wchar_t* label) {
-                DrawSectionLabel(label, left, right, rowY, muted.Get(), softEdge.Get());
+                rowY += 6.0f;
+                DrawSectionLabel(label, left, right, rowY, muted.Get(), accent.Get());
                 rowY += layout::kSectionH;
             };
             auto drawSettingsRow = [&](int index, const wchar_t* title, const wchar_t* detail, const wchar_t* value, float valueWidth = 140.0f) {
@@ -912,10 +913,10 @@ public:
                 StrokeRound(row, selected ? accent.Get() : softEdge.Get(), 12.0f, selected ? 3.0f : 1.0f);
                 const float textRight = value ? right - (valueWidth + 50.0f) : right - 22.0f;
                 DrawText(Tr(title), bodyMid_.Get(),
-                    D2D1::RectF(row.left + 22.0f, row.top + 4.0f, textRight, row.top + 35.0f),
+                    D2D1::RectF(row.left + 22.0f, row.top + 2.0f, textRight, row.top + 34.0f),
                     selected ? accent.Get() : white.Get());
                 DrawText(Tr(detail), smallFormat_.Get(),
-                    D2D1::RectF(row.left + 22.0f, row.top + 34.0f, textRight, row.bottom - 4.0f),
+                    D2D1::RectF(row.left + 22.0f, row.top + 36.0f, textRight, row.bottom - 2.0f),
                     muted.Get());
                 if (value) {
                     const D2D1_RECT_F pill = D2D1::RectF(right - (valueWidth + 22.0f), row.top + 10.0f, right - 22.0f, row.bottom - 10.0f);
@@ -924,7 +925,7 @@ public:
                     DrawText(Tr(value), pillFormat_.Get(), pill, selected ? black.Get() : muted.Get());
                 }
                 RegisterHit(launchhit::kSettingsRowBase + index, row);
-                rowY = row.bottom + 8.0f;
+                rowY = row.bottom + layout::kRowGap;
             };
 
             const std::wstring menuSpeed = std::to_wstring(state.settingsMenuMouseSpeed) + L"%";
@@ -956,7 +957,7 @@ public:
                 state.settingsConfigured
                     ? Tr(L"Reports use a random id and include launcher and Minecraft versions, loader details, launch stage, memory totals and a mod list hash. Mod jar names and project ids can be sent when a crash needs them. A crash trace can include exception text and Java class names. The launcher does not add your account, gamertag, worlds or access token. Common user and app storage paths are scrubbed. The id stays the same until it is reset.")
                     : Tr(L"No reporting server is configured on this install, so nothing can be sent either way."),
-                captionFormat_.Get(), D2D1::RectF(left, rowY + 2.0f, right, frame.bottom - 106.0f), muted.Get());
+                captionFormat_.Get(), D2D1::RectF(left, rowY + 8.0f, right, frame.bottom - 100.0f), muted.Get());
 
             if (!state.settingsNote.empty()) {
                 DrawText(state.settingsNote.c_str(), smallFormat_.Get(),
@@ -1125,19 +1126,19 @@ public:
                     d2dContext_->CreateSolidColorBrush(D2D1::ColorF(theme::kDanger, 0.18f), confirmFill.GetAddressOf());
                     const D2D1_RECT_F pill = D2D1::RectF(row.right - 244.0f, row.top + 8.0f, row.right - 10.0f, row.bottom - 8.0f);
                     FillRound(pill, confirmFill.Get(), 8.0f);
-                    DrawText(Tr(L"Press A again to sign out"), captionFormat_.Get(), pill, danger.Get());
+                    DrawText(Tr(L"Press A again to sign out"), captionFormat_.Get(), pill, white.Get());
                 } else if (i == 4 && state.updateAvailable) {
                     DrawIcon(L"\uE946",
                         D2D1::RectF(row.right - 46.0f, row.top, row.right - 12.0f, row.bottom), accent.Get());
                 }
             };
             float y = hero.bottom + layout::kSectionGap;
-            DrawSectionLabel(Tr(L"Library"), left, menuRight, y, muted.Get(), softEdge.Get());
+            DrawSectionLabel(Tr(L"Library"), left, menuRight, y, muted.Get(), accent.Get());
             y += layout::kSectionH;
             drawRow(1, y); y += layout::kRowH;
             drawRow(2, y); y += layout::kRowH;
             y += layout::kSectionGap - layout::kRowGap;
-            DrawSectionLabel(Tr(L"Launcher"), left, menuRight, y, muted.Get(), softEdge.Get());
+            DrawSectionLabel(Tr(L"Launcher"), left, menuRight, y, muted.Get(), accent.Get());
             y += layout::kSectionH;
             for (int i = 3; i < kMainMenuItems; ++i) { drawRow(i, y); y += layout::kRowH; }
             mainMenuRectCount_ = kMainMenuItems;
@@ -1195,7 +1196,7 @@ public:
 
             DrawFooterBar(frame,
                 state.signOutConfirm ? Tr(L"Press A again to sign out") : Tr(L"A or click to select   Up/Down to navigate"),
-                muted.Get(), softEdge.Get());
+                state.signOutConfirm ? danger.Get() : muted.Get(), softEdge.Get());
             finishDraw();
             return;
         }
@@ -1738,13 +1739,13 @@ private:
     // A small uppercase-style section rule. Shared by the main menu and
     // Settings so grouped lists read the same way everywhere.
     void DrawSectionLabel(const wchar_t* label, float left, float right, float y,
-        ID2D1Brush* brush, ID2D1Brush* edge) {
-        const float labelW = 190.0f;
+        ID2D1Brush* brush, ID2D1Brush* marker) {
+        // A short accent bar reads as a category without adding another full
+        // width rule to a screen that already has row borders.
+        d2dContext_->FillRectangle(
+            D2D1::RectF(left, y + 4.0f, left + 4.0f, y + 20.0f), marker);
         DrawText(label, captionFormat_.Get(),
-            D2D1::RectF(left + 8.0f, y, left + labelW, y + layout::kSectionH), brush);
-        d2dContext_->DrawLine(
-            D2D1::Point2F(left + labelW, y + 13.0f),
-            D2D1::Point2F(right, y + 13.0f), edge, 1.0f);
+            D2D1::RectF(left + 16.0f, y, right, y + layout::kSectionH), brush);
     }
 
     // Persistent control hint, separated from the content by a hairline.

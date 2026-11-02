@@ -2,6 +2,26 @@
 
 Notable changes to Bandit Launcher. Nightly packages are numbered by build revision rather than by release, so entries here are dated.
 
+## 2026-11-02 — Ergonomía del dashboard (UI)
+
+### Changed
+
+**The main menu now has a hierarchy.** Play is a large accent hero showing the active profile and target; the remaining actions are grouped under `Library` (Mods, Remote Files) and `Launcher` (Settings, What's new, Repair downloads, Sign out). A persistent header shows the account, a dark profile card keeps the active profile/target readable over the screenshot panorama, and a footer bar shows the controls that actually work on that screen. See `docs/UI-ERGONOMICS.es.md` for the analysis and before/after renders in `docs/previews/`.
+
+**Settings is grouped** into Controls, Privacy & diagnostics and Content & updates; the privacy note uses the secondary type size so it no longer competes with the rows. Section labels and footer hints are shared renderer helpers (`DrawSectionLabel`, `DrawFooterBar`) driven by a new `layout` namespace of geometry constants.
+
+**Sign out now takes two presses.** The first `A` shows a red confirmation on the row and in the footer; only a second `A` within four seconds (without moving focus) signs out. This prevents a stray D-pad press from clearing the Microsoft session and its entitlement check.
+
+### Fixed
+
+**The main menu no longer loses its context.** Account, profile name and target are now typed fields in `MainMenuSummary` instead of being squeezed into the generic `status`/`detail` strings; they are refreshed when returning from Mods, where the active profile can change. Settings and Remote Files now restore the previous status on exit instead of leaving `"Crash reporting is off"` / `"Remote file manager stopped"` on the dashboard. Navigation no longer clears the profile summary, and the obsolete `"Browse installed, popular, and latest Fabric mods."` copy (wrong for a NeoForge default) is gone.
+
+**Cursor visibility.** The mouse crosshair now has a dark halo, a black outline and an accent centre dot, so it stays visible over both the dark dashboard and bright screenshots.
+
+### Infrastructure
+
+`scripts/gen-runtime-config.ps1` is the single source of `runtime_config.h` token substitution (`build.ps1` and the UI preview both call it). `.github/workflows/ui-preview.yml` renders every launcher screen to PNG on Windows, regenerates `MC.Xbox/lang/en.json` with the official translation script and commits a curated before/after set. `MC.Xbox/lang/es-419.json` was updated for the nine new strings.
+
 ## 2026-11-02 — Fork «Native + NeoForge»
 
 ### Added
