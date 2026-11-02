@@ -353,6 +353,68 @@ System COM DLL preloaded: oleaut32.dll
 > anteriores presentes indicaría **otra** exportación ausente, y el log dice
 > qué bibliotecas se precargaron. No basta con la captura para distinguirlo.
 
+## `EXCEPTION_ACCESS_VIOLATION` a los pocos segundos de entrar al mundo
+
+Con la `1.0.19.0` el juego **ya entra al mundo** (adiós al `OpenAL.dll (error
+code = 127)`), pero a los pocos segundos aparece
+`EXCEPTION_ACCESS_VIOLATION` (`0xc0000005`). No es una excepción Java: la JVM
+deja un `hs_err_pid*.log` porque **código nativo** tocó memoria inválida. Con
+sólo los mods recomendados y en cualquier mundo (incluso uno nuevo) se descartan
+los datos del mundo y un mod concreto: el problema está en la ruta nativa que se
+inicializa al arrancar audio/render.
+
+### Causa encontrada en el shim
+
+En `alc/backends/wasapi.cpp` de OpenAL Soft:
+
+```cpp
+auto pvprop = PropVariant{};                       // PropVariantInit
+ps->GetValue(DEVPKEY_Device_FriendlyName, pvprop.get());
+pvprop.clear();                                    // PropVariantClear
+ps->GetValue(PKEY_AudioEndpoint_GUID, pvprop.get());   // MISMA estructura
+```
+
+El `PropVariantClear` del sistema libera `pwszVal`, deja `vt = VT_EMPTY` y
+devuelve `S_OK`. El shim de la `1.0.19.0` devolvía `E_FAIL` **sin limpiar**:
+quedaba un `VT_LPWSTR` con un puntero colgante que el siguiente `GetValue` o el
+destructor puede desreferenciar → `EXCEPTION_ACCESS_VIOLATION` justo al enumerar
+los dispositivos de audio. Idéntico para `VariantClear` (JNA/`WbemcliUtil`).
+
+Arreglo de la `1.0.20.0`: `PropVariantInit`/`Clear` y `VariantInit`/`Clear`
+ponen a cero `vt`, las palabras reservadas y el puntero de la unión (16 bytes,
+sin CRT) y devuelven `S_OK`; `VariantCopy*` y `VariantChangeType` dejan el
+destino vacío. **El contrato con OSHI no cambia**: `CoInitializeEx` y
+`CoCreateInstance` siguen dando `E_FAIL`, y JNA ignora el retorno de las
+funciones de limpieza. `tests/ole32_shim_test.cpp` verifica el reset byte a byte.
+
+### Cómo saber en qué DLL falla si persiste
+
+Desde la `1.0.20.0`, la **pantalla principal de crasheo muestra el primer frame
+nativo** para señales nativas (`C  [opengl32.dll+0x…]`, `OpenAL.dll`,
+`glfw.dll`, …) y el recordatorio de *Archivos Remotos*: basta una foto de esa
+pantalla. En builds anteriores, pulsa **«Ver detalles»** (primer botón, A) y
+fotografía la traza.
+
+Desde el menú principal, **Archivos Remotos** permite descargar en el móvil/PC
+el `BanditLauncher-crash-<fecha>.zip`, que incluye
+`profile/game/hs_err_pid*.log`, `logs/current/mc_launch.log`, `glfw_uwp.log` y
+`latest.log`. El ZIP se genera al **volver a abrir el launcher** tras el
+crasheo. Con el frame se arregla la capa correcta; no conviene tocar GL/Mesa a
+ciegas.
+
+Pruebas rápidas para acotar sin recompilar:
+
+1. Mundo nuevo con **sólo Embeddium** (o con `mods/` vacía). Si con vanilla no
+   crashea, es el renderer; si crashea igual, es la ruta gráfica/audio base.
+2. Revisa que no haya **Xaero's Minimap / Xaero's World Map**: están en la lista
+   de bloqueo del launcher por «Exception Access Violation». Ojo, el bloqueo
+   busca `xaeros-minimap` con guion y los jars reales suelen llamarse
+   `Xaeros_Minimap_...` con guion bajo; si están, quítalos a mano.
+
+> Sin verificación en consola todavía. En `mc_launch.log` deben seguir
+> apareciendo `JNA COM shim enabled` y las dos líneas
+> `System COM DLL preloaded: ole32.dll` / `oleaut32.dll`.
+
 ## Cómo compilar
 
 Requisitos: Windows, Visual Studio con C++/WinRT, Windows SDK, JDK 17, 21 y

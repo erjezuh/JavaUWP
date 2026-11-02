@@ -61,6 +61,40 @@ detection to enable driver workarounds will simply skip them, which is intended 
 Mesa/UWP path. The Spanish guide has the full stack trace:
 [FORK-NATIVE-NEOFORGE.es.md](FORK-NATIVE-NEOFORGE.es.md).
 
+## The game enters a world and then dies with EXCEPTION_ACCESS_VIOLATION
+
+`EXCEPTION_ACCESS_VIOLATION` (`0xc0000005`) is **not** a Java exception. The JVM
+writes an `hs_err_pid*.log` because native code touched invalid memory, so the
+only decisive clue is its `# Problematic frame:` line (for example
+`C  [opengl32.dll+0x...]`, `OpenAL.dll`, `glfw.dll`, `lwjgl.dll`). The launcher
+parses that file and puts the frame first in `frames`.
+
+Since `1.0.20.0`, the **main crash screen shows that frame** directly (plus the
+*Remote Files* reminder) for native signals, so a photo of the crash screen is
+enough. On older builds open **View details** (first button, press A) and
+photograph the trace. From the main menu, **Remote Files** lets you download the
+`BanditLauncher-crash-<timestamp>.zip` on a phone or PC; it contains
+`profile/game/hs_err_pid*.log`, `logs/current/mc_launch.log`, `glfw_uwp.log`
+and `logs/latest.log`. The ZIP is written when the launcher is opened again
+after the hard crash.
+
+One concrete native bug was fixed in `1.0.20.0`: the packaged COM shim's
+`PropVariantClear` / `VariantClear` used to return `E_FAIL` **without resetting
+the structure**. OpenAL Soft's WASAPI backend reuses a `PROPVARIANT` immediately
+after `clear()`, so a stale `VT_LPWSTR` and a dangling pointer could be
+dereferenced as soon as audio devices are enumerated — a few seconds into a
+world. They now zero `vt` and the payload and return `S_OK`, like the OS; only
+`CoInitializeEx` / `CoCreateInstance` keep returning `E_FAIL` so OSHI's WMI
+probe still fails into a caught `COMException`.
+
+If the crash survives that fix, the frame tells us which layer to fix. Do not
+change GL/Mesa settings blindly: first try a new world with only Embeddium (or
+with `mods/` empty) to separate a renderer mod from the base path. Also check
+the mod list for **Xaero's Minimap / Xaero's World Map** — they are on the
+launcher's blocked list precisely for "Exception Access Violation". Note that
+the blocker matches `xaeros-minimap` with a hyphen, while real Modrinth jars are
+often named `Xaeros_Minimap_...` with underscores, so remove those manually.
+
 ## Minecraft still crashes with "Failed to load library: ...\OpenAL.dll (error code = 127)"
 
 This one appears **after** the OSHI/WMI fix, at `ALC.<clinit>` while LWJGL opens

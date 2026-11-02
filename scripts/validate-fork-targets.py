@@ -394,6 +394,29 @@ def main() -> int:
         if "OSHI" not in read(doc):
             errors.append(f"{doc} does not document the OSHI/WMI COM shim")
 
+    # 15. Native cleanup entry points must not leave dangling VARIANT/PROPVARIANT
+    # payloads, and hs_err crashes must show the problematic frame on the main
+    # crash screen. OpenAL Soft reuses a PROPVARIANT right after clear(); a
+    # stub that only returned E_FAIL leaves VT_LPWSTR + a freed pointer there,
+    # which is a plausible EXCEPTION_ACCESS_VIOLATION shortly after joining a
+    # world. A photo of the crash screen is often the only diagnostic available
+    # on console, so the native DLL has to be visible without "View details".
+    for needle in ("ResetVariantStorage", "kSOk", "PropVariantClear", "VariantClear"):
+        if needle not in ole32_source:
+            errors.append(f"shims/ole32_uwp.cpp is missing the safe cleanup contract ({needle})")
+    for needle in ("PropVariantClear resets the whole PROPVARIANT",
+                   "VariantClear resets the whole VARIANT",
+                   "PropVariantClear returns S_OK"):
+        if needle not in ole32_test:
+            errors.append(f"tests/ole32_shim_test.cpp does not cover the VARIANT cleanup regression ({needle})")
+    launcher_ui = read("MC.Xbox/ui/launcher_ui.cpp")
+    for needle in ('record.exception.find(L"EXCEPTION_")', "Problematic frame", "record.frames"):
+        if needle not in launcher_ui:
+            errors.append(f"launcher_ui.cpp does not surface hs_err frames on the crash screen ({needle})")
+    for doc in ("CHANGELOG.md", "docs/FAQ.md", "docs/FORK-NATIVE-NEOFORGE.es.md"):
+        if "EXCEPTION_ACCESS_VIOLATION" not in read(doc):
+            errors.append(f"{doc} does not document the native access-violation diagnosis")
+
     for warning in warnings:
         print(f"WARN  {warning}")
     for error in errors:

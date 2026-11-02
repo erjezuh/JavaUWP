@@ -2,6 +2,59 @@
 
 Notable changes to Bandit Launcher. Nightly packages are numbered by build revision rather than by release, so entries here are dated.
 
+## 2026-11-02 — `EXCEPTION_ACCESS_VIOLATION` al entrar al mundo: limpieza de VARIANT y diagnóstico en pantalla
+
+### Fixed
+
+Con `1.0.19.0` el perfil `1.20.1 / Forge / 47.4.20` **ya entra al mundo** (el
+`OpenAL.dll (error code = 127)` quedó atrás), pero a los pocos segundos la JVM
+escribe un `hs_err_pid*.log` con `EXCEPTION_ACCESS_VIOLATION` (`0xc0000005`).
+Sin Xaero's, sin modpack, con sólo los mods recomendados y en **cualquier mundo,
+incluso uno nuevo**: no son los datos del mundo ni un mod concreto, sino la
+ruta nativa que se inicializa al arrancar el audio/render.
+
+Revisando `alc/backends/wasapi.cpp` de OpenAL Soft apareció un **bug real en el
+shim de `1.0.19.0`**:
+
+```cpp
+auto pvprop = PropVariant{};                       // PropVariantInit
+ps->GetValue(DEVPKEY_Device_FriendlyName, pvprop.get());
+pvprop.clear();                                    // PropVariantClear
+ps->GetValue(PKEY_AudioEndpoint_GUID, pvprop.get());   // MISMA estructura
+```
+
+El `PropVariantClear` del sistema libera `pwszVal`, pone `vt = VT_EMPTY` y
+devuelve `S_OK`. Nuestro stub se limitaba a devolver `E_FAIL` sin tocar la
+estructura, dejando un `VT_LPWSTR` y un puntero colgante que el siguiente
+`GetValue` / el destructor puede desreferenciar → `EXCEPTION_ACCESS_VIOLATION`
+justo cuando el juego empieza a enumerar dispositivos de audio. Lo mismo vale
+para `VariantClear` (`WbemcliUtil` / JNA).
+
+Cambios:
+
+- `shims/ole32_uwp.cpp`: `PropVariantInit`/`Clear` y `VariantInit`/`Clear`
+  **ponen a cero** `vt`, las palabras reservadas y el puntero/valor de la unión
+  (16 bytes, sin CRT) y devuelven `S_OK`, igual que el SO. `VariantCopy`,
+  `VariantCopyInd` y `VariantChangeType` dejan el destino vacío. Sólo
+  `CoInitializeEx` / `CoCreateInstance` y compañía siguen devolviendo `E_FAIL`:
+  el contrato con OSHI (`WmiQueryHandler.queryWMI()` captura la `COMException`)
+  **no cambia**, porque JNA ignora el retorno de las funciones de limpieza.
+- `tests/ole32_shim_test.cpp` comprueba ahora el reset byte a byte de un
+  `PROPVARIANT`/`VARIANT` lleno de `0xAA`, el `S_OK` y el puntero nulo.
+- `MC.Xbox/ui/launcher_ui.cpp`: para señales nativas (`EXCEPTION_ACCESS_VIOLATION`,
+  `SIGSEGV`, …) la **pantalla principal de crasheo muestra ya el primer frame
+  nativo** (`C  [opengl32.dll+0x…]`, `OpenAL.dll`, `glfw.dll`, …) y el recordatorio
+  de *Remote Files*. Antes sólo se veía el nombre de la señal y había que abrir
+  «Ver detalles»; en consola a veces sólo se puede enviar una foto de esa pantalla.
+- `scripts/validate-fork-targets.py` añade la comprobación 15 (contrato de
+  limpieza, test y frame en pantalla).
+- FAQ, guía en español y README documentan el síntoma y cómo obtener el
+  `hs_err_pid*.log` / el ZIP.
+
+> Sigue sin verificación en consola. Si el AV persiste, la nueva pantalla de
+> crasheo dice **en qué DLL** ocurre; con esa foto (o el ZIP de *Remote Files*)
+> se puede arreglar la capa correcta sin tocar GL/Mesa a ciegas.
+
 ## 2026-11-02 — Corregido `OpenAL.dll (error code = 127)` después del arreglo de OSHI
 
 ### Fixed

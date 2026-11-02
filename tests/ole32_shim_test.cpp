@@ -6,6 +6,7 @@
 // (not S_OK, S_FALSE or RPC_E_CHANGED_MODE), which WmiQueryHandler.queryWMI()
 // turns into a caught COMException and an empty WmiResult.
 
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -57,15 +58,47 @@ int main() {
     Expect("SysAllocString returns a null BSTR", SysAllocString(nullptr) == nullptr);
     Expect("SysAllocStringLen returns a null BSTR", SysAllocStringLen(nullptr, 4) == nullptr);
     Expect("SysStringLen reports an empty BSTR", SysStringLen(nullptr) == 0);
-    Expect("VariantClear returns E_FAIL", IsFailedComHresult(VariantClear(nullptr)));
+    // Cleanup entry points must behave like the OS: reset the structure and
+    // return S_OK. OpenAL Soft reuses a PROPVARIANT right after clear(), and a
+    // stub that only returned E_FAIL left a dangling VT_LPWSTR pointer there.
+    unsigned char propVariant[24];
+    std::memset(propVariant, 0xAA, sizeof(propVariant));
+    PropVariantInit(propVariant);
+    Expect("PropVariantInit clears vt and payload", propVariant[0] == 0 && propVariant[8] == 0);
+    std::memset(propVariant, 0xAA, sizeof(propVariant));
+    Expect("PropVariantClear returns S_OK", PropVariantClear(propVariant) == kSok);
+    bool propVariantCleared = true;
+    for (std::size_t i = 0; i < 16; ++i) {
+        if (propVariant[i] != 0) propVariantCleared = false;
+    }
+    Expect("PropVariantClear resets the whole PROPVARIANT", propVariantCleared);
+    Expect("PropVariantClear tolerates a null pointer", PropVariantClear(nullptr) == kSok);
+
+    unsigned char variant[24];
+    std::memset(variant, 0xAA, sizeof(variant));
+    Expect("VariantClear returns S_OK", VariantClear(variant) == kSok);
+    bool variantCleared = true;
+    for (std::size_t i = 0; i < 16; ++i) {
+        if (variant[i] != 0) variantCleared = false;
+    }
+    Expect("VariantClear resets the whole VARIANT", variantCleared);
+    Expect("VariantClear tolerates a null pointer", VariantClear(nullptr) == kSok);
+    std::memset(variant, 0xAA, sizeof(variant));
+    VariantInit(variant);
+    Expect("VariantInit clears vt and payload", variant[0] == 0 && variant[8] == 0);
+    std::memset(variant, 0xAA, sizeof(variant));
     Expect("VariantChangeType returns E_FAIL",
-           IsFailedComHresult(VariantChangeType(nullptr, nullptr, 0, 0)));
+           IsFailedComHresult(VariantChangeType(variant, nullptr, 0, 0)));
+    Expect("VariantChangeType leaves an empty destination", variant[0] == 0 && variant[8] == 0);
+    std::memset(variant, 0xAA, sizeof(variant));
+    Expect("VariantCopy returns E_FAIL", IsFailedComHresult(VariantCopy(variant, nullptr)));
+    Expect("VariantCopy leaves an empty destination", variant[0] == 0 && variant[8] == 0);
 
     // Native libraries resolve ole32.lib / oleaut32.lib imports by bare DLL
     // name. If this shim is the first Ole32.dll in the process, every symbol
     // OpenAL Soft imports must exist or LoadLibrary fails with error 127.
     // Calling them here proves the export table is complete at link time.
-    Expect("PropVariantClear returns E_FAIL", IsFailedComHresult(PropVariantClear(nullptr)));
+    Expect("PropVariantClear is a safe no-op on null", PropVariantClear(nullptr) == kSok);
     Expect("CoTaskMemAlloc fails safely", CoTaskMemAlloc(32) == nullptr);
     Expect("CoTaskMemRealloc fails safely", CoTaskMemRealloc(nullptr, 32) == nullptr);
     void* allocator = reinterpret_cast<void*>(0x1);

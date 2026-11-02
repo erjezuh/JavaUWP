@@ -258,6 +258,29 @@ static std::wstring CrashSuspectLine(const telemetry::CrashRecord& record) {
         return TrFormat(L"A mod asked for {0}, which this console does not provide.",
             { a2w(record.detail.symbol.c_str()) });
     }
+    // hs_err native crashes (EXCEPTION_ACCESS_VIOLATION, SIGSEGV, ...) have no
+    // Java exception and no symbol, so the main screen used to show only the
+    // bare signal name. ParseHsErr puts "# Problematic frame:" first in frames;
+    // surface it here too. On console users frequently only have a photo of
+    // this screen and cannot open "View details" or fetch the crash ZIP, so the
+    // failing DLL has to be visible without any extra navigation.
+    const bool nativeCrash =
+        record.exception.find(L"EXCEPTION_") != std::wstring::npos ||
+        record.exception.find(L"SIGSEGV") != std::wstring::npos ||
+        record.exception.find(L"SIGBUS") != std::wstring::npos ||
+        record.exception.find(L"SIGILL") != std::wstring::npos ||
+        record.exception.find(L"SIGFPE") != std::wstring::npos;
+    if (nativeCrash && !record.frames.empty()) {
+        std::wstring line = record.exception;
+        size_t shown = 0;
+        for (const std::wstring& frame : record.frames) {
+            if (shown >= 2 || frame.empty()) break;
+            line += L"\n" + frame;
+            ++shown;
+        }
+        line += L"\n" + std::wstring(Tr(L"Open Remote Files on the main menu to read it on a phone or PC."));
+        return line;
+    }
     if (record.exception.find(L"heap_exhausted") != std::wstring::npos) {
         return TrFormat(L"This pack ran out of memory ({0}).\n"
                         L"The console has about 5 GB for everything, so very large packs cannot load.",

@@ -23,11 +23,14 @@
 //     -Djna.library.path=<natives dir>, which makes JNA find an ABSOLUTE path.
 //     An absolute path is accepted by the UWP loader (the same mechanism the
 //     packaged glfw.dll/opengl32.dll shims already use).
-//   * Every COM entry point below reports E_FAIL. OSHI turns any HRESULT other
-//     than S_OK/S_FALSE/RPC_E_CHANGED_MODE into a COMException, which
-//     WmiQueryHandler.queryWMI() catches; it returns an empty WmiResult and
-//     caches the failed WMI class. Mods then see "no graphics cards" instead
-//     of an uncaught UnsatisfiedLinkError, and loading continues.
+//   * COM initialization and object creation report E_FAIL. OSHI turns any
+//     HRESULT other than S_OK/S_FALSE/RPC_E_CHANGED_MODE into a COMException,
+//     which WmiQueryHandler.queryWMI() catches; it returns an empty WmiResult
+//     and caches the failed WMI class. Mods then see "no graphics cards"
+//     instead of an uncaught UnsatisfiedLinkError, and loading continues.
+//     Cleanup entry points (PropVariantClear / VariantClear / *Init) do NOT
+//     report failure: they reset the structure and return S_OK, exactly like
+//     the OS. See the note on native consumers below.
 //
 // build.ps1 also copies this DLL as natives/OleAut32.dll. JNA's WbemcliUtil
 // reaches OleAuto.INSTANCE (SysAllocString / VariantClear) once a WMI query
@@ -56,9 +59,27 @@
 // The launcher additionally preloads the real system ole32.dll/oleaut32.dll
 // before the JVM starts, so audio normally binds to the OS implementation.
 //
+// CRITICAL: cleanup entry points must actually RESET their structure. OpenAL
+// Soft's WASAPI backend does, in alc/backends/wasapi.cpp:
+//
+//     auto pvprop = PropVariant{};              // PropVariantInit -> zeroes
+//     ps->GetValue(DEVPKEY_Device_FriendlyName, pvprop.get());
+//     pvprop.clear();                          // PropVariantClear
+//     ps->GetValue(PKEY_AudioEndpoint_GUID, pvprop.get());   // SAME struct again
+//
+// The real PropVariantClear frees pwszVal and sets vt = VT_EMPTY (S_OK). A
+// stub that just returns E_FAIL leaves a stale VT_LPWSTR and a dangling
+// pointer, so the next GetValue / destructor can dereference freed memory:
+// that is a textbook EXCEPTION_ACCESS_VIOLATION a couple of seconds into a
+// world, when the game starts enumerating audio devices. VariantClear is the
+// same for WbemcliUtil/VARIANT. These two (and their *Init/Copy companions)
+// therefore zero the first 16 bytes (vt, reserved words and the union's
+// pointer/value) and return S_OK, while CoInitializeEx/CoCreateInstance keep
+// reporting E_FAIL so OSHI still bails out cleanly.
+//
 // This DLL is deliberately dependency-free: no Windows headers, no CRT calls,
 // no COM runtime. tests/ole32_shim_test.cpp compiles this exact source on
-// Linux to verify the failure contract.
+// Linux to verify both contracts.
 
 #include <cstddef>
 #include <cstdint>
@@ -77,6 +98,17 @@ using DWord = std::uint32_t;
 // E_FAIL, cast through an unsigned value so this stays 0x80004005 on both
 // 32-bit and 64-bit compilers.
 constexpr HResult kComUnavailable = static_cast<HResult>(0x80004005u);
+constexpr HResult kSOk = 0;
+
+// Zero vt, the three reserved WORDs and the first word of the union without
+// pulling in memset/CRT. Both PROPVARIANT and VARIANT start with that layout,
+// so clearing 16 bytes is enough to make them VT_EMPTY with a null payload on
+// x86 and x64. Do not write through a null pointer (the Linux test does).
+void ResetVariantStorage(void* storage) {
+    if (!storage) return;
+    unsigned char* bytes = static_cast<unsigned char*>(storage);
+    for (std::size_t i = 0; i < 16; ++i) bytes[i] = 0;
+}
 
 }  // namespace
 
@@ -144,11 +176,11 @@ BANDIT_OLE32_EXPORT void* CoTaskMemRealloc(void* memory, std::size_t size) {
     return nullptr;
 }
 
-BANDIT_OLE32_EXPORT void PropVariantInit(void* variant) { (void)variant; }
+BANDIT_OLE32_EXPORT void PropVariantInit(void* variant) { ResetVariantStorage(variant); }
 
 BANDIT_OLE32_EXPORT HResult PropVariantClear(void* variant) {
-    (void)variant;
-    return kComUnavailable;
+    ResetVariantStorage(variant);
+    return kSOk;
 }
 
 BANDIT_OLE32_EXPORT HResult CoGetMalloc(DWord context, void** allocator) {
@@ -271,8 +303,10 @@ BANDIT_OLE32_EXPORT void OleUninitialize() {}
 
 // ---------------------------------------------------------------------------
 // OleAut32 exports (the same DLL is packaged a second time under that name).
-// A null BSTR / failed VariantClear makes WbemcliUtil.selectProperties() bail
-// out with a caught COMException rather than reaching another native load.
+// A null BSTR makes WbemcliUtil.selectProperties() bail out with a caught
+// COMException rather than reaching another native load. VariantClear resets
+// the VARIANT and returns S_OK, as the OS does: JNA ignores its return value
+// and a stale VARIANT would be dereferenced on the next call.
 // ---------------------------------------------------------------------------
 
 BANDIT_OLE32_EXPORT void* SysAllocString(const void* text) {
@@ -292,16 +326,17 @@ BANDIT_OLE32_EXPORT DWord SysStringLen(void* bstr) {
     return 0;
 }
 
-BANDIT_OLE32_EXPORT void VariantInit(void* variant) { (void)variant; }
+BANDIT_OLE32_EXPORT void VariantInit(void* variant) { ResetVariantStorage(variant); }
 
 BANDIT_OLE32_EXPORT HResult VariantClear(void* variant) {
-    (void)variant;
-    return kComUnavailable;
+    ResetVariantStorage(variant);
+    return kSOk;
 }
 
 BANDIT_OLE32_EXPORT HResult VariantChangeType(void* destination, void* source,
                                               std::uint16_t flags, std::uint16_t type) {
-    (void)destination; (void)source; (void)flags; (void)type;
+    (void)source; (void)flags; (void)type;
+    ResetVariantStorage(destination);
     return kComUnavailable;
 }
 
@@ -327,12 +362,14 @@ BANDIT_OLE32_EXPORT int SysReAllocString(void** bstr, const void* text) {
 }
 
 BANDIT_OLE32_EXPORT HResult VariantCopy(void* destination, void* source) {
-    (void)destination; (void)source;
+    (void)source;
+    ResetVariantStorage(destination);
     return kComUnavailable;
 }
 
 BANDIT_OLE32_EXPORT HResult VariantCopyInd(void* destination, void* source) {
-    (void)destination; (void)source;
+    (void)source;
+    ResetVariantStorage(destination);
     return kComUnavailable;
 }
 
