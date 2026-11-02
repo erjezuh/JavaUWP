@@ -1,3 +1,10 @@
+== token scopes ==
+HTTP/2.0 200 OK
+X-Accepted-Github-Permissions: metadata=read
+== probe: can GITHUB_TOKEN create a release? ==
+https://github.com/erjezuh/JavaUWP/releases/tag/untagged-b1ea1c97dc7858607d71
+To https://github.com/erjezuh/JavaUWP
+ - [deleted]         ci-permission-probe
 == gh run view --log-failed ==
 Build native NeoForge APPX	Publish nightly-native release	﻿2026-11-02T12:21:15.3011570Z ##[group]Run .\scripts\publish-release.ps1 `
 Build native NeoForge APPX	Publish nightly-native release	2026-11-02T12:21:15.3011986Z ^[[36;1m.\scripts\publish-release.ps1 `^[[0m
