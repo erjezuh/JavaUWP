@@ -19,8 +19,10 @@ $sdkVer = $sdk.Version
 $jreSrc = Resolve-JavaHome
 
 $mcBuildDir = Join-Path $root "staging\build\MC.Xbox"
-if (-not (Test-Path (Join-Path $mcBuildDir "runtime_config.h"))) {
-    throw "staging\build\MC.Xbox\runtime_config.h is missing, run build.ps1 once to generate it"
+$runtimeConfigHeader = Join-Path $mcBuildDir "runtime_config.h"
+if (-not (Test-Path $runtimeConfigHeader)) {
+    # preview builds do not need a full APPX build, just the generated header
+    & (Join-Path $root "scripts\gen-runtime-config.ps1") -OutputPath $runtimeConfigHeader
 }
 $work = Join-Path $root "staging\build\ui-preview"
 Ensure-Dir $work

@@ -1,0 +1,88 @@
+name: UI preview
+
+# Renders the launcher screens with tools/ui-preview (Direct2D, offscreen) on a
+# Windows runner and publishes PNGs. Dispatch only: these are design artifacts,
+# not a package build. The selected screens are also committed under
+# docs/previews/<subdir> so before/after comparisons can be reviewed in-repo.
+on:
+  workflow_dispatch:
+    inputs:
+      subdir:
+        description: "Destination folder under docs/previews (e.g. before / after)"
+        type: string
+        default: "before"
+      commit_previews:
+        description: "Commit the selected PNGs to docs/previews"
+        type: boolean
+        default: true
+      language:
+        description: "Language code for the preview (empty = default)"
+        type: string
+        default: ""
+
+concurrency:
+  group: ui-preview
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  render:
+    name: Render launcher screens
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: microsoft
+          java-version: "21"
+
+      - name: Render screens to PNG
+        shell: powershell
+        env:
+          PREVIEW_LANGUAGE: ${{ inputs.language }}
+        run: .\tools\ui-preview\render.ps1 -OutDir ui-preview-out -Language $env:PREVIEW_LANGUAGE
+
+      - name: Upload all preview PNGs
+        uses: actions/upload-artifact@v6
+        with:
+          name: ui-preview-${{ inputs.subdir }}
+          path: ui-preview-out/*.png
+          if-no-files-found: error
+
+      - name: Commit selected previews
+        if: ${{ inputs.commit_previews == true }}
+        shell: powershell
+        env:
+          PREVIEW_SUBDIR: ${{ inputs.subdir }}
+        run: |
+          $dest = Join-Path "docs\previews" $env:PREVIEW_SUBDIR
+          New-Item -ItemType Directory -Force -Path $dest | Out-Null
+          $names = @(
+            "signin-device-code", "main-menu", "main-menu-update",
+            "settings-modrinth", "remote-files", "crash-summary",
+            "mods-0-profiles", "mods-1-popular", "mods-5-resource-packs"
+          )
+          foreach ($name in $names) {
+            $src = Join-Path "ui-preview-out" "$name.png"
+            if (-not (Test-Path $src)) { throw "Missing preview $name.png" }
+            Copy-Item $src (Join-Path $dest "$name.png") -Force
+          }
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f "docs/previews/$env:PREVIEW_SUBDIR/*.png"
+          if (git diff --cached --quiet) {
+            Write-Host "No preview changes to commit"
+          } else {
+            git commit -m "UI preview: $env:PREVIEW_SUBDIR screenshots"
+            git pull --rebase origin $env:GITHUB_REF_NAME
+            git push origin "HEAD:$env:GITHUB_REF_NAME"
+          }

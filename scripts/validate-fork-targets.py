@@ -123,13 +123,16 @@ def main() -> int:
 
     # 4. Every runtime_config.h token has a replacement in build.ps1 and vice versa.
     tokens = set(re.findall(r"@@([A-Z_]+)@@", template_text))
-    replacements = set(re.findall(r"Replace\('@@([A-Z_]+)@@'", build_text))
+    generator_text = read("scripts/gen-runtime-config.ps1")
+    replacements = set(re.findall(r"'@@([A-Z_]+)@@'", generator_text))
     if not tokens:
         errors.append("runtime_config.h.in has no tokens")
+    if "gen-runtime-config.ps1" not in build_text:
+        errors.append("build.ps1 no longer calls the shared runtime_config.h generator")
     for token in sorted(tokens - replacements):
-        errors.append(f"runtime_config.h.in token @@{token}@@ is never substituted by build.ps1")
+        errors.append(f"runtime_config.h.in token @@{token}@@ is never substituted by scripts/gen-runtime-config.ps1")
     for token in sorted(replacements - tokens):
-        warnings.append(f"build.ps1 substitutes @@{token}@@ but the template does not use it")
+        warnings.append(f"gen-runtime-config.ps1 substitutes @@{token}@@ but the template does not use it")
 
     # Every kDefault* constant referenced by C++ must exist in the template.
     cpp_files = [

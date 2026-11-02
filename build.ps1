@@ -391,26 +391,12 @@ if (-not $SkipStopAppProcesses) {
 Ensure-Dir $buildDir, $outDir, $certDir, $mcBuildDir, $glfwBuildDir
 
 Write-Host "=== Generating runtime_config.h ==="
-# Token-substitute MC.Xbox/runtime_config.h.in into the build dir. App.cpp
-# picks it up via the INCLUDE path below. Regenerated every build so the
-# header always matches the currently selected MC version.
-$runtimeConfigTemplate = Join-Path $root "MC.Xbox\runtime_config.h.in"
-$runtimeConfigOutput   = Join-Path $mcBuildDir "runtime_config.h"
-if (-not (Test-Path $runtimeConfigTemplate)) { throw "runtime_config.h.in not found at $runtimeConfigTemplate" }
-$runtimeConfigContent = [System.IO.File]::ReadAllText($runtimeConfigTemplate)
-$runtimeConfigContent = $runtimeConfigContent.Replace('@@MC_VERSION@@',           $ProjectConfig.MinecraftVersion)
-$runtimeConfigContent = $runtimeConfigContent.Replace('@@FABRIC_LOADER_VERSION@@', $ProjectConfig.FabricLoaderVersion)
-$runtimeConfigContent = $runtimeConfigContent.Replace('@@MC_ASSET_INDEX@@',       $ProjectConfig.MinecraftAssetIndex)
-$runtimeConfigContent = $runtimeConfigContent.Replace('@@DEFAULT_LOADER@@',       $ProjectConfig.DefaultLoader)
-$runtimeConfigContent = $runtimeConfigContent.Replace('@@DEFAULT_LOADER_VERSION@@', $ProjectConfig.DefaultLoaderVersion)
-$runtimeConfigContent = $runtimeConfigContent.Replace('@@DEFAULT_LAUNCH_VERSION@@', $ProjectConfig.DefaultLaunchVersion)
-$runtimeConfigContent = $runtimeConfigContent.Replace('@@DEFAULT_CONTROLLER_PROVIDER@@', $ProjectConfig.DefaultControllerProvider)
-$runtimeConfigContent = $runtimeConfigContent.Replace('@@DEFAULT_JAVA_RUNTIME@@',  $ProjectConfig.DefaultJavaRuntime)
-$runtimeConfigContent = $runtimeConfigContent.Replace('@@DEFAULT_SUPPORT_LEVEL@@', $ProjectConfig.DefaultSupportLevel)
-$runtimeConfigContent = $runtimeConfigContent.Replace('@@RELEASE_CHANNEL@@',      $ReleaseChannel)
-if ($runtimeConfigContent -match '@@[A-Z_]+@@') { throw "runtime_config.h still contains unsubstituted tokens after generation: $($Matches[0])" }
-[System.IO.File]::WriteAllText($runtimeConfigOutput, $runtimeConfigContent)
-Write-Host "runtime_config.h written for MC $($ProjectConfig.MinecraftVersion) / default $($ProjectConfig.DefaultLoader)-$($ProjectConfig.DefaultLoaderVersion) / fabric-loader $($ProjectConfig.FabricLoaderVersion) / asset index $($ProjectConfig.MinecraftAssetIndex)"
+# Shared generator keeps build.ps1, tools/ui-preview and the packaged header in
+# sync (see scripts/gen-runtime-config.ps1).
+$runtimeConfigOutput = Join-Path $mcBuildDir "runtime_config.h"
+& (Join-Path $root "scripts\gen-runtime-config.ps1") `
+    -OutputPath $runtimeConfigOutput `
+    -ReleaseChannel $ReleaseChannel
 
 Write-Host "=== Building MC.Xbox.exe ==="
 $mcSources = Get-ChildItem (Join-Path $root "MC.Xbox") -Recurse -File -Include *.cpp, *.c, *.h, *.hpp |
