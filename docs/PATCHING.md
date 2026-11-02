@@ -2,6 +2,12 @@
 
 Minecraft, Fabric, NeoForge, LWJGL, and Java expect desktop Windows behavior. Xbox Developer Mode UWP runs inside a packaged sandbox, so a few targeted patches are needed.
 
+## Controller mods: Controlify only (2026-11-02)
+
+This fork **does not compile or package the Bandit Controller mod**. The sections below describe legacy sources that remain in `controller_mod/` for reference; `build.ps1` no longer calls any of their scripts. Compiling one controller variant for each of 51 catalog targets consumed 1,633.7 s (27 min) of a 2,317.2 s cold build and was the only step that failed on transient NeoForge installer errors.
+
+Instead, `config/controlify-bundle.json` pins Controlify `3.0.1+lts` and its required YACL `3.8.2` for `1.21.1 / neoforge / 21.1.250`, with Modrinth URLs, SHA1 hashes and byte sizes. They are bundled into `runtime\bundled-mods\` and `runtime\version-mods\<default-target>\`, so `SeedLocalRuntime` and `minecraft_launch.cpp` place them in the new instance's `mods/` folder. `scripts/validate-modern-version-matrix.ps1` enforces both the presence of those JARs and the absence of any `banditvault-*-controller-*.jar`. `MC.Xbox/App.cpp` removes stale Bandit jars from older installs but never removes Controlify. The UWP compatibility mod `banditvault-xbox-compat` is unrelated to controller input and is still bundled.
+
 ## Fabric Loader patch
 
 `scripts\patch-fabric.ps1` compiles Java sources from `patch\` and overlays the resulting classes into a local Fabric Loader JAR:
@@ -132,7 +138,7 @@ NeoForge `1.21.1` controller support lives in `controller_mod\neoforge\` and is 
 
 The build compiles against locally generated NeoForge client artifacts under the ignored `prebuilt\neoforge\` directory. If those artifacts are absent, the build generates them with `scripts\gen-neoforge-artifacts.ps1`. Generated Minecraft and NeoForge client jars are compile-only inputs and must not be committed or packaged in the controller jar.
 
-The top-level package places each controller under `runtime\version-mods\<target-id>\`. The normal loader-mod sync copies the matching controller into the active profile. Strict builds require every advertised controller and validate the final APPX before release.
+The top-level package no longer places any Bandit controller under `runtime\version-mods\<target-id>\`; strict builds explicitly reject those jars. Controlify + YACL occupy the default target's directory instead, and the normal loader-mod sync copies them into the active profile.
 
 ## NeoForge securejarhandler patch
 

@@ -21,6 +21,17 @@ Esta edición junta dos cosas:
 > autenticación Microsoft/Xbox y la verificación de propiedad de Minecraft
 > Java Edition se mantienen intactas; no hay modo offline ni cuentas falsas.
 
+
+> **Controlify (2026-11-02).** Este fork ya no compila el mod *Bandit Controller*:
+> generaba 51 variantes y consumía 27 de los 39 minutos de un build frío, además
+> de ser el único paso que fallaba por errores transitorios del installer de
+> NeoForge. En su lugar se empaquetan Controlify `3.0.1+lts` y su dependencia
+> YACL `3.8.2` (con URL, SHA1 y tamaño fijados en
+> `config/controlify-bundle.json`) y se colocan en `mods/` de las instancias
+> nuevas del target por defecto `1.21.1 / neoforge / 21.1.250`. El campo
+> `controllerProvider` del catálogo es `none` en las 56 filas. Se conserva el
+> mod `banditvault-xbox-compat`, que parchea UWP y no es un mod de control.
+
 ## De dónde viene cada cosa
 
 | Parte | Origen |

@@ -2697,26 +2697,14 @@ void ShowModsPage(
                         state.isError = true;
                     }
                 } else if (state.modsProfileFocus == 5 && !state.modsProfileBuiltin) {
-                    state.modsProfileControllerModEnabled = !state.modsProfileControllerModEnabled;
-                    if (!SetProfileControllerModEnabled(runtimeRoot, state.modsProfileId, state.modsProfileControllerModEnabled)) {
-                        state.modsProfileControllerModEnabled = !state.modsProfileControllerModEnabled;
-                        state.status = Tr(L"Could not save controller setting");
-                        state.isError = true;
-                        continue;
-                    }
-                    if (state.modsProfileControllerModEnabled) {
-                        const int removed = DeleteControlifyModsFromDir(ProfileModsDir(runtimeRoot, state.modsProfileId));
-                        state.modsProfileMods = ListProfileMods(runtimeRoot, state.modsProfileId);
-                        state.status = removed > 0
-                            ? Tr(L"Bandit controller mod enabled and Controlify removed")
-                            : Tr(L"Bandit controller mod will be forced on launch");
-                    } else {
-                        const int removed = DeleteBanditControllerModsFromDir(ProfileModsDir(runtimeRoot, state.modsProfileId));
-                        state.modsProfileMods = ListProfileMods(runtimeRoot, state.modsProfileId);
-                        state.status = removed > 0
-                            ? Tr(L"Bandit controller mod disabled and removed")
-                            : Tr(L"Bandit controller mod disabled");
-                    }
+                    // Controlify is the only controller mod shipped now. This
+                    // action only cleans stale Bandit jars from older APPX
+                    // installs; it must never remove Controlify.
+                    const int removed = DeleteBanditControllerModsFromDir(ProfileModsDir(runtimeRoot, state.modsProfileId));
+                    state.modsProfileMods = ListProfileMods(runtimeRoot, state.modsProfileId);
+                    state.status = removed > 0
+                        ? Tr(L"Bandit controller mod disabled and removed")
+                        : Tr(L"Controlify stays enabled");
                     state.isError = false;
                 } else if (state.modsProfileFocus == 0) {
                     if (!SetActiveProfileId(runtimeRoot, state.modsProfileId)) { state.status = Tr(L"Could not save active profile"); state.isError = true; continue; }

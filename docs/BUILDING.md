@@ -25,6 +25,12 @@ Mesa UWP runtime DLLs are already tracked in `mesa-runtime\`. Pass `-MesaRuntime
 
 Forge and NeoForge preparation download their matching official installer automatically.
 
+## Controlify bundle
+
+`config\controlify-bundle.json` pins the Controlify JAR and its required YACL dependency for the default target, including Modrinth CDN URL, SHA1 and byte size. `build.ps1` validates all three with `Save-RemoteFile`, copies both JARs into `runtime\bundled-mods\` and into `runtime\version-mods\<default-target>\`, and `scripts\validate-modern-version-matrix.ps1` refuses to package an APPX without them (or with any `banditvault-*-controller-*.jar`). To change the Controlify version, edit only that JSON file with a matching Modrinth version id + hash; the portable validator checks that the pinned `targetId`, `loader` and `minecraftVersion` still match `scripts\config.ps1`.
+
+The `controller_mod\` sources and their build scripts remain in the repository for reference but are no longer called by `build.ps1`. Commands that invoke them directly are legacy/manual only.
+
 ## Versions
 
 Default versions live in `scripts/config.ps1`. The multi target catalog lives in `config\versions.tsv`. Recommended Modrinth project slugs live in `config\recommended-mods.json`, keyed by loader and Minecraft version. Every catalog target needs an entry, including an empty array when there are no recommendations yet.
@@ -83,7 +89,7 @@ config\forge-install-profile.json
 
 `scripts\prepare-forge-patched-client.ps1` downloads the matching official Forge installer and generates the patched client in the local cache, including legacy 1.20.1. Controller compilation puts that patched client before the original SRG jar on its classpath. See [PATCHING.md](PATCHING.md) for controller mod details.
 
-For adding another playable Forge target, add it to `config\versions.tsv`, extend `launch\loaders\forge.cpp`, and let `build.ps1` generate the manifest plus any `controller_mod` output under `runtime\version-mods\<target-id>\`.
+For adding another playable Forge target, add it to `config\versions.tsv`, extend `launch\loaders\forge.cpp`, and let `build.ps1` generate the manifest. No `controller_mod` output is produced; install Controlify from the Mods browser for that target.
 
 ### Minecraft 26.2
 
@@ -166,7 +172,7 @@ To prepare a target other than the default:
 .\scripts\setup.ps1 -MinecraftVersion 1.20.1 -FabricLoaderVersion 0.19.5
 ```
 
-`compat_mod\build_compat_mod.ps1` and `controller_mod\fabric\build_fabric_controller_mod.ps1` both call it themselves when a target's client jar is missing, so per target preparation is usually automatic.
+`compat_mod\build_compat_mod.ps1` calls it itself when a target's client jar is missing, so per target preparation is usually automatic. `controller_mod\fabric\build_fabric_controller_mod.ps1` does the same but is no longer used by `build.ps1`.
 
 If the setup script cannot run, see the manual fallback at the end of this page.
 
@@ -196,7 +202,9 @@ natives\
 graphics\
 runtime\libraries\...\fabric-loader-<version>.jar
 securejarhandler-uwp-patch.jar
-runtime\bundled-mods\
+runtime\bundled-mods\banditvault-xbox-compat-1.0.0.jar
+runtime\bundled-mods\controlify-3.0.1+lts+1.21.1-neoforge.jar
+runtime\bundled-mods\yet_another_config_lib_v3-3.8.2+1.21.1-neoforge.jar
 runtime\version_catalog.tsv
 runtime\recommended-mods.json
 runtime\manifests\
@@ -302,9 +310,11 @@ Run:
 
 The GitHub Actions workflow in `.github/workflows/nightly.yml` builds and publishes the moving `nightly-native` release when relevant source, build, runtime, or workflow files change on `main-native`. Documentation only changes such as README updates do not trigger a package. This fork additionally ships `.github/workflows/native-neoforge.yml`, which builds the native package from the fork branch, attaches it to the run and **publishes the `nightly-native` Release automatically on every build** with `BanditLauncherNative-neoforge.appx`, its `.sha256` and the matching `.cer`. The upstream license requires written permission from veroxsity / BanditVault to redistribute APPX packages; this fork publishes at its owner's request.
 
-### Why a cold build takes ~20 minutes, and how CI avoids it
+### Why a cold build was slow, and how CI avoids it
 
-`build.ps1` generates one download manifest for each of the 56 rows in `config/versions.tsv` and compiles compatibility/controller mods for every playable target. Every one of those outputs, plus the Java UWP patches and `MC.Xbox.exe`, already has a content-hash stamp (`New-BuildStamp` / `Test-BuildStampCurrent`) in `staging\build` or `staging\cache\manifests`. On a fresh Actions runner those directories are empty, so all of it is rebuilt: that is the long cold build.
+Measured on run `41446496020`: the build took 2,317.2 s (39 min), of which 1,633.7 s (27 min, 70.5%) was the "Per-version compat and controller mods" phase. That phase compiled a separate Bandit controller mod for 51 catalog targets, running the full NeoForge installer once per version. This fork no longer compiles any Bandit controller: Controlify is downloaded once from Modrinth with pinned hashes. A cold build now spends its time on manifests, the UWP compat mods and the Java patches (~11 min), and a warm cached build is faster still.
+
+`build.ps1` generates one download manifest for each of the 56 rows in `config/versions.tsv` and compiles the UWP compatibility mods for the Fabric targets. Every one of those outputs, plus the Java UWP patches and `MC.Xbox.exe`, already has a content-hash stamp (`New-BuildStamp` / `Test-BuildStampCurrent`) in `staging\build` or `staging\cache\manifests`. On a fresh Actions runner those directories are empty, so all of it is rebuilt: that is the long cold build.
 
 `native-neoforge.yml` restores `staging/cache`, `staging/build`, `staging/certs` and `staging/notes` from `actions/cache` **after** `clean.ps1 -Apply` (which deletes `staging/build`, `staging/package`, `staging/certs` and `output`), and saves a fresh cache after the build. `staging/package` is deliberately not cached because it is the final package content. With a warm cache the stamps short-circuit the downloads and the ~50 Java compiles; only files whose inputs actually changed are rebuilt. `Write-Phase` in `build.ps1` prints per-phase elapsed times so a slow build can be attributed.
 
@@ -348,7 +358,7 @@ The build script:
 8. Copies patched Fabric Loader jars, patched TinyRemapper for legacy Fabric, the securejarhandler patch, bundled mods, log config, natives, Mesa/MobileGlues graphics DLLs, and the JREs.
 9. Generates `download_manifest.tsv` for the configured default target (NeoForge 1.21.1 in this fork).
 10. Generates `runtime\manifests\<target-id>.tsv` for cataloged Fabric, Forge, and NeoForge targets.
-11. Builds per target compatibility mod jars and Fabric, Forge, and NeoForge controller mod jars under `runtime\version-mods`.
+11. Builds the per-target UWP compatibility mod jars for Fabric targets under `runtime\version-mods`. No Bandit controller mod is compiled; `config\controlify-bundle.json` pins Controlify + YACL instead.
 12. Generates UWP tile and splash assets from `MC.Xbox\Assets\Java_UWP_Icon.png`.
 13. Creates and signs `output\BanditLauncherNative_<appx-version>.appx`.
 14. Deletes `staging\package` unless `-KeepStaging` is set.

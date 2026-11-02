@@ -25,7 +25,7 @@ struct Profile {
     std::wstring loaderVersion;
     std::wstring targetId;
     bool builtin = false;
-    bool controllerModEnabled = true;
+    bool controllerModEnabled = false;
 };
 
 std::wstring ProfilesRoot(const std::wstring& runtimeRoot);

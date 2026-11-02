@@ -99,7 +99,7 @@ When version JSON needs loader specific fields, `ResolveVersionInfo()` delegates
 `launch/minecraft_launch.cpp` handles the common embed path:
 
 - Locates packaged JREs (`jre`, `jre21`, and `jre17` when packaged for Java 17 targets).
-- Syncs bundled loader mods from `runtime/version-mods/<target-id>/` into the active profile `mods/` folder for Forge and NeoForge launches.
+- Syncs bundled loader mods (the UWP compat mod and, for the default target, the Controlify bundle) from `runtime/version-mods/<target-id>/` into the active profile `mods/` folder for Forge and NeoForge launches.
 - Builds the base classpath from resolved version data.
 - Applies UWP native library paths and GLFW shim placement.
 - Calls loader hooks before adjusting classpath and JVM options.
@@ -177,7 +177,7 @@ To add another Forge target:
 
 1. Extend the provider logic in `launch/loaders/forge.cpp`.
 2. Add or update the target row in `config/versions.tsv`.
-3. Ensure `build.ps1` generates the matching manifest and any per target controller mod jar.
+3. Ensure `build.ps1` generates the matching manifest and the per-target UWP compatibility mod where required. The Bandit controller mod is no longer built.
 4. Confirm dispatch in `launch/loaders/loader.cpp` covers the new loader version.
 
 ## Native mouse
@@ -202,7 +202,7 @@ Changing the default target requires updating `scripts/config.ps1` and usually `
 | --- | --- |
 | `glfw_shim/` | Replaces desktop `glfw.dll` behavior for UWP windowing, input, and WGL. |
 | `compat_mod/` | Fabric compatibility mod: filesystem, graphics, and sandbox fixes per target. |
-| `controller_mod/` | Shared controller core plus loader-specific controller mods built into `runtime/version-mods/<target-id>/`. |
+| `controller_mod/` | Legacy Bandit Controller sources, kept for reference but no longer compiled or packaged. Controller support comes from the Controlify bundle in `config/controlify-bundle.json`. |
 | `patch/` | Supplies patched Fabric Loader classes and securejarhandler UWP changes packaged into the APPX. |
 | `mesa-runtime/` | Series console OpenGL translation runtime packaged under `graphics/`. |
 
@@ -211,9 +211,9 @@ Changing the default target requires updating `scripts/config.ps1` and usually `
 | Task | Start here |
 | --- | --- |
 | Add a Fabric target | `config/versions.tsv`, `scripts/config.ps1`, `launch/loaders/fabric.cpp`, [BUILDING.md](BUILDING.md) |
-| Add a NeoForge target | `config/versions.tsv`, manifest generation in `scripts/`, `launch/loaders/neoforge.cpp`, `controller_mod/neoforge/` if controller support is needed |
-| Add another Forge target | `launch/loaders/forge.cpp`, `config/versions.tsv`, `controller_mod/forge/` if controller support is needed |
-| Change bundled controller behavior | `controller_mod/`, `glfw_shim/glfw_uwp.cpp`, `mods/mod_defaults.cpp` |
+| Add a NeoForge target | `config/versions.tsv`, manifest generation in `scripts/`, `launch/loaders/neoforge.cpp` (install Controlify from the Mods browser for controller support) |
+| Add another Forge target | `launch/loaders/forge.cpp`, `config/versions.tsv` |
+| Change bundled controller behavior | `config/controlify-bundle.json`, `build.ps1`, `mods/mod_defaults.cpp` |
 | Change sign in or ownership checks | `auth/minecraft_auth.cpp` |
 | Change main menu or auth UI | `ui/launcher_ui.cpp`, `ui/auth_screen` |
 | Change downloads or repair behavior | `launch/runtime_manager.cpp` |

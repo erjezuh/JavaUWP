@@ -668,5 +668,8 @@
   "Checking sign-in": "Checking sign-in",
   "Minecraft sign-in failed": "Minecraft sign-in failed",
   "Microsoft sign-in expired": "Microsoft sign-in expired",
-  "Restart the app to request a new code.": "Restart the app to request a new code."
+  "Restart the app to request a new code.": "Restart the app to request a new code.",
+  "Controlify": "Controlify",
+  "Controlify stays enabled": "Controlify stays enabled",
+  "B  Back      A  Clean legacy controller mods      Y Rename": "B  Back      A  Clean legacy controller mods      Y Rename"
 }

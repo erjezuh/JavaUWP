@@ -815,7 +815,6 @@ public:
         const std::wstring jreDir = javaRuntime.selectedDir;
         EnsureProfilesInitialized(exeDir);
         const std::wstring activeProfile = GetActiveProfileId(exeDir);
-        const Profile activeProfileInfo = GetProfileById(exeDir, activeProfile);
         EnsureProfileGameDataInitialized(exeDir, activeProfile);
         const std::wstring sharedGameDir = exeDir + L"\\game";
         const std::wstring gameDir = ProfileGameDir(exeDir, activeProfile);
@@ -842,11 +841,13 @@ public:
         const std::wstring packageRuntimeDir = packageDir + L"\\runtime";
         const std::wstring packagedLibrariesDir = packageRuntimeDir + L"\\libraries";
         const std::wstring userModsDir = ProfileModsDir(exeDir, activeProfile);
+        // The Bandit controller is no longer shipped. Always use the filtered
+        // bundled-mods view so Controlify (+ YACL) is the only controller mod.
         const std::wstring bundledModsDir = PrepareEffectiveBundledModsDir(
             exeDir,
             versionInfo.targetId,
             versionInfo.bundledModsDir,
-            activeProfileInfo.controllerModEnabled);
+            false);
         const std::wstring clientJar = sharedGameDir + L"\\versions\\" + minecraftVersion + L"\\" + minecraftVersion + L".jar";
         const std::wstring argsPath = g_logDir + L"\\java_args.txt";
         const std::wstring javaLog = g_logDir + L"\\java_output.log";
@@ -867,19 +868,13 @@ public:
         WriteLogF(L"sharedGameDir: %s", sharedGameDir.c_str());
         WriteLogF(L"profileGameDir: %s", gameDir.c_str());
         WriteLogF(L"downloadedLibrariesDir: %s", (sharedGameDir + L"\\libraries").c_str());
-        WriteLogF(L"profile controller mod enabled=%d", activeProfileInfo.controllerModEnabled ? 1 : 0);
         WriteLogF(L"bundledModsDir: %s", bundledModsDir.c_str());
         WriteLogF(L"userModsDir: %s", userModsDir.c_str());
-        if (!activeProfileInfo.controllerModEnabled) {
-            const int controllerRemoved = DeleteBanditControllerModsFromDir(userModsDir);
-            if (controllerRemoved > 0) {
-                WriteLogF(L"Removed %d Bandit controller mod(s) from active profile before launch", controllerRemoved);
-            }
-        } else {
-            const int controlifyRemoved = DeleteControlifyModsFromDir(userModsDir);
-            if (controlifyRemoved > 0) {
-                WriteLogF(L"Removed %d Controlify mod(s) from active profile before launch", controlifyRemoved);
-            }
+        // Migrate older installs: remove stale Bandit controller jars, but never
+        // delete Controlify - it is the only controller mod in this fork.
+        const int controllerRemoved = DeleteBanditControllerModsFromDir(userModsDir);
+        if (controllerRemoved > 0) {
+            WriteLogF(L"Removed %d stale Bandit controller mod(s) from active profile before launch", controllerRemoved);
         }
         const int blockedRemoved = PurgeBlockedModsFromDir(exeDir, userModsDir);
         if (blockedRemoved > 0) {

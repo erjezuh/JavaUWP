@@ -444,12 +444,6 @@ if (-not (Test-Path $shimDll)) { throw "GLFW shim DLL missing after build: $shim
 Write-Phase "Building Xbox compatibility mod"
 & (Join-Path $root "compat_mod\build_compat_mod.ps1")
 
-Write-Phase "Building default Fabric controller mod"
-& (Join-Path $root "controller_mod\fabric\build_fabric_controller_mod.ps1") `
-    -MinecraftVersion $ProjectConfig.MinecraftVersion `
-    -LoaderVersion $ProjectConfig.FabricLoaderVersion `
-    -OutputDir (Join-Path $gameDir "mods")
-
 Write-Phase "Assembling PackageContent"
 Remove-Item -Recurse -Force $pkg -ErrorAction SilentlyContinue
 Ensure-Dir (Join-Path $pkg "Assets")
@@ -461,6 +455,29 @@ Ensure-Dir (Join-Path $pkg "runtime")
 Ensure-Dir (Join-Path $pkg "runtime\log_configs")
 Ensure-Dir (Join-Path $pkg "runtime\bundled-mods")
 Ensure-Dir (Join-Path $pkg "runtime\libraries")
+
+# This fork ships Controlify as its only controller mod. The Bandit controller
+# is no longer compiled for any target (51 per-version installer/compile runs
+# used ~27 of the 39 minutes of a cold build). Pin the Modrinth version ids,
+# SHA1 and byte sizes so every APPX is reproducible and verifiable. YACL is a
+# required Controlify dependency and is bundled alongside it.
+Write-Phase "Bundling Controlify"
+$bundleConfigPath = Join-Path $root "config\controlify-bundle.json"
+if (-not (Test-Path -LiteralPath $bundleConfigPath)) {
+    throw "Controlify bundle config not found at $bundleConfigPath"
+}
+$controlifyBundle = Get-Content -LiteralPath $bundleConfigPath -Raw | ConvertFrom-Json
+$expectedTargetId = "$($ProjectConfig.DefaultMinecraftVersion)-$($ProjectConfig.DefaultLoader)-$($ProjectConfig.DefaultLoaderVersion)"
+if ($controlifyBundle.targetId -ne $expectedTargetId) {
+    throw "Controlify bundle targets $($controlifyBundle.targetId) but the default target is $expectedTargetId"
+}
+$controlifyModNames = @($controlifyBundle.mods | ForEach-Object { $_.name })
+foreach ($bundleMod in $controlifyBundle.mods) {
+    $cachedMod = Join-Path (Join-Path $gameDir "mods") $bundleMod.name
+    Save-RemoteFile -Uri $bundleMod.url -Path $cachedMod -Sha1 $bundleMod.sha1 -Size ([long]$bundleMod.size)
+    Copy-Item -LiteralPath $cachedMod -Destination (Join-Path $pkg "runtime\bundled-mods\$($bundleMod.name)") -Force
+    Write-Host "Bundled $($bundleMod.name) ($($bundleMod.size) bytes)"
+}
 
 # com.google.guava:listenablefuture:9999.0-empty-to-avoid-conflict-with-guava
 # is an empty 2 KB placeholder, but its Maven path is 153 characters - thirty
@@ -661,24 +678,9 @@ $fabricTargets = @($manifestTargets | Where-Object { $_.loader -eq "fabric" })
 $forgeTargets = @($manifestTargets | Where-Object { $_.loader -eq "forge" })
 $neoForgeTargets = @($manifestTargets | Where-Object { $_.loader -eq "neoforge" })
 $cleanroomTargets = @($manifestTargets | Where-Object { $_.loader -eq "cleanroom" })
-function Test-ForgeControllerTarget {
-    param([Parameter(Mandatory = $true)]$Target)
-
-    return $Target.loader -eq "forge" -and $Target.controllerProvider -eq "forge"
-}
-
-function Test-FabricControllerTarget {
-    param([Parameter(Mandatory = $true)]$Target)
-
-    return $Target.loader -eq "fabric" -and $Target.controllerProvider -eq "fabric"
-}
-
-function Test-NeoForgeControllerTarget {
-    param([Parameter(Mandatory = $true)]$Target)
-
-    return $Target.loader -eq "neoforge" -and $Target.controllerProvider -eq "neoforge"
-}
-
+# controllerProvider is "none" for every catalog row: this fork bundles
+# Controlify once for the default target instead of compiling a Bandit
+# controller variant for each of the 56 targets.
 Write-Phase "Patched Fabric loader jars"
 $fabricLoaderVersions = @($ProjectConfig.FabricLoaderVersion) + @($fabricTargets | ForEach-Object { $_.loaderVersion }) |
     Where-Object { $_ } |
@@ -696,9 +698,11 @@ foreach ($loaderVersion in $fabricLoaderVersions) {
 if ($fabricLoaderVersions -contains "0.14.25") {
     Ensure-TinyRemapperJar -TinyRemapperVersion "0.8.2"
 }
-# Bundled mods (compat mod, optionally diagnostics) live under runtime\bundled-mods.
-# App.cpp copies them into LocalState\game\mods on launch.
-foreach ($name in @("banditvault-xbox-compat-1.0.0.jar", "banditvault-fabric-controller-1.0.0.jar")) {
+# Bundled mods live under runtime\bundled-mods and are seeded into
+# LocalState\game\mods on launch: the UWP compat patch plus the Controlify
+# bundle. The Bandit controller jar is intentionally absent.
+$bundledModNames = @("banditvault-xbox-compat-1.0.0.jar") + $controlifyModNames
+foreach ($name in $bundledModNames) {
     $source = Join-Path $gameDir "mods\$name"
     if (-not (Test-JarComplete $source)) { throw "Required bundled mod missing or incomplete $source" }
     Copy-Item -LiteralPath $source -Destination (Join-Path $pkg "runtime\bundled-mods\$name") -Force
@@ -800,12 +804,17 @@ if ($manifestLaunchVersion) {
 $manifestsDir = Join-Path $pkg "runtime\manifests"
 Ensure-Dir $manifestsDir
 Ensure-Dir (Join-Path $pkg "runtime\version-mods\$defaultTargetId")
+# minecraft_launch.cpp syncs version-mods/<target> into the active profile's
+# mods folder for Forge/NeoForge/Cleanroom. Put the loader-matched Controlify
+# bundle here so every new default instance starts with Controller support and
+# nothing else from the old Bandit controller stack.
+foreach ($name in $controlifyModNames) {
+    Copy-Item (Join-Path $pkg "runtime\bundled-mods\$name") (Join-Path $pkg "runtime\version-mods\$defaultTargetId\$name") -Force
+}
 if ($ProjectConfig.DefaultLoader -eq "fabric") {
-    # The bundled compat + controller jars are Fabric only. For other default
-    # loaders the per-target loops below fill version-mods/<defaultTargetId>.
-    foreach ($name in @("banditvault-xbox-compat-1.0.0.jar", "banditvault-fabric-controller-1.0.0.jar")) {
-        Copy-Item (Join-Path $pkg "runtime\bundled-mods\$name") (Join-Path $pkg "runtime\version-mods\$defaultTargetId\$name") -Force
-    }
+    # The UWP compat patch is a Fabric mod; only copy it into a Fabric default.
+    Copy-Item (Join-Path $pkg "runtime\bundled-mods\banditvault-xbox-compat-1.0.0.jar") `
+        (Join-Path $pkg "runtime\version-mods\$defaultTargetId\banditvault-xbox-compat-1.0.0.jar") -Force
 }
 Copy-Item -Force $defaultDownloadManifest (Join-Path $manifestsDir "$defaultTargetId.tsv")
 Write-Host "Default per-version manifest: $defaultTargetId.tsv"
@@ -833,10 +842,15 @@ if (-not $SkipVersionManifests) {
     Write-Host "Skipping extra per-version manifests (-SkipVersionManifests)"
 }
 
-Write-Phase "Per-version compat and controller mods"
+Write-Phase "Per-version compatibility mods"
 if (-not $SkipVersionCompat) {
     $versionModsRoot = Join-Path $pkg "runtime\version-mods"
     Ensure-Dir $versionModsRoot
+    # The Bandit controller mod is no longer compiled for any catalog target.
+    # Building one variant per row meant 51 Fabric/Forge/Cleanroom/NeoForge
+    # installer and compile runs: 1,633.7 s (27 min) of the 2,317.2 s (39 min)
+    # of a cold build, and the NeoForge installers were the only step that
+    # failed on transient network errors. Controlify is bundled instead.
     foreach ($row in $fabricTargets) {
         $lv = $row.loaderVersion
         $targetId = "$($row.minecraftVersion)-fabric-$lv"
@@ -852,38 +866,6 @@ if (-not $SkipVersionCompat) {
             Add-BuildFailure -Stage "Compat mod" -Target $targetId -Reason $_.Exception.Message
             if (Test-Path $outDir) { Remove-Item -Recurse -Force $outDir }
         }
-        if (Test-FabricControllerTarget -Target $row) {
-            Write-Host "Building per-version Fabric controller mod: $targetId"
-            try {
-                & (Join-Path $root "controller_mod\fabric\build_fabric_controller_mod.ps1") `
-                    -MinecraftVersion $row.minecraftVersion `
-                    -LoaderVersion $lv `
-                    -OutputDir $outDir
-            } catch {
-                Add-BuildFailure -Stage "Fabric controller mod" -Target $targetId -Reason $_.Exception.Message
-            }
-        } else {
-            Write-Host "Skipping per-version Fabric controller mod for ${targetId}: no bundled controller provider for this target"
-        }
-    }
-    foreach ($row in $forgeTargets) {
-        $lv = $row.loaderVersion
-        $targetId = "$($row.minecraftVersion)-forge-$lv"
-        if (-not (Test-ForgeControllerTarget -Target $row)) {
-            Write-Host "Skipping per-version forge controller mod for ${targetId}: no bundled controller provider for this target"
-            continue
-        }
-        $outDir = Join-Path $versionModsRoot $targetId
-        Write-Host "Building per-version forge controller mod: $targetId"
-        try {
-            & (Join-Path $root "controller_mod\forge\build_forge_controller_mod.ps1") `
-                -MinecraftVersion $row.minecraftVersion `
-                -ForgeVersion "$($row.minecraftVersion)-$lv" `
-                -OutputDir $outDir
-        } catch {
-            Add-BuildFailure -Stage "Forge controller mod" -Target $targetId -Reason $_.Exception.Message
-            if (Test-Path $outDir) { Remove-Item -Recurse -Force $outDir }
-        }
     }
     foreach ($row in $cleanroomTargets) {
         $lv = $row.loaderVersion
@@ -895,44 +877,9 @@ if (-not $SkipVersionCompat) {
         } catch {
             Add-BuildFailure -Stage "Cleanroom UWP patch" -Target $targetId -Reason $_.Exception.Message
         }
-        if ($row.controllerProvider -ne "cleanroom") {
-            Write-Host "Skipping per-version Cleanroom controller mod for ${targetId}: no bundled controller provider for this target"
-            continue
-        }
-        $outDir = Join-Path $versionModsRoot $targetId
-        Write-Host "Building per-version Cleanroom controller mod: $targetId"
-        try {
-            & (Join-Path $root "controller_mod\cleanroom\build_cleanroom_controller_mod.ps1") `
-                -MinecraftVersion $row.minecraftVersion `
-                -CleanroomVersion $lv `
-                -OutputDir $outDir
-        } catch {
-            Add-BuildFailure -Stage "Cleanroom controller mod" -Target $targetId -Reason $_.Exception.Message
-            if (Test-Path $outDir) { Remove-Item -Recurse -Force $outDir }
-        }
     }
-    foreach ($row in $neoForgeTargets) {
-        $lv = $row.loaderVersion
-        $targetId = "$($row.minecraftVersion)-neoforge-$lv"
-        if (-not (Test-NeoForgeControllerTarget -Target $row)) {
-            Write-Host "Skipping per-version NeoForge controller mod for ${targetId}: no bundled controller provider for this target"
-            continue
-        }
-        $outDir = Join-Path $versionModsRoot $targetId
-        Write-Host "Building per-version NeoForge controller mod: $targetId"
-        try {
-            & (Join-Path $root "controller_mod\neoforge\build_neoforge_controller_mod.ps1") `
-                -MinecraftVersion $row.minecraftVersion `
-                -NeoForgeVersion $lv `
-                -OutputDir $outDir
-        } catch {
-            Add-BuildFailure -Stage "NeoForge controller mod" -Target $targetId -Reason $_.Exception.Message
-            if (Test-Path $outDir) { Remove-Item -Recurse -Force $outDir }
-        }
-    }
-    # A failed optional controller build must never delete the default target's
-    # version-mods directory: ResolveVersionInfo marks a target unsupported when
-    # that directory is absent, even if controller support is optional.
+    # ResolveVersionInfo marks a target unsupported when its version-mods
+    # directory is absent, so always keep one for the default target.
     Ensure-Dir (Join-Path $versionModsRoot $defaultTargetId)
 } else {
     Write-Host "Skipping per-version compat mods (-SkipVersionCompat)"

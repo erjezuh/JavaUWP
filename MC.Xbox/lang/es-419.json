@@ -663,5 +663,8 @@
   "Controls": "Controles",
   "Privacy & diagnostics": "Privacidad y diagnóstico",
   "Content & updates": "Contenido y actualizaciones",
-  "Up/Down to choose   Left/Right to adjust   B to go back": "Arriba/Abajo para elegir   Izquierda/Derecha para ajustar   B para volver"
+  "Up/Down to choose   Left/Right to adjust   B to go back": "Arriba/Abajo para elegir   Izquierda/Derecha para ajustar   B para volver",
+  "Controlify": "Controlify",
+  "Controlify stays enabled": "Controlify sigue activo",
+  "B  Back      A  Clean legacy controller mods      Y Rename": "B  Atrás      A  Limpiar mods de control antiguos      Y Renombrar"
 }

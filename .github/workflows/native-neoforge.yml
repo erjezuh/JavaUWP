@@ -4,7 +4,8 @@ name: Native NeoForge fork build
 # publishes a downloadable Release (tag nightly-native) with the .appx, its
 # .sha256 and the matching .cer, and also attaches the same files to the run.
 # Set publish_release=false on a manual dispatch to skip the Release.
-# A cold build regenerates 56 manifests and ~50 Java mods; the actions/cache
+# A cold build regenerates 56 manifests and the per-target UWP compatibility
+# mods; the Bandit controller mods are no longer compiled. The actions/cache
 # restore/save below keeps those stamp-driven outputs between runs.
 on:
   workflow_dispatch:

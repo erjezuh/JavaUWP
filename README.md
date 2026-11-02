@@ -65,7 +65,7 @@ Use the **Mods** page to manage profiles and install content. Start **Remote Fil
 - Separate profiles for different Minecraft versions, loaders and mod setups.
 - Modrinth and CurseForge browsing for mods, modpacks, resource packs and shaders.
 - Recommended mods filtered for the selected launch target.
-- Bundled Bandit Controller support for targets that list a controller provider.
+- Controlify bundled by default (with YACL) for controller support on the default NeoForge 1.21.1 target.
 - Profile backups and restore options, including undoing the last deleted profile.
 - Remote Files for managing profiles and worlds through a browser on the local network.
 - Download repair, current and previous run logs, and crash report ZIPs.
@@ -104,9 +104,9 @@ Shader packs need a compatible shader loader such as Iris or Oculus in the same 
 
 ## Controller and mouse
 
-Bandit Controller is included for the catalog targets that have a controller provider. Press **View/Back** in game to open its settings. Controller availability for each target is listed in [the version catalog](config/versions.tsv).
+This fork no longer builds the Bandit Controller mod. **Controlify** (plus its required YACL dependency) is bundled in the APPX and placed in `mods/` automatically for new instances of the default `1.21.1 / NeoForge 21.1.250` target. The pins, hashes and sizes live in [config/controlify-bundle.json](config/controlify-bundle.json).
 
-To use another controller mod, turn **Bandit Controller** off for that profile before installing it.
+For other catalog targets, install the matching Controlify version from the Mods browser. The old per-profile "Bandit On/Off" switch is gone; the **Controlify** button only removes stale Bandit controller jars left by older packages. The UWP compatibility mod `banditvault-xbox-compat` is still bundled because it patches filesystem/LWJGL behaviour on Xbox.
 
 - **Main nightly** uses the optional mouse relay. A browser page is available from the launcher. Companion downloads for Windows, Android and iOS are on the [Mouse Relay release](https://github.com/veroxsity/JavaUWP/releases/tag/mouse-relay-nightly).
 - **Native mouse nightly** accepts a USB mouse directly. Launcher Settings has separate menu and game mouse sensitivity controls.

@@ -26,8 +26,8 @@ Use Settings in the launcher to adjust menu and game mouse sensitivity separatel
 ## How does multiplayer work?
 You don't need a Game Pass subscription or anything else to play multiplayer. You can hop on any server you wish.
 
-## I tried to add Controlify (or another controller mod) to my instance, and it didn't work. What happened?
-Before adding a different controller mod, click on the profile you're modifying and turn Bandit Controller off. That will prevent your desired controller mod from deleting itself when the game launches.
+## Which controller mod does this fork use?
+Controlify, with its required YACL dependency. Both are bundled in the APPX and placed in the new instance's `mods/` folder automatically for the default `1.21.1 / NeoForge 21.1.250` target. This fork no longer builds the Bandit Controller mod. If an older APPX left a `banditvault-*-controller-*.jar` in a profile, the **Controlify** button on the profile screen removes it; launching the game also cleans it up. For other catalog targets, install the matching Controlify version from the Mods browser.
 
 ## How can I change the RAM allocation?
 Unfortunately, you can't allocate more than 3-4 GB of RAM, as this is the max achievable by an XBOX in Developer Mode.

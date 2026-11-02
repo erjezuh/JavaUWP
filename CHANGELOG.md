@@ -2,6 +2,20 @@
 
 Notable changes to Bandit Launcher. Nightly packages are numbered by build revision rather than by release, so entries here are dated.
 
+## 2026-11-02 — Controlify sustituye al Bandit Controller y el APPX compila mucho más rápido
+
+### Changed
+
+**Ya no se compila el mod «Bandit Controller» para ningún target.** `build.ps1` generaba una variante distinta para 51 de las 56 filas del catálogo (18 Fabric + 16 Forge + 16 NeoForge + 1 Cleanroom); los de NeoForge ejecutan el *installer* completo por versión. Medido en el último build (`41446496020`), esa fase duró **1.633,7 s (27 min) de los 2.317,2 s (39 min)** totales, es decir el **70,5 %** del tiempo, y además fue el único paso que falló: `installer failed (1)` en el controller de `1.21.5-neoforge-21.5.98` dejó el paquete sin su JAR y `validate-modern-version-matrix.ps1` abortó antes de crear el APPX. Un build frío debería bajar ahora de ~39 min a ~11 min.
+
+**Controlify es el único mod de control que se entrega.** `config\controlify-bundle.json` fija las versiones de Modrinth para el target por defecto (`1.21.1 / neoforge / 21.1.250`): Controlify `3.0.1+lts` (`RqsNKKLK`) y su dependencia obligatoria YACL `3.8.2` (`7TVdVtxF`), con URL, SHA1 y tamaño verificados por `Save-RemoteFile`. Ambos JAR se empaquetan en `runtime\bundled-mods\` y en `runtime\version-mods\1.21.1-neoforge-21.1.250\`, de modo que `SeedLocalRuntime` y el sincronizado de `minecraft_launch.cpp` los dejan en `mods/` de cada instancia nueva. Se conserva `banditvault-xbox-compat-1.0.0.jar`, que es un parche de UWP y no un mod de control.
+
+- `config/versions.tsv`: `controllerProvider = none` en las 56 filas; `scripts/config.ps1`: `DefaultControllerProvider = none`.
+- `scripts/validate-modern-version-matrix.ps1` **prohíbe** cualquier `banditvault-*-controller-*.jar` en el APPX y **exige** los dos JAR de Controlify.
+- `MC.Xbox/App.cpp` elimina los JAR de Bandit que queden de instalaciones antiguas y nunca borra Controlify; `profiles.h` crea perfiles nuevos en modo Controlify.
+- La UI muestra «Controlify» en lugar del interruptor «Bandit On/Off»; pulsarlo sólo limpia mods antiguos.
+- `scripts/validate-fork-targets.py` verifica los hashes, el target y que ya no se compila ningún controller.
+
 ## 2026-11-02 — Arreglado el bloqueo en 4020/4021 archivos
 
 ### Fixed

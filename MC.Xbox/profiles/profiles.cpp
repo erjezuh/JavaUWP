@@ -328,7 +328,7 @@ std::vector<Profile> LoadProfiles(const std::wstring& runtimeRoot) {
                     p.loaderVersion = JsonStringOrEmpty(obj, L"loaderVersion");
                     p.targetId = JsonStringOrEmpty(obj, L"targetId");
                     p.builtin = JsonBoolOrFalse(obj, L"builtin");
-                    p.controllerModEnabled = JsonBoolOrDefault(obj, L"controllerModEnabled", true);
+                    p.controllerModEnabled = JsonBoolOrDefault(obj, L"controllerModEnabled", false);
                     if (p.id.empty()) continue;
                     if (p.name.empty()) p.name = p.id;
                     if (p.minecraftVersion.empty()) p.minecraftVersion = def.minecraftVersion;
@@ -491,7 +491,7 @@ static bool ReadProfileBackupMeta(const std::wstring& backupDir, Profile& profil
         profile.loader = ToLowerW(JsonStringOrEmpty(obj, L"loader"));
         profile.loaderVersion = JsonStringOrEmpty(obj, L"loaderVersion");
         profile.targetId = JsonStringOrEmpty(obj, L"targetId");
-        profile.controllerModEnabled = JsonBoolOrDefault(obj, L"controllerModEnabled", true);
+        profile.controllerModEnabled = JsonBoolOrDefault(obj, L"controllerModEnabled", false);
         profile.builtin = false;
         if (profile.id.empty()) return false;
         if (profile.name.empty()) profile.name = profile.id;

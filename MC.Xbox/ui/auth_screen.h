@@ -434,12 +434,12 @@ public:
                     const bool controllerFocus = state.modsProfileFocus == 5;
                     if (controllerFocus) GlowSelect(controllerBtn, 12.0f);
                     FillRound(controllerBtn, surfaceFill.Get(), 12.0f);
-                    StrokeRound(controllerBtn, state.modsProfileControllerModEnabled ? accent.Get() : muted.Get(), 12.0f, controllerFocus ? 3.0f : 2.0f);
+                    StrokeRound(controllerBtn, accent.Get(), 12.0f, controllerFocus ? 3.0f : 2.0f);
                     DrawIcon(L"\uE7FC", D2D1::RectF(controllerBtn.left + 12.0f, controllerBtn.top, controllerBtn.left + 36.0f, controllerBtn.bottom),
-                        state.modsProfileControllerModEnabled ? accent.Get() : muted.Get());
-                    DrawText(state.modsProfileControllerModEnabled ? Tr(L"Bandit On") : Tr(L"Bandit Off"), smallMid_.Get(),
+                        accent.Get());
+                    DrawText(Tr(L"Controlify"), smallMid_.Get(),
                         D2D1::RectF(controllerBtn.left + 38.0f, controllerBtn.top, controllerBtn.right - 6.0f, controllerBtn.bottom),
-                        state.modsProfileControllerModEnabled ? accent.Get() : muted.Get());
+                        accent.Get());
 
                     const D2D1_RECT_F exportBtn = D2D1::RectF(right - btnW * 3.0f - btnGap * 2.0f, top, right - btnW * 2.0f - btnGap * 2.0f, top + btnH);
                     RegisterHit(launchhit::kProfileExport, exportBtn);
@@ -480,7 +480,7 @@ public:
                 } else if (!state.modsProfileBuiltin) {
                     if (gridFocus) profileHint = Tr(L"B  Back      X  Remove mod      Y  Rename");
                     else if (state.modsProfileFocus == 4) profileHint = Tr(L"B  Back      A  Export .mrpack for PC");
-                    else if (state.modsProfileFocus == 5) profileHint = Tr(L"B  Back      A  Toggle Bandit controller mod      Y Rename");
+                    else if (state.modsProfileFocus == 5) profileHint = Tr(L"B  Back      A  Clean legacy controller mods      Y Rename");
                     else profileHint = Tr(L"B  Back      A select      X Delete      Y Rename");
                 }
                 DrawText(profileHint.c_str(),
