@@ -25,6 +25,9 @@ struct Profile {
     std::wstring loaderVersion;
     std::wstring targetId;
     bool builtin = false;
+    // Legacy preference kept for JSON compatibility. The Bandit controller is
+    // no longer bundled, so new profiles default to false and App.cpp ignores
+    // this value entirely; Controlify is always kept.
     bool controllerModEnabled = false;
 };
 
