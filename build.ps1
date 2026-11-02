@@ -462,6 +462,28 @@ Ensure-Dir (Join-Path $pkg "runtime\log_configs")
 Ensure-Dir (Join-Path $pkg "runtime\bundled-mods")
 Ensure-Dir (Join-Path $pkg "runtime\libraries")
 
+# com.google.guava:listenablefuture:9999.0-empty-to-avoid-conflict-with-guava
+# is an empty 2 KB placeholder, but its Maven path is 153 characters - thirty
+# longer than anything else in the manifest. With the Xbox LocalState prefix it
+# crosses Win32 MAX_PATH, so its runtime download never completes (4020/4021
+# files and then "Retrying in 10 seconds"). Ship it in the package instead:
+# EnsureRuntimeDownloads treats packaged libraries as already present and
+# CollectManifestLibraryJars prefers them on the classpath.
+$placeholderRelative = "com\google\guava\listenablefuture\9999.0-empty-to-avoid-conflict-with-guava\listenablefuture-9999.0-empty-to-avoid-conflict-with-guava.jar"
+$placeholderUrl = "https://libraries.minecraft.net/com/google/guava/listenablefuture/9999.0-empty-to-avoid-conflict-with-guava/listenablefuture-9999.0-empty-to-avoid-conflict-with-guava.jar"
+$placeholderSource = Join-Path (Join-Path $gameDir "libraries") $placeholderRelative
+$placeholderDest = Join-Path (Join-Path $pkg "runtime\libraries") $placeholderRelative
+try {
+    Save-RemoteFile -Uri $placeholderUrl -Path $placeholderSource -Sha1 "b421526c5f297295adef1c886e5246c39d4ac629" -Size 2199
+    Ensure-Dir (Split-Path $placeholderDest -Parent)
+    Copy-Item -LiteralPath $placeholderSource -Destination $placeholderDest -Force
+    Write-Host "Packaged Guava listenablefuture placeholder (avoids the MAX_PATH download)"
+} catch {
+    # The launcher's extended-length download path is the fallback; do not
+    # fail the whole package if this 2 KB file could not be cached locally.
+    Write-Warning "Could not bundle the Guava listenablefuture placeholder: $($_.Exception.Message)"
+}
+
 Copy-Item $mcExe (Join-Path $pkg "MC.Xbox.exe")
 
 $manifestOut = Join-Path $pkg "AppxManifest.xml"

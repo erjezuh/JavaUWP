@@ -2,6 +2,17 @@
 
 Notable changes to Bandit Launcher. Nightly packages are numbered by build revision rather than by release, so entries here are dated.
 
+## 2026-11-02 — Arreglado el bloqueo en 4020/4021 archivos
+
+### Fixed
+
+**El lanzamiento de NeoForge se quedaba en `4020/4021 files` y mostraba `game/libraries/com/google/guava/listenablefuture/9999.0-empty-to-avoid-conflict-with-guava/listenablefuture-9999.0-empty-...` con «Retrying in 10 seconds».** No era un problema de red: la URL responde `HTTP 200`, 2199 bytes y su SHA1 (`b421526c5f297295adef1c886e5246c39d4ac629`) coincide con el manifiesto. El culpable es la longitud de la ruta: ese nombre Maven mide 153 caracteres (el siguiente más largo, 123), y al anteponerle la carpeta `LocalState` de Xbox se supera el límite `MAX_PATH` de Win32, por lo que crear el `.download` y mover el archivo falla siempre.
+
+- `build.ps1` empaqueta ese JAR vacío de 2 KB en `runtime\libraries\...` con SHA1 verificado.
+- `MC.Xbox\launch\runtime_manager.cpp` ya no intenta descargar librerías que vienen en el paquete (`PackagedLibraryOverride`), usa un fichero temporal corto en `.download\<n>.part` y aplica rutas extendidas cuando la ruta completa se acerca a `MAX_PATH`.
+- `MC.Xbox\common\win32_long_path.h` aporta `ToExtendedPath` / `ToSafeFilePath`; `EnsureDirectoryTree` y `CollectManifestLibraryJars` también entienden rutas extendidas.
+- Test portátil nuevo: `tests\win32_long_path_test.cpp` (7 casos) en `tests\run-tests.sh`.
+
 ## 2026-11-02 — Release garantizada y recuperable desde el artefacto
 
 ### Fixed

@@ -10,6 +10,12 @@ g++ -std=c++17 -Wall -Wextra -Werror -pedantic \
 /tmp/neoforge_version_test
 
 echo
+echo "== Win32 long path helper (C++) =="
+g++ -std=c++17 -Wall -Wextra -Werror -pedantic \
+    -o /tmp/win32_long_path_test tests/win32_long_path_test.cpp
+/tmp/win32_long_path_test
+
+echo
 echo "== Fork configuration consistency (Python) =="
 python3 scripts/validate-fork-targets.py
 

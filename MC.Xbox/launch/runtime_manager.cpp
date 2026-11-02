@@ -3,6 +3,7 @@
 
 #include "loader.h"
 #include "launcher_common.h"
+#include "win32_long_path.h"
 #include "profiles.h"
 #include "runtime_config.h"
 
@@ -542,6 +543,23 @@ static void MarkDownloadManifestCurrent(const std::wstring& manifestPath, const 
 static constexpr int kDownloadFileAttempts = 5;
 static constexpr DWORD kDownloadRetryBaseDelayMs = 750;
 
+// Libraries that the package already ships under runtime\libraries are
+// available without a download. This is also how the launcher resolves the
+// Guava listenablefuture placeholder: its Maven path is so long that writing
+// it below LocalState exceeds Win32 MAX_PATH on Xbox.
+static std::wstring PackagedLibraryOverride(const std::wstring& relativePath) {
+    const std::wstring prefix = L"game/libraries/";
+    if (relativePath.rfind(prefix, 0) != 0) return std::wstring();
+
+    std::wstring tail = relativePath.substr(prefix.size());
+    for (wchar_t& ch : tail) {
+        if (ch == L'/') ch = L'\\';
+    }
+    const std::wstring packageDir = GetExecutableDir();
+    if (packageDir.empty()) return std::wstring();
+    return javauwp::ToSafeFilePath(packageDir + L"\\runtime\\libraries\\" + tail);
+}
+
 static std::wstring BuildRedirectUrl(const std::wstring& currentUrl, const std::wstring& location) {
     if (location.find(L"://") != std::wstring::npos) {
         return location;
@@ -727,7 +745,7 @@ bool DownloadUrlToFileWithHeaders(
             return false;
         }
 
-        EnsureDirectoryTree(GetParentDir(destination));
+        EnsureDirectoryTree(javauwp::ToSafeFilePath(GetParentDir(destination)));
         FILE* out = nullptr;
         if (_wfopen_s(&out, destination.c_str(), L"wb") != 0 || !out) {
             WriteLogF(L"Could not open download output %s err=%u", destination.c_str(), GetLastError());
@@ -826,7 +844,20 @@ bool EnsureRuntimeDownloads(
             return false;
         }
 
-        if (!options.forceRepair && FileMatchesSha1(finalPath, entry.sha1)) {
+        // Some Maven coordinates are long enough that the LocalState prefix
+        // pushes the full Win32 path past MAX_PATH. Only those paths opt into
+        // the extended form; short paths keep the regular behaviour.
+        const std::wstring localFile = javauwp::ToSafeFilePath(finalPath);
+        const std::wstring packagedFile = options.forceRepair
+            ? std::wstring() : PackagedLibraryOverride(entry.relativePath);
+        const bool packagedOk = !packagedFile.empty() &&
+            GetFileAttributesW(packagedFile.c_str()) != INVALID_FILE_ATTRIBUTES &&
+            FileMatchesSha1(packagedFile, entry.sha1);
+        if (packagedOk) {
+            WriteLogF(L"Using packaged library for %s", entry.relativePath.c_str());
+        }
+
+        if (!options.forceRepair && (packagedOk || FileMatchesSha1(localFile, entry.sha1))) {
             ++verified;
             completedBytes += entry.size;
             if (progress && (verified < 25 || verified % 100 == 0 || verified == entries.size())) {
@@ -875,8 +906,13 @@ bool EnsureRuntimeDownloads(
 
             const auto& entry = entries[entryIndex];
             const std::wstring finalPath = JoinRuntimeRelativePath(runtimeRoot, entry.relativePath);
-            const std::wstring tempPath = finalPath + L".download";
-            DeleteFileW(tempPath.c_str());
+            const std::wstring finalFile = javauwp::ToSafeFilePath(finalPath);
+            // Stage downloads in a short, flat directory. Appending ".download"
+            // to a 153 character Maven path used to push the temp file past
+            // MAX_PATH before the download even started.
+            const std::wstring tempFile = javauwp::ToSafeFilePath(
+                runtimeRoot + L"\\.download\\" + std::to_wstring(entryIndex) + L".part");
+            DeleteFileW(tempFile.c_str());
 
             if (entryIndex < 25 || entryIndex % 100 == 0) {
                 WriteLogF(L"Downloading [%zu/%zu] %s", entryIndex + 1, entries.size(), entry.relativePath.c_str());
@@ -900,7 +936,7 @@ bool EnsureRuntimeDownloads(
                     inProgressBytes[entryIndex] = 0;
                 }
 
-                DeleteFileW(tempPath.c_str());
+                DeleteFileW(tempFile.c_str());
                 if (attempt > 1) {
                     const DWORD delayMs = kDownloadRetryBaseDelayMs * static_cast<DWORD>(attempt - 1);
                     WriteLogF(L"Retrying download attempt=%d/%d delayMs=%u file=%s",
@@ -911,7 +947,7 @@ bool EnsureRuntimeDownloads(
                     std::this_thread::sleep_for(std::chrono::milliseconds(delayMs));
                 }
 
-                if (DownloadUrlToFile(entry.url, tempPath, progressCallback)) {
+                if (DownloadUrlToFile(entry.url, tempFile, progressCallback)) {
                     downloadedOk = true;
                     break;
                 }
@@ -923,7 +959,7 @@ bool EnsureRuntimeDownloads(
             }
 
             if (!downloadedOk) {
-                DeleteFileW(tempPath.c_str());
+                DeleteFileW(tempFile.c_str());
                 std::lock_guard<std::mutex> lock(stateMutex);
                 failed = true;
                 failureStatus = Tr(L"Download failed after retries");
@@ -931,14 +967,14 @@ bool EnsureRuntimeDownloads(
                 break;
             }
 
-            if (!FileMatchesSha1(tempPath, entry.sha1)) {
+            if (!FileMatchesSha1(tempFile, entry.sha1)) {
                 std::string actual;
-                Sha1File(tempPath, &actual);
+                Sha1File(tempFile, &actual);
                 WriteLogF(L"SHA1 mismatch for %s expected=%s actual=%s",
                     entry.relativePath.c_str(),
                     a2w(entry.sha1.c_str()).c_str(),
                     a2w(actual.c_str()).c_str());
-                DeleteFileW(tempPath.c_str());
+                DeleteFileW(tempFile.c_str());
                 std::lock_guard<std::mutex> lock(stateMutex);
                 failed = true;
                 failureStatus = Tr(L"File verification failed");
@@ -946,10 +982,10 @@ bool EnsureRuntimeDownloads(
                 break;
             }
 
-            EnsureDirectoryTree(GetParentDir(finalPath));
-            if (!MoveFileExW(tempPath.c_str(), finalPath.c_str(), MOVEFILE_REPLACE_EXISTING)) {
+            EnsureDirectoryTree(javauwp::ToSafeFilePath(GetParentDir(finalPath)));
+            if (!MoveFileExW(tempFile.c_str(), finalFile.c_str(), MOVEFILE_REPLACE_EXISTING)) {
                 WriteLogF(L"MoveFileEx failed for %s err=%u", finalPath.c_str(), GetLastError());
-                DeleteFileW(tempPath.c_str());
+                DeleteFileW(tempFile.c_str());
                 std::lock_guard<std::mutex> lock(stateMutex);
                 failed = true;
                 failureStatus = Tr(L"Download install failed");

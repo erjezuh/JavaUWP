@@ -9,6 +9,7 @@
 #include "launch_diagnostics.h"
 #include "neoforge.h"
 #include "launcher_common.h"
+#include "win32_long_path.h"
 #include "mod_defaults.h"
 #include "mods_browser.h"
 #include "profiles.h"
@@ -425,7 +426,7 @@ void CollectManifestLibraryJars(
         const std::wstring libraryRelative = e.relativePath.substr(wcslen(L"game\\libraries\\"));
         const std::wstring packagedOverride = packageDir + L"\\runtime\\libraries\\" + libraryRelative;
         const std::wstring abs =
-            GetFileAttributesW(packagedOverride.c_str()) != INVALID_FILE_ATTRIBUTES
+            GetFileAttributesW(javauwp::ToSafeFilePath(packagedOverride).c_str()) != INVALID_FILE_ATTRIBUTES
                 ? packagedOverride
                 : JoinRuntimeRelativePath(runtimeRoot, e.relativePath);
         if (!abs.empty()) jars.push_back(abs);
