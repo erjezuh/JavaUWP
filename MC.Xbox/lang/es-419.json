@@ -666,5 +666,11 @@
   "Up/Down to choose   Left/Right to adjust   B to go back": "Arriba/Abajo para elegir   Izquierda/Derecha para ajustar   B para volver",
   "Controlify": "Controlify",
   "Controlify stays enabled": "Controlify sigue activo",
-  "B  Back      A  Clean legacy controller mods      Y Rename": "B  Atrás      A  Limpiar mods de control antiguos      Y Renombrar"
+  "B  Back      A  Clean legacy controller mods      Y Rename": "B  Atrás      A  Limpiar mods de control antiguos      Y Renombrar",
+  "Menu mouse sensitivity": "Menu mouse sensitivity",
+  "Launcher and Minecraft menus. Left/right to adjust.": "Launcher and Minecraft menus. Left/right to adjust.",
+  "Game mouse sensitivity": "Game mouse sensitivity",
+  "Mouse look in game. Minecraft sensitivity still applies.": "Mouse look in game. Minecraft sensitivity still applies.",
+  "Mouse sensitivity saved.": "Mouse sensitivity saved.",
+  "Mouse sensitivity could not be saved.": "Mouse sensitivity could not be saved."
 }
