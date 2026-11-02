@@ -2,6 +2,52 @@
 
 Notable changes to Bandit Launcher. Nightly packages are numbered by build revision rather than by release, so entries here are dated.
 
+## 2026-11-02 — Menos trabajo por frame en el shim GLFW (sin tocar ajustes gráficos)
+
+### Changed
+
+Revisión del camino caliente que se ejecuta en **cada fotograma**. No se cambia
+ninguna opción gráfica: ni resolución, ni VSync (`glfwSwapInterval` sigue
+aplicando lo que pide el juego), ni `mesa_env.txt`, ni `options.txt`, ni
+`embeddium-options.json`, ni `jvm_args.txt`.
+
+Carencias encontradas:
+
+- `RefreshWindowMetrics()` se llamaba desde `glfwPollEvents()` **y** desde
+  `glfwGetWindowSize()`, `glfwGetFramebufferSize()` y
+  `glfwGetWindowContentScale()`. Cada llamada hacía una consulta WinRT
+  `ICoreWindow::get_Bounds` (2–4 por frame, y Minecraft consulta el tamaño del
+  framebuffer en cada frame). Ahora los getters devuelven los valores ya
+  publicados y **`glfwPollEvents()` sigue siendo el único punto de refresco**,
+  una vez por frame. No hay retardo nuevo: los callbacks de resize se disparan
+  desde `ProcessEvents()` dentro de ese mismo `glfwPollEvents()`, así que el
+  mapeo del cursor/cruceta se actualiza exactamente igual que antes.
+- `MC_LEGACY_CONTROLLER_MOD` y `MC_USE_RAW_SCALED_FRAMEBUFFER` se releían con
+  `GetEnvironmentVariableW()` en cada frame (el primero hasta 4 veces, una por
+  eje del stick). El launcher fija esas variables antes de arrancar la JVM y
+  nunca las cambia: se evalúan una sola vez en un `static const bool`.
+- `glfwMakeContextCurrent()` escribía dos líneas informativas en el log **sin
+  límite**; `ShimLog()` abre y cierra el fichero en cada llamada. Se acotan a
+  12 (los mensajes de error siguen sin límite, son diagnóstico).
+
+Nuevo `glfw_shim/perf_cache.h`: helpers portables y sin `windows.h` para el
+parseo de flags y la política de caché (`CacheExpired`, que además sobrevive al
+wrap de `GetTickCount64`). `GetDisplayScale()` usa ahora ese helper en lugar de
+su comparación ad-hoc. Cubierto por `tests/perf_cache_test.cpp` y por la
+comprobación 17 de `scripts/validate-fork-targets.py`, que también exige que
+los getters no vuelvan a consultar WinRT y que `glfwPollEvents()` conserve el
+refresco.
+
+> **Alcance honesto:** esto libera tiempo de CPU del hilo de render (que en la
+> ruta Mesa/D3D12 compite con la traducción de shaders y los draw calls), pero
+> **no garantiza un aumento de FPS medible sin perfilado en consola**. El techo
+> lo marcan VSync, la resolución del framebuffer y la capa Mesa→D3D12; subirlo
+> exigiría tocar ajustes gráficos o el juego, que quedan fuera de este cambio.
+> No se tocan `java21`, `OpenAL.dll`, el shim COM, el catálogo de mods ni otros
+> targets. La caché de shaders de Mesa (`MESA_SHADER_CACHE_DIR`) y
+> `mesa_glthread` ya estaban activos; el servidor de Remote Files usa
+> `select()` con 250 ms y no hace busy-wait.
+
 ## 2026-11-02 — Embeddium/Rubidium se apartan en 1.20.1 Forge (AV de renderizado)
 
 ### Changed

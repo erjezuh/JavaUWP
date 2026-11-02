@@ -31,6 +31,7 @@
 #include <windows.devices.input.h>
 #include <windows.ui.input.h>
 #include <windows.applicationmodel.datatransfer.h>
+#include "perf_cache.h"
 #pragma comment(lib, "ws2_32.lib")
 
 using namespace Microsoft::WRL;
@@ -605,20 +606,14 @@ static bool EnvFlagEnabled(const wchar_t* name) {
     wchar_t value[32] = {};
     DWORD len = GetEnvironmentVariableW(name, value, ARRAYSIZE(value));
     if (len == 0 || len >= ARRAYSIZE(value)) return false;
-    return _wcsicmp(value, L"1") == 0 ||
-        _wcsicmp(value, L"true") == 0 ||
-        _wcsicmp(value, L"yes") == 0 ||
-        _wcsicmp(value, L"on") == 0;
+    return bandit_perf::EnvFlagEnabledValue(value);
 }
 
 static bool EnvFlagDisabled(const wchar_t* name) {
     wchar_t value[32] = {};
     DWORD len = GetEnvironmentVariableW(name, value, ARRAYSIZE(value));
     if (len == 0 || len >= ARRAYSIZE(value)) return false;
-    return _wcsicmp(value, L"0") == 0 ||
-        _wcsicmp(value, L"false") == 0 ||
-        _wcsicmp(value, L"no") == 0 ||
-        _wcsicmp(value, L"off") == 0;
+    return bandit_perf::EnvFlagDisabledValue(value);
 }
 
 static bool DirectoryExists(const wchar_t* path) {
@@ -1461,7 +1456,10 @@ static void SetCursorInputOwner(CursorInputOwner owner) {
 }
 
 static bool LegacyControllerModMode() {
-    const bool enabled = EnvFlagEnabled(L"MC_LEGACY_CONTROLLER_MOD");
+    // Set once by ConfigureKnownModDefaults() before the JVM starts. Reading
+    // the environment here used to cost four GetEnvironmentVariableW calls per
+    // frame (one per stick axis in ConvertGameInputGamepadState).
+    static const bool enabled = EnvFlagEnabled(L"MC_LEGACY_CONTROLLER_MOD");
     if (!g_legacyControllerModModeLogged || enabled != g_lastLegacyControllerModMode) {
         g_legacyControllerModModeLogged = true;
         g_lastLegacyControllerModMode = enabled;
@@ -1795,7 +1793,11 @@ static int ScaleDimensionToPixels(FLOAT value, double scale, int fallback) {
 }
 
 static bool UseRawScaledFramebuffer() {
-    return !EnvFlagDisabled(L"MC_USE_RAW_SCALED_FRAMEBUFFER");
+    // mesa_env.txt / the launcher decide this before boot; it cannot change
+    // while the window is alive. RefreshWindowMetrics() is called from several
+    // per-frame paths, so cache the lookup instead of repeating it.
+    static const bool enabled = !EnvFlagDisabled(L"MC_USE_RAW_SCALED_FRAMEBUFFER");
+    return enabled;
 }
 
 static void QueryDisplayScale(double& scaleX, double& scaleY) {
@@ -1852,7 +1854,7 @@ static void GetDisplayScale(double& scaleX, double& scaleY) {
     static ULONGLONG lastQuery = 0;
 
     const ULONGLONG now = GetTickCount64();
-    if (lastQuery == 0 || (now - lastQuery) >= kDisplayScaleCacheMs) {
+    if (bandit_perf::CacheExpired(now, lastQuery, kDisplayScaleCacheMs, false)) {
         QueryDisplayScale(cachedX, cachedY);
         lastQuery = now;
     }
@@ -2796,16 +2798,19 @@ extern "C" __declspec(dllexport) const char* glfwGetWindowTitle(GLFWwindow*) { r
 extern "C" __declspec(dllexport) void glfwSetWindowIcon(GLFWwindow*, int, const GLFWimage*) {}
 extern "C" __declspec(dllexport) void glfwGetWindowPos(GLFWwindow*, int*x, int*y) { if(x)*x=0; if(y)*y=0; }
 extern "C" __declspec(dllexport) void glfwSetWindowPos(GLFWwindow*, int, int) {}
-extern "C" __declspec(dllexport) void glfwGetWindowSize(GLFWwindow*, int*w, int*h) { RefreshWindowMetrics(false); if(w)*w=g_window_width; if(h)*h=g_window_height; }
+// Size getters run on the render thread and Minecraft calls them every frame.
+// glfwPollEvents() already refreshes the metrics once per frame (and fires the
+// resize callbacks from ProcessEvents), so re-querying CoreWindow bounds here
+// only duplicates WinRT calls. Return the values published by that refresh.
+extern "C" __declspec(dllexport) void glfwGetWindowSize(GLFWwindow*, int*w, int*h) { if(w)*w=g_window_width; if(h)*h=g_window_height; }
 extern "C" __declspec(dllexport) void glfwSetWindowSizeLimits(GLFWwindow*, int, int, int, int) {}
 extern "C" __declspec(dllexport) void glfwSetWindowAspectRatio(GLFWwindow*, int, int) {}
 extern "C" __declspec(dllexport) void glfwSetWindowSize(GLFWwindow*, int, int) {}
-extern "C" __declspec(dllexport) void glfwGetFramebufferSize(GLFWwindow*, int*w, int*h) { RefreshWindowMetrics(false); if(w)*w=g_framebuffer_width; if(h)*h=g_framebuffer_height; }
+extern "C" __declspec(dllexport) void glfwGetFramebufferSize(GLFWwindow*, int*w, int*h) { if(w)*w=g_framebuffer_width; if(h)*h=g_framebuffer_height; }
 extern "C" __declspec(dllexport) void glfwGetWindowFrameSize(GLFWwindow*, int*l, int*t, int*r, int*b) {
     if(l)*l=0; if(t)*t=0; if(r)*r=0; if(b)*b=0;
 }
 extern "C" __declspec(dllexport) void glfwGetWindowContentScale(GLFWwindow*, float*x, float*y) {
-    RefreshWindowMetrics(false);
     if(x)*x=g_content_scale_x; if(y)*y=g_content_scale_y;
 }
 extern "C" __declspec(dllexport) float glfwGetWindowOpacity(GLFWwindow*) { return 1.f; }
@@ -3304,9 +3309,16 @@ extern "C" __declspec(dllexport) uint64_t glfwGetTimerFrequency(void) {
     return (uint64_t)f.QuadPart;
 }
 
+// ShimLog() opens and closes the log file on every call. LWJGL and some mods
+// call glfwMakeContextCurrent repeatedly, so cap the two informational lines
+// (error paths below stay uncapped, as they are diagnostics).
+static int g_make_current_log_count = 0;
 extern "C" __declspec(dllexport) void glfwMakeContextCurrent(GLFWwindow* w) {
     const DWORD tid = GetCurrentThreadId();
-    ShimLog("MakeContextCurrent %p tid=%lu previousTid=%lu", (void*)w, tid, g_eglContextThreadId);
+    if (g_make_current_log_count < 12) {
+        ++g_make_current_log_count;
+        ShimLog("MakeContextCurrent %p tid=%lu previousTid=%lu", (void*)w, tid, g_eglContextThreadId);
+    }
     if (!w) {
         if (g_eglContextThreadId != 0 && g_eglContextThreadId != tid) {
             ShimLog("MakeContextCurrent(NULL) ignored: context owned by thread %u, caller %u",
@@ -3334,7 +3346,10 @@ extern "C" __declspec(dllexport) void glfwMakeContextCurrent(GLFWwindow* w) {
         return;
     }
     g_eglContextThreadId = tid;
-    ShimLog("makeContextCurrent OK tid=%lu", tid);
+    if (g_make_current_log_count < 12) {
+        ++g_make_current_log_count;
+        ShimLog("makeContextCurrent OK tid=%lu", tid);
+    }
 }
 extern "C" __declspec(dllexport) GLFWwindow* glfwGetCurrentContext(void) {
     const DWORD tid = GetCurrentThreadId();

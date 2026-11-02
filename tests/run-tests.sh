@@ -22,6 +22,12 @@ g++ -std=c++17 -Wall -Wextra -Werror -pedantic \
 /tmp/sodium_family_test
 
 echo
+echo "== GLFW shim per-frame cache policy (C++) =="
+g++ -std=c++17 -Wall -Wextra -Werror -pedantic \
+    -o /tmp/perf_cache_test tests/perf_cache_test.cpp
+/tmp/perf_cache_test
+
+echo
 echo "== Ole32/COM UWP shim contract (C++) =="
 g++ -std=c++17 -Wall -Wextra -Werror -pedantic \
     -o /tmp/ole32_shim_test tests/ole32_shim_test.cpp

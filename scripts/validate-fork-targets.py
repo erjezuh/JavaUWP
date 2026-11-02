@@ -439,6 +439,44 @@ def main() -> int:
     if remote_hint in en_json and memory_hint in en_json and en_json.index(remote_hint) > en_json.index(memory_hint):
         errors.append("en.json lists the Remote Files hint after the memory hint (source order drift; update-translations.ps1 -Check will fail)")
 
+    # 17. GLFW shim hot path: avoid per-frame WinRT/env lookups without
+    # changing any graphics setting. The crosshair mapping depends on the
+    # framebuffer metrics, so glfwPollEvents() must remain the refresh point.
+    glfw_shim = read("glfw_shim/glfw_uwp.cpp")
+    perf_cache = read("glfw_shim/perf_cache.h")
+    run_tests = read("tests/run-tests.sh")
+    for needle in ('#include "perf_cache.h"',
+                   "bandit_perf::EnvFlagEnabledValue",
+                   "bandit_perf::EnvFlagDisabledValue",
+                   "bandit_perf::CacheExpired",
+                   'static const bool enabled = EnvFlagEnabled(L"MC_LEGACY_CONTROLLER_MOD")',
+                   'static const bool enabled = !EnvFlagDisabled(L"MC_USE_RAW_SCALED_FRAMEBUFFER")',
+                   "g_make_current_log_count"):
+        if needle not in glfw_shim:
+            errors.append(f"glfw_uwp.cpp is missing the hot-path optimisation {needle}")
+    for needle in ("EnvFlagEnabledValue", "EnvFlagDisabledValue", "CacheExpired"):
+        if needle not in perf_cache:
+            errors.append(f"perf_cache.h is missing {needle}")
+    if "tests/perf_cache_test.cpp" not in run_tests:
+        errors.append("tests/run-tests.sh does not run the GLFW shim perf-cache test")
+    # The size getters must NOT re-query CoreWindow bounds on every frame.
+    for getter in ("glfwGetWindowSize", "glfwGetFramebufferSize", "glfwGetWindowContentScale"):
+        line = next((ln for ln in glfw_shim.splitlines()
+                     if getter + "(" in ln and "dllexport" in ln), "")
+        if not line:
+            errors.append(f"glfw_uwp.cpp is missing {getter}")
+        elif "RefreshWindowMetrics" in line:
+            errors.append(f"{getter} still re-queries WinRT window metrics per call")
+    # ...but the one refresh per frame must stay, or the cursor/crosshair
+    # mapping and the resize callbacks never update.
+    poll = glfw_shim[glfw_shim.find("void glfwPollEvents"):]
+    poll = poll[:poll.find("\n}\n")]
+    if "RefreshWindowMetrics(true)" not in poll:
+        errors.append("glfwPollEvents no longer refreshes window metrics (crosshair mapping would go stale)")
+    # No graphics setting may be forced by this optimisation.
+    if "p_eglSwapInterval(g_eglDisplay, i)" not in glfw_shim:
+        errors.append("glfwSwapInterval no longer honours the value requested by the game")
+
     for warning in warnings:
         print(f"WARN  {warning}")
     for error in errors:

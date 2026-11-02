@@ -53,6 +53,34 @@ To apply it right now without reinstalling, rename
 vanilla renderer. The Spanish guide has the full diagnosis:
 [FORK-NATIVE-NEOFORGE.es.md](FORK-NATIVE-NEOFORGE.es.md).
 
+## Can the launcher code itself give me more FPS?
+
+Only a little, and honestly: the ceiling is set by VSync, the framebuffer
+resolution and the Mesa→D3D12 translation layer, none of which this fork can
+raise without changing graphics settings (which this build deliberately does
+**not** do). `glfwSwapInterval()` still applies whatever the game asks for, the
+Mesa shader disk cache and `mesa_glthread` were already enabled, and the Remote
+Files server waits in `select()` instead of spinning.
+
+What the build *does* remove is redundant work on the render thread, which on
+this path competes with shader translation and draw calls:
+
+- `glfwGetWindowSize()`, `glfwGetFramebufferSize()` and
+  `glfwGetWindowContentScale()` no longer re-query `ICoreWindow::get_Bounds` on
+  every call. `glfwPollEvents()` remains the single per-frame refresh, so resize
+  callbacks and the cursor/crosshair mapping keep exactly the same latency.
+- The `MC_LEGACY_CONTROLLER_MOD` and `MC_USE_RAW_SCALED_FRAMEBUFFER`
+  environment flags are read once instead of 4–8 times per frame.
+- The two unbounded informational log lines in `glfwMakeContextCurrent()` are
+  capped; `ShimLog()` opens/closes the log file on every call.
+
+Covered by `tests/perf_cache_test.cpp` and check 17 in the portable validator.
+**Not applied** (they need console profiling first, and would risk the verified
+crosshair fix): subscribing to `CoreWindow::SizeChanged` to drop the last
+`get_Bounds` call, coalescing high-frequency pointer events, and replacing the
+cursor overlay's 12 per-frame `glGet*` calls / `glBufferData` with a persistent
+buffer. No FPS gain is claimed without a console measurement.
+
 ## Minecraft crashes while loading mods with "Unable to load library 'Ole32'"
 
 That crash is **OSHI / JNA / WMI**, not a renderer conflict. Embeddium 0.3.x probes the

@@ -429,6 +429,43 @@ Pruebas rápidas si aun así crashea:
 > se confirmó que el AV al entrar al mundo era de Embeddium y no de esta ruta
 > COM/audio; mira la sección de renderizado más arriba.
 
+## Optimizaciones del camino caliente (sin cambiar ajustes gráficos)
+
+El techo de FPS en esta plataforma lo marcan **VSync, la resolución del
+framebuffer y la capa Mesa → D3D12** (traducción de shaders SPIR-V → DXIL y
+draw calls). Nada de eso se puede subir desde el launcher sin tocar ajustes
+gráficos, y este cambio **no los toca**: `glfwSwapInterval()` sigue aplicando lo
+que pide el juego, `MESA_SHADER_CACHE_DIR` y `mesa_glthread` ya estaban
+activos, y el servidor de *Archivos Remotos* espera en `select()` con 250 ms
+(no hace busy-wait).
+
+Lo que sí se ha quitado es trabajo redundante en el hilo de render, que aquí
+compite con la traducción de shaders:
+
+| Antes | Ahora |
+|---|---|
+| `glfwPollEvents()` **y** los tres getters de tamaño llamaban a `RefreshWindowMetrics()` → 2–4 consultas WinRT `ICoreWindow::get_Bounds` por frame | Los getters devuelven los valores ya publicados; `glfwPollEvents()` es el único refresco, 1 vez por frame |
+| `MC_LEGACY_CONTROLLER_MOD` y `MC_USE_RAW_SCALED_FRAMEBUFFER` se releían con `GetEnvironmentVariableW()` 4–8 veces por frame | `static const bool`: una sola lectura por proceso |
+| `glfwMakeContextCurrent()` escribía 2 líneas de log sin límite (cada `ShimLog()` abre y cierra el fichero) | Acotadas a 12; los mensajes de error siguen sin límite |
+
+**Sin retardo nuevo**: los callbacks de resize salen de `ProcessEvents()` dentro
+del mismo `glfwPollEvents()`, así que el mapeo del cursor y de la cruceta se
+actualiza igual que antes. `glfw_shim/perf_cache.h` contiene los helpers
+portables (parseo de flags y `CacheExpired`, que sobrevive al wrap de
+`GetTickCount64`); `tests/perf_cache_test.cpp` los prueba con `g++` y la
+comprobación 17 del validador exige que los getters no vuelvan a consultar
+WinRT y que `glfwPollEvents()` conserve el refresco.
+
+**No aplicado** (haría falta perfilado en consola y pondría en riesgo la
+cruceta ya verificada): suscribirse a `CoreWindow::SizeChanged` para eliminar
+la última consulta `get_Bounds`, coalescer los eventos de puntero de alta
+frecuencia, y sustituir los 12 `glGet*` + `glBufferData` por frame del overlay
+del cursor por un buffer persistente con `glBufferSubData`.
+
+> No se promete una subida de FPS medible sin medir en consola. Esto libera
+> tiempo de CPU del hilo de render; el límite real sigue estando en VSync y en
+> la capa gráfica.
+
 ## Cómo compilar
 
 Requisitos: Windows, Visual Studio con C++/WinRT, Windows SDK, JDK 17, 21 y
