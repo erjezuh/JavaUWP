@@ -1,0 +1,66 @@
+name: Inspect packaged download manifest
+
+# Temporary diagnostic: extract the exact manifest rows packaged into the
+# built APPX so a failing download can be traced to its URL and SHA1.
+on:
+  push:
+    branches:
+      - arena/16fba603-javauwp
+    paths:
+      - "docs/ci/.inspect-trigger"
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Extract manifest rows
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          RUN_ID=$(tr -d '[:space:]' < docs/ci/.inspect-trigger)
+          ARTIFACT_ID=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/artifacts" \
+            --jq '.artifacts[] | select(.name=="BanditLauncherNative-neoforge") | .id' | head -1)
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID/zip" > /tmp/a.zip
+          rm -rf /tmp/a && mkdir -p /tmp/a
+          unzip -o -q /tmp/a.zip -d /tmp/a
+          APPX=$(find /tmp/a -name "*.appx" | head -1)
+          echo "APPX: $APPX"
+          {
+            echo "# Packaged manifest diagnostics"; echo
+            echo "Run: $RUN_ID"; echo
+            echo "## Files inside the APPX matching download_manifest"
+            unzip -Z1 "$APPX" | grep -i "download_manifest\|manifests/.*\.tsv" | head -20
+            echo
+            echo "## Default manifest header"
+            unzip -p "$APPX" download_manifest.tsv | grep '^#' | head -30 || true
+            echo
+            echo "## Rows containing listenablefuture (default manifest)"
+            unzip -p "$APPX" download_manifest.tsv | grep -n "listenablefuture" || true
+            echo
+            echo "## Rows containing listenablefuture (per-version manifests)"
+            for m in $(unzip -Z1 "$APPX" | grep "runtime/manifests/.*\.tsv" | head -60); do
+              rows=$(unzip -p "$APPX" "$m" | grep "listenablefuture" || true)
+              if [ -n "$rows" ]; then echo "### $m"; echo "$rows"; fi
+            done
+            echo
+            echo "## Total rows in default manifest"
+            unzip -p "$APPX" download_manifest.tsv | grep -vc '^#' || true
+          } > docs/ci/manifest-inspect.md 2>&1
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f docs/ci/manifest-inspect.md
+          if ! git diff --cached --quiet; then
+            git commit -m "CI: packaged manifest diagnostics"
+            git pull --rebase origin "$GITHUB_REF_NAME"
+            git push origin "HEAD:$GITHUB_REF_NAME"
+          fi
