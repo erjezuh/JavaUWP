@@ -25,12 +25,21 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           RUN_ID=$(tr -d '[:space:]' < docs/ci/.peek-trigger)
+          gh run view "$RUN_ID" --repo "$GITHUB_REPOSITORY" --log-failed > /tmp/full.log 2>&1
           {
-            echo "# Failed build log"; echo
-            gh run view "$RUN_ID" --repo "$GITHUB_REPOSITORY" --log-failed 2>&1 \
-              | tail -c 120000
+            echo "# Failed build log (filtered)"; echo
+            echo "Total lines: $(wc -l < /tmp/full.log)"; echo
+            echo "## 1.21.5 / controller / failure lines"
+            grep -n -iE "1\.21\.5|controller|build failure|exception|failed|missing or invalid" /tmp/full.log \
+              | grep -viE "proprietary API|^\s*\^" | head -120
+            echo
+            echo "## Build failure summary lines"
+            grep -n -iE "Add-BuildFailure|Strict build|BuildFailures|WARNING" /tmp/full.log | head -60
+            echo
+            echo "## Last 25 lines"
+            tail -25 /tmp/full.log
           } > docs/ci/build-failure.md 2>&1
-          tail -40 docs/ci/build-failure.md
+          tail -60 docs/ci/build-failure.md
       - name: Save
         if: always()
         shell: bash
