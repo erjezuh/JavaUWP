@@ -4,6 +4,8 @@ name: Native NeoForge fork build
 # publishes a downloadable Release (tag nightly-native) with the .appx, its
 # .sha256 and the matching .cer, and also attaches the same files to the run.
 # Set publish_release=false on a manual dispatch to skip the Release.
+# A cold build regenerates 56 manifests and ~50 Java mods; the actions/cache
+# restore/save below keeps those stamp-driven outputs between runs.
 on:
   workflow_dispatch:
     inputs:
@@ -15,6 +17,10 @@ on:
         description: "Optional NeoForge loader version override (defaults to scripts/config.ps1)"
         type: string
         default: ""
+      fast_build:
+        description: "Quick smoke build: skip the 56 per-version manifests and per-version mods (not published)"
+        type: boolean
+        default: false
   push:
     branches:
       - arena/16fba603-javauwp
@@ -31,8 +37,12 @@ on:
       - "tests/**"
 
 concurrency:
-  group: native-neoforge-fork-build
-  cancel-in-progress: true
+  # A build that is about to publish a Release must not be killed by the next
+  # push. Queued runs still see a warm cache, so they are cheap.
+  # v2 starts a fresh group so this policy change cannot cancel a build that
+  # was already running under the old cancel-in-progress: true group.
+  group: native-neoforge-fork-build-v2
+  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -49,6 +59,8 @@ jobs:
 
   build:
     name: Build native NeoForge APPX
+    # Docs/preview-only pushes can say [skip appx] in the commit message.
+    if: ${{ !contains(github.event.head_commit.message || '', '[skip appx]') }}
     needs: checks
     runs-on: windows-latest
     timeout-minutes: 180
@@ -93,6 +105,33 @@ jobs:
         shell: powershell
         run: .\scripts\clean.ps1 -Apply
 
+      # build.ps1 and every per-target mod script already write content-hash
+      # stamps next to their outputs. clean.ps1 above deletes staging/build,
+      # so restoring these four directories AFTER the clean is what turns a
+      # cold 20-minute rebuild into a mostly stamp-hit build. staging/package
+      # is deliberately NOT cached: it is the final package content.
+      - name: Restore build cache
+        id: build-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            staging/cache
+            staging/build
+            staging/certs
+            staging/notes
+          key: native-appx-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            native-appx-${{ runner.os }}-
+
+      - name: Report cache status
+        shell: powershell
+        env:
+          CACHE_HIT: ${{ steps.build-cache.outputs.cache-hit }}
+          CACHE_KEY: ${{ steps.build-cache.outputs.cache-primary-key }}
+          CACHE_MATCHED: ${{ steps.build-cache.outputs.cache-matched-key }}
+        run: |
+          Write-Host "APPX_BUILD_CACHE_HIT $env:CACHE_HIT (primary $env:CACHE_KEY, restored $env:CACHE_MATCHED)"
+
       - name: Prepare build cache
         shell: powershell
         run: .\scripts\setup.ps1
@@ -101,6 +140,7 @@ jobs:
         shell: powershell
         env:
           DEFAULT_LOADER_VERSION: ${{ inputs.default_loader_version }}
+          FAST_BUILD: ${{ inputs.fast_build }}
         run: |
           # The fork defaults to NeoForge 1.21.1; an explicit workflow input can
           # retarget the package to any other version in config/versions.tsv.
@@ -115,7 +155,27 @@ jobs:
             $env:DEFAULT_CONTROLLER_PROVIDER = $row[0].controllerProvider
             $env:MC_VERSION = $row[0].minecraftVersion
           }
-          .\build.ps1 -SkipStopAppProcesses -ReleaseChannel nightly-native
+          # hashtable splat: switch parameters must be bound by name, not passed
+          # as positional strings
+          $buildArgs = @{ SkipStopAppProcesses = $true; ReleaseChannel = "nightly-native" }
+          if ($env:FAST_BUILD -eq "true") {
+            Write-Host "Fast build: skipping per-version manifests and per-version mods"
+            $buildArgs.SkipVersionManifests = $true
+            $buildArgs.SkipVersionCompat = $true
+          }
+          .\build.ps1 @buildArgs
+
+      - name: Save build cache
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            staging/cache
+            staging/build
+            staging/certs
+            staging/notes
+          key: native-appx-${{ runner.os }}-${{ github.sha }}
 
       - name: Stage native release assets
         shell: powershell
@@ -150,7 +210,7 @@ jobs:
           if-no-files-found: error
 
       - name: Publish nightly-native release
-        if: ${{ github.event_name == 'push' || inputs.publish_release == true }}
+        if: ${{ (github.event_name == 'push' || inputs.publish_release == true) && inputs.fast_build != true }}
         shell: powershell
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -163,7 +223,7 @@ jobs:
             -Asset dist\BanditLauncherNative-neoforge.appx, dist\BanditLauncherNative-neoforge.sha256, dist\BanditLauncherNative-neoforge.cer
 
       - name: Print download link
-        if: ${{ github.event_name == 'push' || inputs.publish_release == true }}
+        if: ${{ (github.event_name == 'push' || inputs.publish_release == true) && inputs.fast_build != true }}
         shell: powershell
         run: |
           $url = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/releases/tag/nightly-native"

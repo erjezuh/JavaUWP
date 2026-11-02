@@ -71,7 +71,19 @@ if ($ProjectConfig.DefaultMinecraftVersion -ne $ProjectConfig.MinecraftVersion) 
     throw "Default target MC mismatch: DEFAULT_MC_VERSION=$($ProjectConfig.DefaultMinecraftVersion) but MC_VERSION=$($ProjectConfig.MinecraftVersion). Use -McVersion / MC_VERSION for both."
 }
 
-Write-Host "=== Build preflight ==="
+# Phase timing: "Build native APPX" used to be one opaque 20-minute CI step.
+# The per-target work below is stamp-driven, so knowing which phase is slow is
+# enough to tell a cold cache from a real regression.
+$script:BuildTotalWatch = [System.Diagnostics.Stopwatch]::StartNew()
+$script:BuildPhaseWatch = [System.Diagnostics.Stopwatch]::StartNew()
+function Write-Phase {
+    param([Parameter(Mandatory = $true)][string]$Name)
+    $last = $script:BuildPhaseWatch.Elapsed.TotalSeconds
+    $script:BuildPhaseWatch.Restart()
+    Write-Host ("=== {0} === [last phase {1:N1}s | elapsed {2:N1}s]" -f $Name, $last, $script:BuildTotalWatch.Elapsed.TotalSeconds)
+}
+
+Write-Phase "Build preflight"
 
 $root = Resolve-RepoRoot
 $pkg = Get-ConfigPath "PackageContentDir"
@@ -390,7 +402,7 @@ if (-not $SkipStopAppProcesses) {
 
 Ensure-Dir $buildDir, $outDir, $certDir, $mcBuildDir, $glfwBuildDir
 
-Write-Host "=== Generating runtime_config.h ==="
+Write-Phase "Generating runtime_config.h"
 # Shared generator keeps build.ps1, tools/ui-preview and the packaged header in
 # sync (see scripts/gen-runtime-config.ps1).
 $runtimeConfigOutput = Join-Path $mcBuildDir "runtime_config.h"
@@ -398,7 +410,7 @@ $runtimeConfigOutput = Join-Path $mcBuildDir "runtime_config.h"
     -OutputPath $runtimeConfigOutput `
     -ReleaseChannel $ReleaseChannel
 
-Write-Host "=== Building MC.Xbox.exe ==="
+Write-Phase "Building MC.Xbox.exe"
 $mcSources = Get-ChildItem (Join-Path $root "MC.Xbox") -Recurse -File -Include *.cpp, *.c, *.h, *.hpp |
     Select-Object -ExpandProperty FullName
 $mcStampPath = Join-Path $mcBuildDir "MC.Xbox.stamp"
@@ -425,20 +437,20 @@ if ($mcNeedsBuild) {
     Write-Host "MC.Xbox.exe up to date, skipping compile."
 }
 
-Write-Host "=== Building GLFW CoreWindow shim ==="
+Write-Phase "Building GLFW CoreWindow shim"
 & (Join-Path $root "glfw_shim\build_glfw.ps1") -OutputDir $glfwBuildDir
 if (-not (Test-Path $shimDll)) { throw "GLFW shim DLL missing after build: $shimDll" }
 
-Write-Host "=== Building Xbox compatibility mod ==="
+Write-Phase "Building Xbox compatibility mod"
 & (Join-Path $root "compat_mod\build_compat_mod.ps1")
 
-Write-Host "=== Building default Fabric controller mod ==="
+Write-Phase "Building default Fabric controller mod"
 & (Join-Path $root "controller_mod\fabric\build_fabric_controller_mod.ps1") `
     -MinecraftVersion $ProjectConfig.MinecraftVersion `
     -LoaderVersion $ProjectConfig.FabricLoaderVersion `
     -OutputDir (Join-Path $gameDir "mods")
 
-Write-Host "=== Assembling PackageContent ==="
+Write-Phase "Assembling PackageContent"
 Remove-Item -Recurse -Force $pkg -ErrorAction SilentlyContinue
 Ensure-Dir (Join-Path $pkg "Assets")
 Ensure-Dir (Join-Path $pkg "natives")
@@ -645,6 +657,7 @@ function Test-NeoForgeControllerTarget {
     return $Target.loader -eq "neoforge" -and $Target.controllerProvider -eq "neoforge"
 }
 
+Write-Phase "Patched Fabric loader jars"
 $fabricLoaderVersions = @($ProjectConfig.FabricLoaderVersion) + @($fabricTargets | ForEach-Object { $_.loaderVersion }) |
     Where-Object { $_ } |
     Select-Object -Unique
@@ -775,6 +788,7 @@ if ($ProjectConfig.DefaultLoader -eq "fabric") {
 Copy-Item -Force $defaultDownloadManifest (Join-Path $manifestsDir "$defaultTargetId.tsv")
 Write-Host "Default per-version manifest: $defaultTargetId.tsv"
 
+Write-Phase "Per-version download manifests"
 if (-not $SkipVersionManifests) {
     foreach ($row in $manifestTargets) {
         $lv = $row.loaderVersion
@@ -797,6 +811,7 @@ if (-not $SkipVersionManifests) {
     Write-Host "Skipping extra per-version manifests (-SkipVersionManifests)"
 }
 
+Write-Phase "Per-version compat and controller mods"
 if (-not $SkipVersionCompat) {
     $versionModsRoot = Join-Path $pkg "runtime\version-mods"
     Ensure-Dir $versionModsRoot
@@ -1273,6 +1288,7 @@ function Build-SecureJarHandlerUwpPatch {
     Write-Host "securejarhandler UWP patch: $OutputJar"
 }
 
+Write-Phase "Java UWP patches and packaged JREs"
 Write-Host "Copying JRE..."
 $xboxSecurityProperties = Join-Path $root "xbox_security.properties"
 Copy-Item $xboxSecurityProperties (Join-Path $pkg "xbox_security.properties") -Force
@@ -1329,7 +1345,7 @@ foreach ($name in $appxAssetNames) {
     Copy-Item -Force $source (Join-Path $pkg "Assets\$name")
 }
 
-Write-Host "=== Packaging ==="
+Write-Phase "Packaging"
 $cert = Join-Path $certDir $ProjectConfig.CertificateFileName
 $certName = [string]$sourceManifest.Package.Identity.Publisher
 
@@ -1418,7 +1434,7 @@ if (-not $KeepStaging) {
 }
 
 Write-Host ""
-Write-Host "=== Done ==="
+Write-Phase "Done"
 Write-Host "Package: $appx"
 
 if ($script:BuildFailures.Count -gt 0) {

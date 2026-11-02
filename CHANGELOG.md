@@ -2,6 +2,21 @@
 
 Notable changes to Bandit Launcher. Nightly packages are numbered by build revision rather than by release, so entries here are dated.
 
+## 2026-11-02 — Build de APPX más rápido en CI
+
+### Changed
+
+**`native-neoforge.yml` now persists the incremental build cache.** `build.ps1` and every per-target mod script already write content-hash stamps for their outputs, but a fresh Actions runner started with an empty `staging/` and `clean.ps1 -Apply` removed `staging/build` — so every run regenerated 56 download manifests and recompiled roughly fifty Java mods, which is where the ~20 minutes went. The workflow now restores `staging/cache`, `staging/build`, `staging/certs` and `staging/notes` from `actions/cache` after the clean, and saves a new cache after the build. `staging/package` is not cached. The first build seeds the cache; subsequent builds are mostly stamp hits.
+
+**Diagnostics.** `build.ps1` prints per-phase elapsed times via `Write-Phase`, so a slow build can be attributed instead of being one opaque step. `concurrency.cancel-in-progress` is now `false`, so a build about to publish a Release is no longer cancelled by the next push.
+
+### Added
+
+- `workflow_dispatch` input `fast_build` passes `-SkipVersionManifests -SkipVersionCompat` for a quick smoke build; such builds are never published as a Release.
+- A commit message containing `[skip appx]` skips the APPX job for docs/preview-only pushes.
+
+See `docs/BUILDING.md` for the full explanation.
+
 ## 2026-11-02 — APPX descargable en cada build
 
 ### Changed

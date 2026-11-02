@@ -300,7 +300,18 @@ Run:
 
 ## Nightly Workflow
 
-The GitHub Actions workflow in `.github/workflows/nightly.yml` builds and publishes the moving `nightly-native` release when relevant source, build, runtime, or workflow files change on `main-native`. Documentation only changes such as README updates do not trigger a package. This fork additionally ships `.github/workflows/native-neoforge.yml`, which builds the same native package from the fork branch and uploads it as a workflow artifact; publishing a Release is opt-in because the upstream license requires written permission to redistribute APPX packages.
+The GitHub Actions workflow in `.github/workflows/nightly.yml` builds and publishes the moving `nightly-native` release when relevant source, build, runtime, or workflow files change on `main-native`. Documentation only changes such as README updates do not trigger a package. This fork additionally ships `.github/workflows/native-neoforge.yml`, which builds the native package from the fork branch, attaches it to the run and **publishes the `nightly-native` Release automatically on every build** with `BanditLauncherNative-neoforge.appx`, its `.sha256` and the matching `.cer`. The upstream license requires written permission from veroxsity / BanditVault to redistribute APPX packages; this fork publishes at its owner's request.
+
+### Why a cold build takes ~20 minutes, and how CI avoids it
+
+`build.ps1` generates one download manifest for each of the 56 rows in `config/versions.tsv` and compiles compatibility/controller mods for every playable target. Every one of those outputs, plus the Java UWP patches and `MC.Xbox.exe`, already has a content-hash stamp (`New-BuildStamp` / `Test-BuildStampCurrent`) in `staging\build` or `staging\cache\manifests`. On a fresh Actions runner those directories are empty, so all of it is rebuilt: that is the long cold build.
+
+`native-neoforge.yml` restores `staging/cache`, `staging/build`, `staging/certs` and `staging/notes` from `actions/cache` **after** `clean.ps1 -Apply` (which deletes `staging/build`, `staging/package`, `staging/certs` and `output`), and saves a fresh cache after the build. `staging/package` is deliberately not cached because it is the final package content. With a warm cache the stamps short-circuit the downloads and the ~50 Java compiles; only files whose inputs actually changed are rebuilt. `Write-Phase` in `build.ps1` prints per-phase elapsed times so a slow build can be attributed.
+
+- The **first** build after enabling the cache is still cold (it creates the cache). Every build after that is warm.
+- `workflow_dispatch` input `fast_build=true` passes `-SkipVersionManifests -SkipVersionCompat` for a quick smoke build; such a build is never published as a Release.
+- A commit message containing `[skip appx]` skips the APPX job entirely for docs/preview-only pushes.
+- The workflow uses `cancel-in-progress: false`, so a build that is about to publish is not killed by the next push. New runs queue and then benefit from the warm cache.
 
 The workflow publishes `BanditLauncherNative-nightly.appx`, `BanditLauncherNative-nightly.sha256`, and the matching public certificate to the `nightly-native` release. It moves the `nightly-native` tag to the commit that produced the package.
 
