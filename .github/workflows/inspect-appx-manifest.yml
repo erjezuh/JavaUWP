@@ -26,7 +26,6 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          set -euo pipefail
           RUN_ID=$(tr -d '[:space:]' < docs/ci/.inspect-trigger)
           ARTIFACT_ID=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/artifacts" \
             --jq '.artifacts[] | select(.name=="BanditLauncherNative-neoforge") | .id' | head -1)
@@ -34,40 +33,38 @@ jobs:
           rm -rf /tmp/a && mkdir -p /tmp/a
           unzip -o -q /tmp/a.zip -d /tmp/a
           APPX=$(find /tmp/a -name "*.appx" | head -1)
-          echo "APPX: $APPX"
+          unzip -p "$APPX" download_manifest.tsv > /tmp/manifest.tsv
           {
             echo "# Packaged manifest diagnostics"; echo
-            echo "Run: $RUN_ID"; echo
-            echo "## Files inside the APPX matching download_manifest"
-            unzip -Z1 "$APPX" | grep -i "download_manifest\|manifests/.*\.tsv" | head -20
+            echo "Run: $RUN_ID  APPX: $APPX"; echo
+            echo "## Total rows"
+            grep -vc '^#' /tmp/manifest.tsv
             echo
-            echo "## Default manifest header"
-            unzip -p "$APPX" download_manifest.tsv | grep '^#' | head -30 || true
+            echo "## Rows containing listenablefuture"
+            grep -n "listenablefuture" /tmp/manifest.tsv
             echo
-            echo "## Rows containing listenablefuture (default manifest)"
-            unzip -p "$APPX" download_manifest.tsv | grep -n "listenablefuture" || true
-            echo
-            echo "## Rows containing listenablefuture (per-version manifests)"
-            for m in $(unzip -Z1 "$APPX" | grep "runtime/manifests/.*\.tsv" | head -60); do
-              rows=$(unzip -p "$APPX" "$m" | grep "listenablefuture" || true)
-              if [ -n "$rows" ]; then echo "### $m"; echo "$rows"; fi
-            done
-            echo
-            echo "## Total rows in default manifest"
-            unzip -p "$APPX" download_manifest.tsv | grep -vc '^#' || true
-            echo
-            echo "## Longest relative paths"
-            unzip -p "$APPX" download_manifest.tsv \
-              | grep -v '^#' \
+            echo "## Longest relative paths (length, path)"
+            grep -v '^#' /tmp/manifest.tsv \
               | awk -F '\t' '{ print length($1), $1 }' \
-              | sort -rn | head -12
+              | sort -rn > /tmp/longest.txt
+            head -12 /tmp/longest.txt
             echo
             echo "## Does the failing URL actually work?"
-            URL=$(unzip -p "$APPX" download_manifest.tsv | grep "listenablefuture" | head -1 | cut -f4)
+            URL=$(grep "listenablefuture" /tmp/manifest.tsv | head -1 | cut -f4)
             echo "URL: $URL"
-            curl -sSL -o /tmp/listenablefuture.jar -w "http=%{http_code} bytes=%{size_download}\n" "$URL" || true
-            sha1sum /tmp/listenablefuture.jar || true
+            curl -sSL -o /tmp/listenablefuture.jar \
+              -w "http=%{http_code} bytes=%{size_download} redirects=%{num_redirects}\n" \
+              "$URL" || echo "curl failed"
+            sha1sum /tmp/listenablefuture.jar || echo "no file downloaded"
+            echo
+            echo "## Expected sha1 / size from manifest"
+            grep "listenablefuture" /tmp/manifest.tsv | head -1 | cut -f2,3
           } > docs/ci/manifest-inspect.md 2>&1
+          cat docs/ci/manifest-inspect.md
+      - name: Save report
+        if: always()
+        shell: bash
+        run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -f docs/ci/manifest-inspect.md
