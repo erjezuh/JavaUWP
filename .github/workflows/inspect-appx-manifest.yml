@@ -55,6 +55,18 @@ jobs:
             echo
             echo "## Total rows in default manifest"
             unzip -p "$APPX" download_manifest.tsv | grep -vc '^#' || true
+            echo
+            echo "## Longest relative paths"
+            unzip -p "$APPX" download_manifest.tsv \
+              | grep -v '^#' \
+              | awk -F '\t' '{ print length($1), $1 }' \
+              | sort -rn | head -12
+            echo
+            echo "## Does the failing URL actually work?"
+            URL=$(unzip -p "$APPX" download_manifest.tsv | grep "listenablefuture" | head -1 | cut -f4)
+            echo "URL: $URL"
+            curl -sSL -o /tmp/listenablefuture.jar -w "http=%{http_code} bytes=%{size_download}\n" "$URL" || true
+            sha1sum /tmp/listenablefuture.jar || true
           } > docs/ci/manifest-inspect.md 2>&1
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
