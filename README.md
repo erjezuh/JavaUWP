@@ -104,6 +104,8 @@ Shader packs need a compatible shader loader such as Iris or Oculus in the same 
 
 On Forge 1.20.1 use **Embeddium** as the renderer/optimization mod, not Rubidium, and never both. The launcher seeds the Mesa/UWP-safe Embeddium defaults and disables conflicting Sodium-family jars before launch; see [the Spanish guide](docs/FORK-NATIVE-NEOFORGE.es.md#los-mods-de-render-no-funcionan-en-1201-forge-embeddium--rubidium).
 
+Embeddium 0.3.x also probes the GPU through OSHI 6.2.2 / JNA / WMI while mods are loading. That path needs `Ole32` (COM), which the UWP container blocks with `UnsatisfiedLinkError: Unable to load library 'Ole32'`. The package now ships a COM shim as `natives/Ole32.dll` and `natives/OleAut32.dll` and passes `-Djna.library.path` so JNA gets absolute paths and every COM call returns `E_FAIL` / a null BSTR; OSHI turns that into a caught `COMException` and an empty hardware result instead of aborting mod loading. Details in [docs/FAQ.md](docs/FAQ.md) and [the Spanish guide](docs/FORK-NATIVE-NEOFORGE.es.md#minecraft-crasheo-mientras-cargaba-los-mods-por-oshi--jna--wmi-ole32).
+
 ## Controller and mouse
 
 This fork no longer builds the Bandit Controller mod. **Controlify** (plus its required YACL dependency) is bundled in the APPX and placed in `mods/` automatically for new instances of the default `1.21.1 / NeoForge 21.1.250` target. The pins, hashes and sizes live in [config/controlify-bundle.json](config/controlify-bundle.json).

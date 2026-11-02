@@ -1089,6 +1089,33 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
     vmOptionStorage.push_back("-Djna.nounpack=true");
     vmOptionStorage.push_back("-Djna.boot.library.name=jnidispatch");
     vmOptionStorage.push_back("-Djna.boot.library.path=" + w2a(fwd(nativesDir)));
+    // JNA calls LoadLibraryExW("Ole32.dll", NULL, LOAD_WITH_ALTERED_SEARCH_PATH)
+    // with a bare name; the app container rejects that with ERROR_INVALID_PARAMETER
+    // ("El parametro no es correcto"). OSHI 6.2.2 reaches it from
+    // WmiQueryHandler.initCOM() while probing Win32_VideoController, and Forge
+    // mods such as Embeddium 0.3.x probe the GPU during mixin plugin onLoad(),
+    // so the UnsatisfiedLinkError escapes as "crashed while loading mods".
+    // Give JNA an absolute path to the packaged COM shims (Ole32.dll and
+    // OleAut32.dll); their entry points return E_FAIL / a null BSTR, which
+    // WmiQueryHandler.queryWMI() catches and turns into an empty WmiResult
+    // instead of aborting mod loading.
+    const std::wstring ole32ShimDir =
+        GetFileAttributesW((nativesDir + L"\\Ole32.dll").c_str()) != INVALID_FILE_ATTRIBUTES
+            ? nativesDir
+            : packagedNativesDir;
+    if (GetFileAttributesW((ole32ShimDir + L"\\Ole32.dll").c_str()) != INVALID_FILE_ATTRIBUTES) {
+        // Keep the per-target natives directory in the search path too: some
+        // targets deploy their own copies of JNA-dependent libraries there.
+        std::string jnaLibraryPath = w2a(fwd(ole32ShimDir));
+        if (ole32ShimDir != nativesDir) {
+            jnaLibraryPath += ";";
+            jnaLibraryPath += w2a(fwd(nativesDir));
+        }
+        vmOptionStorage.push_back("-Djna.library.path=" + jnaLibraryPath);
+        WriteLogF(L"JNA COM shim enabled: %s", (ole32ShimDir + L"\\Ole32.dll").c_str());
+    } else {
+        WriteLog(L"JNA COM shim missing: OSHI/WMI hardware probes can still crash mod loading");
+    }
     vmOptionStorage.push_back("-Djava.library.path=" + w2a(fwd(lwjglNativeDir)));
     vmOptionStorage.push_back("-Dorg.lwjgl.librarypath=" + w2a(fwd(lwjglNativeDir)));
     if (VerboseLoggingEnabled()) {

@@ -94,8 +94,10 @@ $nativesSourceDir = Get-ConfigPath "NativesDir"
 $certDir = Get-ConfigPath "CertificateDir"
 $mcBuildDir = Join-Path $buildDir "MC.Xbox"
 $glfwBuildDir = Join-Path $buildDir "glfw_shim"
+$ole32BuildDir = Join-Path $buildDir "ole32_shim"
 $mcExe = Join-Path $mcBuildDir "MC.Xbox.exe"
 $shimDll = Join-Path $glfwBuildDir "glfw.dll"
+$ole32ShimDll = Join-Path $ole32BuildDir "Ole32.dll"
 $currentJavaMajor = (@(Import-Csv (Join-Path $root $ProjectConfig.VersionCatalog) -Delimiter "`t" | Where-Object { $_.javaRuntime -eq "current" } | ForEach-Object { Get-MinecraftJavaMajorVersion $_.minecraftVersion }) | Measure-Object -Maximum).Maximum
 $jreSrc = Resolve-JavaHome -MajorVersion ([Math]::Max([int]$currentJavaMajor, [int]$ProjectConfig.JavaRelease))
 $jre21Src = Resolve-JavaHomeExact -MajorVersion 21
@@ -453,6 +455,36 @@ Write-Phase "Building GLFW CoreWindow shim"
 & (Join-Path $root "glfw_shim\build_glfw.ps1") -OutputDir $glfwBuildDir
 if (-not (Test-Path $shimDll)) { throw "GLFW shim DLL missing after build: $shimDll" }
 
+# JNA cannot LoadLibraryExW("Ole32.dll", ...) by bare name in an app container.
+# Package a tiny dependency-free COM shim so -Djna.library.path gives JNA an
+# absolute path, and OSHI's WMI/GPU probes get a caught COMException instead of
+# an uncaught UnsatisfiedLinkError while Forge loads mods (e.g. Embeddium).
+Write-Phase "Building Ole32/COM UWP shim"
+$ole32SourceDir = Join-Path $root "shims"
+$ole32Source = Join-Path $ole32SourceDir "ole32_uwp.cpp"
+if (-not (Test-Path $ole32Source)) { throw "Ole32 shim source missing: $ole32Source" }
+Ensure-Dir $ole32BuildDir
+$env:INCLUDE = "$($tools.MsvcRoot)\include;" +
+               "${sdkRoot}Include\$sdkVer\ucrt;" +
+               "${sdkRoot}Include\$sdkVer\shared;" +
+               "${sdkRoot}Include\$sdkVer\um;" +
+               "${sdkRoot}Include\$sdkVer\winrt;" +
+               "${sdkRoot}Include\$sdkVer\cppwinrt"
+$env:LIB = "$($tools.MsvcRoot)\lib\x64;" +
+           "${sdkRoot}Lib\$sdkVer\ucrt\x64;" +
+           "${sdkRoot}Lib\$sdkVer\um\x64"
+$ole32Obj = Join-Path $ole32BuildDir "ole32_uwp.obj"
+$ole32Lib = Join-Path $ole32BuildDir "ole32_uwp.lib"
+Push-Location $ole32BuildDir
+& $tools.ClExe $ole32Source /LD /EHsc /std:c++17 $CommonClFlags /O2 /DNDEBUG `
+    /D_UNICODE /DUNICODE /D_WIN32_WINNT=0x0A00 /DWINAPI_FAMILY=WINAPI_FAMILY_APP `
+    /Fo"$ole32Obj" /link /OUT:"$ole32ShimDll" /IMPLIB:"$ole32Lib" /MACHINE:X64 kernel32.lib
+$ole32CompileExit = $LASTEXITCODE
+Pop-Location
+if ($ole32CompileExit -ne 0) { throw "Ole32 UWP shim build FAILED with exit code $ole32CompileExit" }
+if (-not (Test-Path $ole32ShimDll)) { throw "Ole32 UWP shim DLL missing: $ole32ShimDll" }
+Write-Host "Ole32 UWP shim built -> $ole32ShimDll"
+
 Write-Phase "Building Xbox compatibility mod"
 & (Join-Path $root "compat_mod\build_compat_mod.ps1")
 
@@ -722,6 +754,12 @@ foreach ($name in $bundledModNames) {
 
 Write-Host "Copying natives..."
 Copy-Item (Join-Path $nativesSourceDir "*.dll") (Join-Path $pkg "natives\")
+Write-Host "Copying Ole32/OleAut32 COM UWP shims..."
+# Same DLL twice: JNA also loads OleAut32 (SysAllocString/VariantClear) once a
+# WMI query gets past COM init, and that bare-name load fails in the app
+# container too. Both names must resolve to an absolute packaged path.
+Copy-Item $ole32ShimDll (Join-Path $pkg "natives\Ole32.dll") -Force
+Copy-Item $ole32ShimDll (Join-Path $pkg "natives\OleAut32.dll") -Force
 
 Write-Host "Extracting JNA native..."
 Add-Type -AssemblyName System.IO.Compression.FileSystem

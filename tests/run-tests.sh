@@ -22,6 +22,12 @@ g++ -std=c++17 -Wall -Wextra -Werror -pedantic \
 /tmp/sodium_family_test
 
 echo
+echo "== Ole32/COM UWP shim contract (C++) =="
+g++ -std=c++17 -Wall -Wextra -Werror -pedantic \
+    -o /tmp/ole32_shim_test tests/ole32_shim_test.cpp
+/tmp/ole32_shim_test
+
+echo
 echo "== Fork configuration consistency (Python) =="
 python3 scripts/validate-fork-targets.py
 

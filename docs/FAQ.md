@@ -35,6 +35,32 @@ those defaults were written only to Fabric's `sodium-options.json`, so Forge
 defaults. The Spanish guide has the full diagnosis:
 [FORK-NATIVE-NEOFORGE.es.md](FORK-NATIVE-NEOFORGE.es.md).
 
+## Minecraft crashes while loading mods with "Unable to load library 'Ole32'"
+
+That crash is **OSHI / JNA / WMI**, not a renderer conflict. Embeddium 0.3.x probes the
+graphics card from `SodiumMixinPlugin.onLoad()` using `SystemInfo.getHardware().
+getGraphicsCards()`. On Windows OSHI 6.2.2 answers that through a WMI query, and JNA
+5.12.1 reaches `Ole32` (COM). Inside the app container JNA loads system DLLs by bare
+name with `LOAD_WITH_ALTERED_SEARCH_PATH`, which the UWP loader rejects with
+*"El parametro no es correcto" / ERROR_INVALID_PARAMETER*. The resulting
+`UnsatisfiedLinkError` from `Ole32.<clinit>` is not caught by
+`WmiQueryHandler.queryWMI()`, so mod loading aborts. The `oshi.properties` overrides
+the launcher already writes only disable performance counters; they cannot disable WMI.
+
+This fork now packages a tiny COM shim twice (`natives/Ole32.dll` and
+`natives/OleAut32.dll`, the same DLL) and passes `-Djna.library.path=<natives dir>` to
+the JVM. `OleAut32` is needed because JNA's `WbemcliUtil` also loads it by bare name
+(`SysAllocString` / `VariantClear`) once a WMI query gets past COM initialization.
+The absolute paths are accepted by the loader (the same trick used for the packaged
+`glfw.dll` / `opengl32.dll`), and every COM entry point returns `E_FAIL` or a null BSTR. OSHI converts that into a `COMException`, which
+`queryWMI()` catches and turns into an empty `WmiResult`: mods see "no graphics cards
+found" and the game keeps loading. This covers any mod that probes hardware through
+OSHI/JNA/COM, not just Embeddium, and also Minecraft's own `SystemReport`. Check
+`mc_launch.log` for `JNA COM shim enabled: ...\Ole32.dll`. Mods that rely on GPU
+detection to enable driver workarounds will simply skip them, which is intended on the
+Mesa/UWP path. The Spanish guide has the full stack trace:
+[FORK-NATIVE-NEOFORGE.es.md](FORK-NATIVE-NEOFORGE.es.md).
+
 ## Installing the APPX fails with error 0x80070005 (Access denied)
 This is a deployment error, not a launcher crash. The usual causes, in order:
 

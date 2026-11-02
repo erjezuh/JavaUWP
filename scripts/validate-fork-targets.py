@@ -328,6 +328,45 @@ def main() -> int:
     if "ConfigureSodiumFamilyDefaults(gameDir, userModsDir, minecraftVersion)" not in mod_defaults:
         errors.append("mod_defaults.cpp does not call the Sodium-family defaults resolver")
 
+    # 14. OSHI/JNA/COM hardware probes must not abort Forge mod loading on UWP.
+    # Embeddium 0.3.x calls SystemInfo.getHardware().getGraphicsCards() from
+    # SodiumMixinPlugin.onLoad(); OSHI 6.2.2 reaches JNA's Ole32/WMI from
+    # WmiQueryHandler.initCOM(), which the app container blocks. A packaged
+    # Ole32 shim plus -Djna.library.path gives JNA an absolute path and turns
+    # the probe into a caught COMException with an empty WmiResult.
+    ole32_source = read("shims/ole32_uwp.cpp")
+    build_ps1 = read("build.ps1")
+    minecraft_launch = read("MC.Xbox/launch/minecraft_launch.cpp")
+    run_tests = read("tests/run-tests.sh")
+    for needle in (
+        "CoInitializeEx",
+        "CoInitializeSecurity",
+        "CoCreateInstance",
+        "SysAllocString",
+        "VariantClear",
+        "0x80004005u",
+        "WmiQueryHandler.queryWMI()",
+    ):
+        if needle not in ole32_source:
+            errors.append(f"shims/ole32_uwp.cpp is missing {needle}")
+    for needle in (
+        "ole32_uwp.cpp",
+        "$ole32ShimDll",
+        "natives\\Ole32.dll",
+        "natives\\OleAut32.dll",
+        "Building Ole32/COM UWP shim",
+    ):
+        if needle not in build_ps1:
+            errors.append(f"build.ps1 does not build/package the Ole32 shim ({needle})")
+    for needle in ("-Djna.library.path=", "ole32ShimDir", "Ole32.dll", "wmi"):
+        if needle.lower() not in minecraft_launch.lower():
+            errors.append(f"minecraft_launch.cpp is missing the JNA COM shim wiring ({needle})")
+    if "tests/ole32_shim_test.cpp" not in run_tests:
+        errors.append("tests/run-tests.sh does not run the Ole32 shim contract test")
+    for doc in ("docs/FAQ.md", "docs/FORK-NATIVE-NEOFORGE.es.md"):
+        if "OSHI" not in read(doc):
+            errors.append(f"{doc} does not document the OSHI/WMI COM shim")
+
     for warning in warnings:
         print(f"WARN  {warning}")
     for error in errors:

@@ -2,6 +2,39 @@
 
 Notable changes to Bandit Launcher. Nightly packages are numbered by build revision rather than by release, so entries here are dated.
 
+## 2026-11-02 — Arreglado el crasheo de OSHI / JNA / WMI al cargar mods en 1.20.1 Forge
+
+### Fixed
+
+**Con el arreglo anterior ya instalado, `Profile 4 - 1.20.1` / `forge 1.20.1-47.4.20` seguía diciendo «Minecraft crasheo mientras cargaba los mods».** La captura enviada permitió identificar un fallo **distinto** del conflicto Embeddium ↔ Rubidium. El launcher ya lo clasificaba como *«Un mod solicitó detalles del hardware de Windows, cual está consola bloquea»*; la traza era:
+
+```
+java.lang.RuntimeException --> java.lang.UnsatisfiedLinkError
+Unable to load library 'Ole32': El parámetro no es correcto.
+Native library (win32-x86-64/Ole32.dll) not found in resource path
+  com.sun.jna@5.12.1  NativeLibrary.loadLibrary -> Native.load
+  com.sun.jna.platform.win32.Ole32.<clinit>
+  com.github.oshi@6.2.2  WmiQueryHandler.initCOM -> queryWMI
+```
+
+Causa real, confirmada leyendo el código de los mods y de las bibliotecas:
+
+- **Embeddium 0.3.x** llama a `GraphicsAdapterProbe.findAdapters()` desde `SodiumMixinPlugin.onLoad()`, es decir, **mientras se cargan los mods**. En Windows esa ruta usa `new SystemInfo().getHardware().getGraphicsCards()` → OSHI 6.2.2 → `Win32VideoController` → WMI/COM. (Rubidium 0.7.x, basado en Sodium 0.4, no hace esa consulta; por eso el problema aparece con Embeddium.) El mixin `SystemDetailsOshiBypassMixin` del mod de compatibilidad sólo cancela la consulta **propia de Minecraft** en Fabric, no la de un mod.
+- JNA 5.12.1 resuelve `Ole32` con `LoadLibraryExW("Ole32.dll", NULL, LOAD_WITH_ALTERED_SEARCH_PATH)` usando un **nombre suelto**. En el contenedor UWP eso devuelve `ERROR_INVALID_PARAMETER` («El parámetro no es correcto»), y el `UnsatisfiedLinkError` de `Ole32.<clinit>` **no** es capturado por `WmiQueryHandler.queryWMI()` (sólo captura `COMException` y `TimeoutException`). De ahí el crasheo. Las propiedades `oshi.properties` que ya escribía el launcher desactivan los contadores de rendimiento, pero **no** las consultas WMI, así que no podían evitarlo.
+
+Cambios:
+
+- `shims/ole32_uwp.cpp`: DLL empaquetada, sin dependencias de Windows ni de COM, que exporta los puntos de entrada de `Ole32` (`CoInitializeEx`, `CoCreateInstance`, …) devolviendo `E_FAIL` (`0x80004005`) y los de `OleAut32` (`SysAllocString`, `VariantClear`, …) devolviendo un BSTR nulo / fallo. `build.ps1` la compila con MSVC para `WINAPI_FAMILY_APP` y la deja **dos veces**: `natives/Ole32.dll` y `natives/OleAut32.dll`, porque JNA también carga `OleAut32` por nombre suelto en cuanto una consulta WMI pasa de la inicialización COM.
+- `MC.Xbox/launch/minecraft_launch.cpp` añade `-Djna.library.path=<dir de natives>` cuando el shim está presente (incluyendo además el dir de natives del target, separado por `;`). Eso da a JNA una **ruta absoluta** (el mismo mecanismo que ya usan `glfw.dll` y `opengl32.dll` empaquetados), así que `Native.load("Ole32", ...)` y `Native.load("OleAut32", ...)` dejan de fallar. Como todos los `HRESULT` son de fallo, `WmiQueryHandler.initCOM()` lanza una `COMException` que `queryWMI()` **sí** captura: devuelve un `WmiResult` vacío y cachea la clase WMI fallida. Los mods ven «no graphics cards found» y el arranque continúa, en vez de reventar.
+- El arreglo es **general**: cubre cualquier mod que consulte GPU/CPU/memoria por OSHI/JNA/COM, y también el `SystemReport` de Minecraft en targets Forge/NeoForge/Cleanroom, no sólo Embeddium. Antes del cambio, `Ole32` **nunca** podía cargarse en UWP, por lo que no hay ruta sana que se degrade.
+- `tests/ole32_shim_test.cpp` compila el shim en Linux y verifica el contrato de fallo; `scripts/validate-fork-targets.py` añade la comprobación 14 (shim, build, opción JVM, test y documentación).
+
+Para verificar en consola, buscar en `mc_launch.log` la línea `JNA COM shim enabled: ...\Ole32.dll`. Si aparece `JNA COM shim missing`, el paquete instalado no incluye el shim.
+
+### Limitaciones
+
+Sigue sin haber prueba en consola de este target: el DLL lo compila CI con MSVC y la lógica se valida con el test portable, pero el comportamiento real de `LoadLibraryExW` en el contenedor sólo puede confirmarlo un arranque en Xbox. `1.20.1 Forge` continúa como `experimental` y el parche UWP de `securejarhandler` sigue sin aplicarse a Forge `2.1.10`. El shim **no simula WMI**: los mods que dependan de detectar la GPU para aplicar workarounds simplemente no los aplicarán (en esta ruta Mesa/UWP es lo deseable). El aviso de la UI sigue existiendo como último recurso por si otro mod llama a una API nativa distinta.
+
 ## 2026-11-02 — Arreglados los mods de render/optimización en 1.20.1 Forge (Embeddium / Rubidium)
 
 ### Fixed

@@ -210,6 +210,89 @@ el launcher ha apartado un jar incompatible.
 > código incluido está compilado contra NeoForge `3.0.8`; un mod con
 > Jar-in-Jar complejo puede seguir dando problemas.
 
+## «Minecraft crasheo mientras cargaba los mods» por OSHI / JNA / WMI (`Ole32`)
+
+Este es **otro fallo distinto** al de los dos renderizadores. Con el arreglo
+anterior ya instalado, la captura de `Profile 4 - 1.20.1` /
+`forge 1.20.1-47.4.20` mostraba el aviso *«Un mod solicitó detalles del
+hardware de Windows, cual está consola bloquea. Mods que comprueben la GPU de
+está manera no funcionaran aqui por ahora»* y esta traza:
+
+```
+java.lang.RuntimeException --> java.lang.UnsatisfiedLinkError
+Unable to load library 'Ole32': El parámetro no es correcto.
+Native library (win32-x86-64/Ole32.dll) not found in resource path
+  com.sun.jna@5.12.1  NativeLibrary.loadLibrary -> Native.load
+  com.sun.jna.platform.win32.Ole32.<clinit>
+  com.github.oshi@6.2.2  WmiQueryHandler.initCOM -> queryWMI
+```
+
+### Qué pasa realmente
+
+1. **Embeddium 0.3.x** ejecuta `GraphicsAdapterProbe.findAdapters()` desde
+   `SodiumMixinPlugin.onLoad()`, o sea **durante la carga de mods**. En Windows
+   esa función llama a `new SystemInfo().getHardware().getGraphicsCards()`;
+   OSHI 6.2.2 lo resuelve con una consulta WMI a `Win32_VideoController` por
+   medio de COM (`Ole32`). Rubidium 0.7.x (basado en Sodium 0.4) **no** hace
+   esa consulta: por eso el síntoma aparece al pasarse a Embeddium.
+2. El mod de compatibilidad `banditvault-xbox-compat` ya cancela la consulta
+   OSHI **propia de Minecraft** (`SystemDetailsOshiBypassMixin`), pero es un mod
+   Fabric y además no puede cancelar una consulta que hace otro mod.
+3. JNA 5.12.1 carga `Ole32` con
+   `LoadLibraryExW("Ole32.dll", NULL, LOAD_WITH_ALTERED_SEARCH_PATH)`, con un
+   **nombre suelto**. En el contenedor UWP eso se rechaza con
+   `ERROR_INVALID_PARAMETER` («El parámetro no es correcto»). El
+   `UnsatisfiedLinkError` sale del inicializador estático de `Ole32` y
+   `WmiQueryHandler.queryWMI()` **no lo captura**: sólo captura `COMException`
+   y `TimeoutException`. Resultado: el juego muere «mientras cargaba los mods».
+4. El `oshi.properties` que el launcher ya escribía
+   (`perfos.disabled`, `perfproc.disabled`, …) desactiva los contadores de
+   rendimiento, **no** las consultas WMI. No podía evitar este crasheo.
+
+### Qué se ha cambiado
+
+- `shims/ole32_uwp.cpp` es una DLL empaquetada, sin Windows headers ni runtime
+  COM, que exporta los puntos de entrada de `Ole32` y devuelve `E_FAIL`
+  (`0x80004005`), y los de `OleAut32` (`SysAllocString`, `VariantClear`, …)
+  devolviendo un BSTR nulo o fallo. `build.ps1` la compila con MSVC para
+  `WINAPI_FAMILY_APP` y la deja **dos veces**: `natives/Ole32.dll` y
+  `natives/OleAut32.dll`. El segundo nombre hace falta porque JNA también
+  carga `OleAut32` por nombre suelto en cuanto la consulta WMI pasa de la
+  inicialización COM.
+- `MC.Xbox/launch/minecraft_launch.cpp` añade
+  `-Djna.library.path=<carpeta natives>` cuando el shim existe (y conserva
+  además la carpeta de natives del target, separada por `;`). Así JNA
+  encuentra una **ruta absoluta** en vez de un nombre suelto: es el mismo
+  mecanismo que ya permite cargar `glfw.dll` y `opengl32.dll` empaquetados.
+- Con todos los `HRESULT` a fallo, `WmiQueryHandler.initCOM()` lanza una
+  `COMException`, que `queryWMI()` **sí** captura: devuelve un `WmiResult`
+  vacío y recuerda la clase WMI fallida. Embeddium registra «no graphics cards
+  were found», no aplica workarounds de driver y **el arranque continúa**.
+
+Es un arreglo general: vale para cualquier mod que consulte GPU, CPU o memoria
+por OSHI/JNA/COM y para el `SystemReport` de Minecraft en Forge, NeoForge y
+Cleanroom. Antes `Ole32` **nunca** podía cargarse en UWP, así que no se
+degrada ninguna ruta que funcionase.
+
+### Cómo comprobarlo
+
+En `mc_launch.log` debe aparecer:
+
+```
+JNA COM shim enabled: ...\natives\Ole32.dll
+```
+
+Si en su lugar aparece `JNA COM shim missing: OSHI/WMI hardware probes can
+still crash mod loading`, el APPX instalado es anterior a este cambio.
+
+> Sigue sin prueba física en Xbox: el DLL lo compila CI con MSVC y el contrato
+> de fallo se comprueba con `tests/ole32_shim_test.cpp` en Linux, pero el
+> comportamiento de `LoadLibraryExW` dentro del contenedor sólo lo confirma un
+> arranque real. El shim **no emula WMI**: los mods que dependan de detectar la
+> GPU para activar workarounds simplemente no los activan, que es lo deseable
+> en la ruta Mesa/UWP. El aviso de la UI queda como último recurso por si otro
+> mod llama a una API nativa distinta.
+
 ## Cómo compilar
 
 Requisitos: Windows, Visual Studio con C++/WinRT, Windows SDK, JDK 17, 21 y
