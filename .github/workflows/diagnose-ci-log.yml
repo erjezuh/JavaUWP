@@ -26,20 +26,34 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          JOB_ID=$(tr -d '[:space:]' < docs/ci/.log-trigger)
-          echo "Job: $JOB_ID"
-          gh api "repos/$GITHUB_REPOSITORY/actions/jobs/$JOB_ID/logs" > /tmp/job-logs.zip
-          rm -rf /tmp/logs && mkdir -p /tmp/logs
-          unzip -o -q /tmp/job-logs.zip -d /tmp/logs
+          RUN_ID=$(tr -d '[:space:]' < docs/ci/.log-trigger)
+          echo "Run: $RUN_ID"
           {
-            echo "# CI job log extract"; echo
-            for f in /tmp/logs/*; do
-              echo "## $(basename "$f")"; echo '```'
-              tail -60 "$f"
-              echo '```'; echo
-            done
-          } > /tmp/report.md
-          tail -c 180000 /tmp/report.md > docs/ci/ci-failure.md
+            echo "== gh run view --log-failed =="
+            gh run view "$RUN_ID" --repo "$GITHUB_REPOSITORY" --log-failed 2>&1 || true
+            echo "== api job logs =="
+            JOB_ID=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/jobs" \
+              --jq '.jobs[] | select(.name|contains("Build native")) | .id' | head -1)
+            echo "Job: $JOB_ID"
+            gh api "repos/$GITHUB_REPOSITORY/actions/jobs/$JOB_ID/logs" > /tmp/job-logs.zip 2>&1 || true
+            file /tmp/job-logs.zip || true
+            head -c 300 /tmp/job-logs.zip | tr -cd '[:print:]\n' || true
+            echo
+            rm -rf /tmp/logs && mkdir -p /tmp/logs
+            if unzip -o -q /tmp/job-logs.zip -d /tmp/logs 2>/dev/null; then
+              for f in /tmp/logs/*; do
+                echo "--- $(basename "$f") ---"
+                tail -80 "$f"
+              done
+            else
+              echo "could not unzip job logs"
+            fi
+          } > /tmp/diag.log 2>&1
+          tail -c 200000 /tmp/diag.log > docs/ci/ci-failure.md
+      - name: Save report
+        if: always()
+        shell: bash
+        run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -f docs/ci/ci-failure.md
