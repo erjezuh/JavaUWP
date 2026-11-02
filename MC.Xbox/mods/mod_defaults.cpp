@@ -1,4 +1,5 @@
 #include "mod_defaults.h"
+#include "sodium_family.h"
 
 #include "crash_report.h"
 #include "launcher_common.h"
@@ -335,6 +336,17 @@ static bool UpsertTomlSectionSettingWhenMissingOrValues(
     return changed;
 }
 
+static void SetJsonValue(winrt::Windows::Data::Json::JsonObject& obj, const wchar_t* key, const winrt::Windows::Data::Json::IJsonValue& value) {
+    // JsonObject::Insert throws when the key already exists on some Windows
+    // versions, and these helpers deliberately overwrite default-valued keys.
+    // SetNamedValue replaces the value on every supported runtime.
+    if (obj.HasKey(key)) {
+        obj.SetNamedValue(key, value);
+    } else {
+        obj.Insert(key, value);
+    }
+}
+
 static bool JsonNumberMissingOrDefault(const winrt::Windows::Data::Json::JsonObject& obj, const wchar_t* key, double defaultValue) {
     using namespace winrt::Windows::Data::Json;
     if (!obj.HasKey(key)) return true;
@@ -362,14 +374,14 @@ static bool JsonStringMissingOrDefault(const winrt::Windows::Data::Json::JsonObj
 static bool SetJsonNumberIfDefault(winrt::Windows::Data::Json::JsonObject& obj, const wchar_t* key, double value, double defaultValue) {
     using namespace winrt::Windows::Data::Json;
     if (!JsonNumberMissingOrDefault(obj, key, defaultValue)) return false;
-    obj.Insert(key, JsonValue::CreateNumberValue(value));
+    SetJsonValue(obj, key, JsonValue::CreateNumberValue(value));
     return true;
 }
 
 static bool SetJsonStringIfDefault(winrt::Windows::Data::Json::JsonObject& obj, const wchar_t* key, const wchar_t* value, const wchar_t* defaultValue) {
     using namespace winrt::Windows::Data::Json;
     if (!JsonStringMissingOrDefault(obj, key, defaultValue)) return false;
-    obj.Insert(key, JsonValue::CreateStringValue(value));
+    SetJsonValue(obj, key, JsonValue::CreateStringValue(value));
     return true;
 }
 
@@ -387,7 +399,7 @@ static winrt::Windows::Data::Json::JsonObject EnsureJsonObject(winrt::Windows::D
     }
 
     JsonObject obj = JsonObject();
-    parent.Insert(key, obj);
+    SetJsonValue(parent, key, obj);
     changed = true;
     return obj;
 }
@@ -407,18 +419,72 @@ static bool JsonBoolMissingOrDefault(const winrt::Windows::Data::Json::JsonObjec
 static bool SetJsonBoolIfDefault(winrt::Windows::Data::Json::JsonObject& obj, const wchar_t* key, bool value, bool defaultValue) {
     using namespace winrt::Windows::Data::Json;
     if (!JsonBoolMissingOrDefault(obj, key, defaultValue)) return false;
-    obj.Insert(key, JsonValue::CreateBooleanValue(value));
+    SetJsonValue(obj, key, JsonValue::CreateBooleanValue(value));
     return true;
 }
 
-static bool ConfigureSodiumDefaults(const std::wstring& gameDir, const std::wstring& userModsDir, const std::wstring& minecraftVersion) {
-    std::wstring sodiumJar;
-    if (!FindModJarByFabricIdOrName(userModsDir, L"sodium", L"sodium", sodiumJar)) {
-        return false;
-    }
+// BanditLauncher renders through Mesa's WGL backend inside the UWP sandbox.
+// Every Sodium-derived renderer defaults to ASYNC staging buffers, advanced
+// staging and three frames of render-ahead, all of which stall or crash on that
+// path. Fabric's Sodium was already configured, but the Forge ports declare a
+// different mod id (META-INF/mods.toml, not fabric.mod.json) and keep their
+// options under their own name, so 1.20.1 Forge never received these defaults.
+// They also cannot coexist: Modrinth marks Rubidium and TexTrue's Embeddium
+// Options as "incompatible" with Embeddium, and all three patch the same
+// renderer. Keep one and seed its config before every launch.
+static std::vector<SodiumRendererJar> FindSodiumFamilyRenderers(const std::wstring& userModsDir) {
+    std::vector<SodiumRendererJar> found;
+    WIN32_FIND_DATAW fd = {};
+    HANDLE h = FindFirstFileW((userModsDir + L"\\*.jar").c_str(), &fd);
+    if (h == INVALID_HANDLE_VALUE) return found;
+    do {
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+        const SodiumFamily* family = SodiumFamilyForFileName(fd.cFileName);
+        if (!family) continue;
+        SodiumRendererJar jar;
+        jar.family = family;
+        jar.name = fd.cFileName;
+        jar.path = userModsDir + L"\\" + fd.cFileName;
+        found.push_back(jar);
+    } while (FindNextFileW(h, &fd));
+    FindClose(h);
+    return found;
+}
 
+// Disabling is reversible: the jar is renamed aside instead of deleted, so a
+// user can put Rubidium back by removing the .disabled suffix. Logs make the
+// choice visible because the old launcher silently left both jars in place,
+// which produced a Mixin apply failure on 1.20.1 Forge.
+static void KeepOneSodiumFamilyRenderer(std::vector<SodiumRendererJar>& jars) {
+    if (jars.size() < 2) return;
+    const size_t winner = PreferredSodiumFamilyIndex(jars);
+    WriteLogF(L"Multiple Sodium-family renderers found; keeping %s (%s)",
+        jars[winner].name.c_str(), jars[winner].family->token);
+    int disabled = 0;
+    for (size_t i = 0; i < jars.size(); ++i) {
+        if (i == winner) continue;
+        const std::wstring disabledPath = jars[i].path + L".disabled";
+        if (MovePathIfExists(jars[i].path, disabledPath, true)) {
+            ++disabled;
+            WriteLogF(L"Disabled conflicting renderer %s -> %s (Sodium, Embeddium and Rubidium cannot coexist)",
+                jars[i].name.c_str(), disabledPath.c_str());
+        } else {
+            WriteLogF(L"Could not disable conflicting renderer %s err=%u",
+                jars[i].name.c_str(), GetLastError());
+        }
+    }
+    SodiumRendererJar kept = jars[winner];
+    jars.clear();
+    jars.push_back(kept);
+    WriteLogF(L"Disabled %d conflicting Sodium-family renderer jar(s)", disabled);
+}
+
+static void SeedSodiumFamilyOptions(
+    const std::wstring& gameDir,
+    const std::wstring& minecraftVersion,
+    const SodiumFamily& family) {
     using namespace winrt::Windows::Data::Json;
-    const std::wstring configPath = gameDir + L"\\config\\sodium-options.json";
+    const std::wstring configPath = gameDir + L"\\config\\" + family.configFile;
     JsonObject obj = JsonObject();
 
     std::wstring configText;
@@ -435,10 +501,16 @@ static bool ConfigureSodiumDefaults(const std::wstring& gameDir, const std::wstr
     JsonObject performance = EnsureJsonObject(obj, L"performance", changed);
 
     // Legacy Sodium's staging and render-ahead defaults can stall badly on the Mesa/UWP path.
-    changed |= SetJsonStringIfDefault(advanced, L"arena_memory_allocator", L"SWAP", L"ASYNC");
+    if (family.hasArenaAllocator) {
+        changed |= SetJsonStringIfDefault(advanced, L"arena_memory_allocator", L"SWAP", L"ASYNC");
+    }
     changed |= SetJsonBoolIfDefault(advanced, L"use_advanced_staging_buffers", false, true);
     changed |= SetJsonNumberIfDefault(advanced, L"cpu_render_ahead_limit", 1.0, 3.0);
     changed |= SetJsonBoolIfDefault(performance, L"always_defer_chunk_updates", true, false);
+    if (!family.hasArenaAllocator) {
+        // Embeddium 0.3.x renamed the serialized key to _v2; Gson ignores the old one.
+        changed |= SetJsonBoolIfDefault(performance, L"always_defer_chunk_updates_v2", true, false);
+    }
     if (CompareVersionNumbers(w2a(minecraftVersion), "1.17") < 0) {
         changed |= SetJsonBoolIfDefault(advanced, L"use_chunk_multidraw", false, true);
     }
@@ -446,45 +518,80 @@ static bool ConfigureSodiumDefaults(const std::wstring& gameDir, const std::wstr
     if (changed) {
         const std::wstring out = obj.Stringify().c_str();
         if (WriteTextFile(configPath, out)) {
-            WriteLogF(L"Sodium config seeded for UWP graphics defaults: %s", configPath.c_str());
+            WriteLogF(L"UWP graphics defaults seeded in %s", configPath.c_str());
         } else {
-            WriteLogF(L"Failed to write Sodium config: %s err=%u", configPath.c_str(), GetLastError());
+            WriteLogF(L"Failed to write %s err=%u", configPath.c_str(), GetLastError());
         }
     } else {
-        WriteLog(L"Sodium config already has non-default graphics settings; leaving it unchanged");
+        WriteLogF(L"%s already has non-default graphics settings; leaving it unchanged", family.configFile);
+    }
+}
+
+static void RepairSodiumFamilyMixins(
+    const std::wstring& gameDir,
+    const std::wstring& minecraftVersion,
+    const SodiumFamily& family) {
+    // The old launcher seeded chunk-rendering/particle mixin disables for
+    // legacy versions. Include 1.20.1 too: a profile that carried the file over
+    // would otherwise boot Embeddium with its chunk renderer switched off.
+    if (CompareVersionNumbers(w2a(minecraftVersion), "1.20.1") > 0) return;
+    const std::wstring mixinConfigPath = gameDir + L"\\config\\" + family.mixinFile;
+    std::wstring mixinConfigText;
+    if (!ReadTextFile(mixinConfigPath, mixinConfigText) ||
+        mixinConfigText.find(L"# Generated by BanditLauncher for legacy Mesa/UWP stability.") == std::wstring::npos) {
+        return;
+    }
+    // only repairs the old bandit seed, a user written config stays theirs
+    bool mixinChanged = false;
+    static const wchar_t* oldMixinDisables[] = {
+        L"mixin.features.chunk_rendering=false\n",
+        L"mixin.features.chunk_rendering=false\r\n",
+        L"mixin.features.particle=false\n",
+        L"mixin.features.particle=false\r\n",
+        L"mixin.features.entity.smooth_lighting=false\n",
+        L"mixin.features.entity.smooth_lighting=false\r\n",
+    };
+    for (const wchar_t* key : oldMixinDisables) {
+        const std::wstring line(key);
+        const size_t pos = mixinConfigText.find(line);
+        if (pos != std::wstring::npos) {
+            mixinConfigText.erase(pos, line.size());
+            mixinChanged = true;
+        }
+    }
+    if (mixinChanged) {
+        if (WriteTextFile(mixinConfigPath, mixinConfigText)) {
+            WriteLogF(L"Legacy mixin disables removed for Minecraft %s: %s", minecraftVersion.c_str(), mixinConfigPath.c_str());
+        } else {
+            WriteLogF(L"Failed to repair %s err=%u", mixinConfigPath.c_str(), GetLastError());
+        }
+    }
+}
+
+static bool ConfigureSodiumFamilyDefaults(const std::wstring& gameDir, const std::wstring& userModsDir, const std::wstring& minecraftVersion) {
+    std::vector<SodiumRendererJar> jars = FindSodiumFamilyRenderers(userModsDir);
+
+    // A renamed Fabric jar can still declare id "sodium" in fabric.mod.json.
+    bool hasSodium = false;
+    for (const SodiumRendererJar& jar : jars) {
+        if (std::wstring(jar.family->token) == L"sodium") hasSodium = true;
+    }
+    if (!hasSodium) {
+        std::wstring sodiumJar;
+        if (FindModJarByFabricIdOrName(userModsDir, L"sodium", nullptr, sodiumJar)) {
+            SodiumRendererJar jar;
+            jar.family = &kSodiumFamilies[1];
+            jar.path = sodiumJar;
+            jar.name = GetFileName(sodiumJar);
+            jars.push_back(jar);
+        }
     }
 
-    if (CompareVersionNumbers(w2a(minecraftVersion), "1.20.1") < 0) {
-        const std::wstring mixinConfigPath = gameDir + L"\\config\\sodium-mixins.properties";
-        std::wstring mixinConfigText;
-        if (ReadTextFile(mixinConfigPath, mixinConfigText) &&
-            mixinConfigText.find(L"# Generated by BanditLauncher for legacy Mesa/UWP stability.") != std::wstring::npos) {
-            // only repairs the old bandit seed, a user written config stays theirs
-            bool mixinChanged = false;
-            static const wchar_t* oldMixinDisables[] = {
-                L"mixin.features.chunk_rendering=false\n",
-                L"mixin.features.chunk_rendering=false\r\n",
-                L"mixin.features.particle=false\n",
-                L"mixin.features.particle=false\r\n",
-                L"mixin.features.entity.smooth_lighting=false\n",
-                L"mixin.features.entity.smooth_lighting=false\r\n",
-            };
-            for (const wchar_t* key : oldMixinDisables) {
-                const std::wstring line(key);
-                const size_t pos = mixinConfigText.find(line);
-                if (pos != std::wstring::npos) {
-                    mixinConfigText.erase(pos, line.size());
-                    mixinChanged = true;
-                }
-            }
-            if (mixinChanged) {
-                if (WriteTextFile(mixinConfigPath, mixinConfigText)) {
-                    WriteLogF(L"Sodium legacy mixin disables removed for Minecraft %s: %s", minecraftVersion.c_str(), mixinConfigPath.c_str());
-                } else {
-                    WriteLogF(L"Failed to repair Sodium legacy mixin config: %s err=%u", mixinConfigPath.c_str(), GetLastError());
-                }
-            }
-        }
+    if (jars.empty()) return false;
+    KeepOneSodiumFamilyRenderer(jars);
+    for (const SodiumRendererJar& jar : jars) {
+        SeedSodiumFamilyOptions(gameDir, minecraftVersion, *jar.family);
+        RepairSodiumFamilyMixins(gameDir, minecraftVersion, *jar.family);
     }
     return true;
 }
@@ -671,7 +778,7 @@ void ConfigureKnownModDefaults(
     const std::wstring& minecraftVersion,
     const std::wstring& bundledModsDir) {
     PatchMoonlightPoiMixin(gameDir, userModsDir, minecraftVersion);
-    ConfigureSodiumDefaults(gameDir, userModsDir, minecraftVersion);
+    ConfigureSodiumFamilyDefaults(gameDir, userModsDir, minecraftVersion);
     ConfigureDistantHorizonsDefaults(gameDir, userModsDir);
     const bool hasLambdaControls = ConfigureLambdaControlsDefaults(gameDir, userModsDir);
     const bool hasMidnightControls = ConfigureMidnightControlsDefaults(gameDir, userModsDir);

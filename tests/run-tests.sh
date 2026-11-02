@@ -16,6 +16,12 @@ g++ -std=c++17 -Wall -Wextra -Werror -pedantic \
 /tmp/win32_long_path_test
 
 echo
+echo "== Sodium-family renderer classification (C++) =="
+g++ -std=c++17 -Wall -Wextra -Werror -pedantic \
+    -o /tmp/sodium_family_test tests/sodium_family_test.cpp
+/tmp/sodium_family_test
+
+echo
 echo "== Fork configuration consistency (Python) =="
 python3 scripts/validate-fork-targets.py
 

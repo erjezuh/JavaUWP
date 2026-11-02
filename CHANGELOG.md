@@ -2,6 +2,28 @@
 
 Notable changes to Bandit Launcher. Nightly packages are numbered by build revision rather than by release, so entries here are dated.
 
+## 2026-11-02 — Arreglados los mods de render/optimización en 1.20.1 Forge (Embeddium / Rubidium)
+
+### Fixed
+
+**En `1.20.1 Forge` (`forge 47.4.20`) los mods tipo Embeddium / Rubidium no funcionaban.** La investigación encontró tres causas concatenadas:
+
+1. **La pestaña «Recomendados» ofrecía Rubidium y Embeddium a la vez.** Modrinth declara Rubidium (`4ZqxOvjD`) como `dependency_type: incompatible` en todas las versiones de Embeddium para 1.20.1. Los dos son puertos del mismo renderizador de Sodium, aplican los mismos mixins y no pueden coexistir: instalar ambos termina en un fallo de mixins / arranque abortado. Rubidium lleva sin mantenimiento desde 2023 y Embeddium nació precisamente para corregir sus «gamebreaking issues».
+2. **`ConfigureSodiumDefaults()` sólo reconocía Fabric.** Buscaba el id `sodium` en `fabric.mod.json` y escribía `config/sodium-options.json`. Los puertos de Forge se declaran en `META-INF/mods.toml` y guardan sus opciones en `embeddium-options.json` / `rubidium-options.json`, así que **1.20.1 Forge arrancaba con los valores de fábrica**: `arena_memory_allocator=ASYNC`, `use_advanced_staging_buffers=true`, `cpu_render_ahead_limit=3`, `always_defer_chunk_updates=false`. El propio comentario del launcher ya advertía de que esos ajustes se cuelgan en la ruta Mesa/UWP; en Fabric se corregían, en Forge no.
+3. **El reparador de `sodium-mixins.properties` usaba `< "1.20.1"`, excluyendo exactamente el target afectado**, de modo que un perfil que arrastrase las desactivaciones antiguas podía arrancar con el renderizador de chunks apagado.
+
+Cambios:
+
+- `MC.Xbox/mods/sodium_family.h` clasifica los jars de Sodium / Embeddium / Rubidium descartando explícitamente los addons (Sodium Extra, Embeddium Extra, Reese's Sodium Options, TexTrue's Embeddium Options, Indium, Oculus…). Si un perfil tiene más de un renderizador, se queda **Embeddium** y los demás se apartan como `.jar.disabled` (reversible, con log claro) en vez de dejar que el juego reviente.
+- `ConfigureSodiumFamilyDefaults()` siembra las claves seguras para UWP en el fichero de opciones de la familia detectada, incluida `always_defer_chunk_updates_v2` (el nombre que usa Embeddium 0.3.x) y la reparación de mixins también en 1.20.1.
+- Los helpers de JSON ahora usan `SetNamedValue` al sobrescribir claves que ya existen, porque `JsonObject::Insert` puede lanzar en ese caso.
+- `config/recommended-mods.json` deja de recomendar Rubidium en Forge 1.18.2 y 1.20.1; Embeddium encabeza la lista.
+- `scripts/validate-fork-targets.py` añade la comprobación 13 (catálogo sin renderizadores incompatibles + cobertura de las tres familias) y `tests/sodium_family_test.cpp` cubre la clasificación, los addons y el desempate. Se verificó que el check falla con el código anterior.
+
+### Limitaciones
+
+`1.20.1 Forge` sigue marcado como `experimental` en el catálogo y **no hay verificación en consola**. El parche UWP de `securejarhandler` continúa sin aplicarse a Forge 47 (`2.1.10`), porque el vendored está compilado contra NeoForge `3.0.8`; los mods con Jar-in-Jar complejo pueden seguir fallando. Para confirmar un arranque, buscar en `mc_launch.log` las líneas `UWP graphics defaults seeded in ...\embeddium-options.json` y `Disabled conflicting renderer ...`.
+
 ## 2026-11-02 — Arreglado el desajuste entre la cruceta y la posición real del ratón
 
 ### Fixed

@@ -102,6 +102,8 @@ Some CurseForge authors block downloads by third-party launchers. If a pack need
 
 Shader packs need a compatible shader loader such as Iris or Oculus in the same profile. Installing a shader pack does not guarantee it will render correctly or run well on Xbox.
 
+On Forge 1.20.1 use **Embeddium** as the renderer/optimization mod, not Rubidium, and never both. The launcher seeds the Mesa/UWP-safe Embeddium defaults and disables conflicting Sodium-family jars before launch; see [the Spanish guide](docs/FORK-NATIVE-NEOFORGE.es.md#los-mods-de-render-no-funcionan-en-1201-forge-embeddium--rubidium).
+
 ## Controller and mouse
 
 This fork no longer builds the Bandit Controller mod. **Controlify** (plus its required YACL dependency) is bundled in the APPX and placed in `mods/` automatically for new instances of the default `1.21.1 / NeoForge 21.1.250` target. The pins, hashes and sizes live in [config/controlify-bundle.json](config/controlify-bundle.json).

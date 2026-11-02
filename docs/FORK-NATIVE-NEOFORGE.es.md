@@ -159,6 +159,57 @@ El mensaje completo suele ser: *«Error 0x80070005 en la operación de implement
 
 Si después de esto sigue fallando, pásame el texto completo del error y la versión que figura en las notas de la Release (`Package version: X.Y.Z.R`).
 
+## Los mods de render no funcionan en 1.20.1 Forge (Embeddium / Rubidium)
+
+`1.20.1 / Forge / 47.4.20` es un objetivo `experimental` del catálogo. Los mods
+de optimización gráfica de la familia Sodium (Embeddium, Rubidium y similares)
+fallaban ahí por tres motivos que se sumaban:
+
+1. **Dos renderizadores recomendados a la vez.** En la pestaña *Recomendados* de
+   Forge 1.20.1 aparecían `rubidium` **y** `embeddium`. Modrinth declara
+   Rubidium como *incompatible* con todas las versiones 1.20.1 de Embeddium:
+   los dos reescriben el mismo renderizador de chunks y aplican los mismos
+   mixins. Instalar ambos aborta el arranque. Rubidium está abandonado desde
+   2023; Embeddium es su reemplazo mantenido.
+2. **Ajustes gráficos que sólo se aplicaban a Fabric.** El launcher siembra
+   valores conservadores para la ruta Mesa/UWP (`SWAP` en vez de `ASYNC`,
+   staging avanzado desactivado, un solo fotograma en vuelo, actualizaciones de
+   chunks diferidas) porque los valores de fábrica de Sodium se cuelgan en la
+   consola. Pero esa rutina buscaba `fabric.mod.json` con id `sodium` y
+   escribía únicamente `config/sodium-options.json`. Los mods de Forge se
+   declaran en `META-INF/mods.toml` y usan `embeddium-options.json` o
+   `rubidium-options.json`, así que el perfil 1.20.1 Forge se quedaba siempre
+   con los valores peligrosos.
+3. **Reparación de mixins que excluía justo 1.20.1.** La limpieza de las
+   desactivaciones antiguas de `sodium-mixins.properties` se ejecutaba sólo con
+   `minecraftVersion < "1.20.1"`.
+
+Desde este cambio:
+
+- El launcher detecta las tres familias por nombre de jar (`sodium`,
+  `embeddium`, `rubidium`) e ignora los complementos (`sodium-extra`,
+  `embeddium-extra`, `reeses-sodium-options`,
+  `textrues-embeddium-options`, Indium, Oculus, Iris…).
+- Si hay más de un renderizador en el perfil, conserva **Embeddium** y aparta
+  los otros como `*.jar.disabled`. No se borra nada: para volver a usar
+  Rubidium basta con quitar el sufijo `.disabled`. La decisión queda registrada
+  en `mc_launch.log`.
+- Se siembran las claves seguras en el fichero de opciones correcto, incluida
+  `always_defer_chunk_updates_v2` (Embeddium 0.3.x cambió el nombre de esa
+  clave), y la reparación de mixins cubre también 1.20.1.
+- `config/recommended-mods.json` ya no recomienda Rubidium en Forge 1.18.2 ni
+  1.20.1; Embeddium va primero.
+
+Instala **solo un** renderizador por perfil. Para comprobar que el arreglo se
+aplicó, busca en `mc_launch.log` la línea `UWP graphics defaults seeded in
+...\embeddium-options.json`. Si aparece `Disabled conflicting renderer ...`,
+el launcher ha apartado un jar incompatible.
+
+> Sin verificación en consola todavía. Además, el parche UWP de
+> `securejarhandler` sigue sin aplicarse a Forge 47 (`2.1.10`), porque el
+> código incluido está compilado contra NeoForge `3.0.8`; un mod con
+> Jar-in-Jar complejo puede seguir dando problemas.
+
 ## Cómo compilar
 
 Requisitos: Windows, Visual Studio con C++/WinRT, Windows SDK, JDK 17, 21 y

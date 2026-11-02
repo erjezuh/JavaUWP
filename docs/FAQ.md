@@ -21,6 +21,20 @@ If you have Minecraft through Game Pass, you need to create an account on minecr
 ## The crosshair is drawn somewhere else than where clicks land
 The GLFW shim draws the crosshair in framebuffer coordinates but was reporting `glfwGetCursorPos` in a smaller, stale coordinate space (the size Minecraft requested, e.g. 854x480, instead of the real 1920x1080/3840x2160 surface). Hover tooltips and clicks therefore landed toward the top left. The shim now uses the current framebuffer size for the cursor space and draws the crosshair through the exact same mapping it reports to the game, at every DPI scale. If it still happens, send the shim log line starting with `Window size` (it now includes `cursor space` and `scale`).
 
+## Rendering mods (Embeddium/Rubidium) do not work on 1.20.1 Forge
+
+Install only one Sodium-family renderer per profile. The Recommended tab used to
+list Rubidium and Embeddium together, but Modrinth marks them mutually
+incompatible and both patch the same chunk renderer. This fork now recommends
+Embeddium alone, keeps it if a profile contains several renderers, and moves the
+others aside as `*.jar.disabled` (remove the suffix to restore one). The
+launcher also seeds the conservative Mesa/UWP graphics defaults into
+`config/embeddium-options.json` or `config/rubidium-options.json`; previously
+those defaults were written only to Fabric's `sodium-options.json`, so Forge
+1.20.1 booted with the unsafe ASYNC staging and three-frame render-ahead
+defaults. The Spanish guide has the full diagnosis:
+[FORK-NATIVE-NEOFORGE.es.md](FORK-NATIVE-NEOFORGE.es.md).
+
 ## Installing the APPX fails with error 0x80070005 (Access denied)
 This is a deployment error, not a launcher crash. The usual causes, in order:
 

@@ -274,6 +274,60 @@ def main() -> int:
        "const float cy = (float)WindowToMenuInputY(g_menu_abs_y);" not in shim:
         errors.append("glfw_uwp.cpp: the crosshair overlay does not use the cursor coordinate mapping")
 
+    # 13. Rendering/optimisation mods on 1.20.1 Forge. The Recommended tab
+    # used to list Rubidium AND Embeddium together even though Modrinth marks
+    # them mutually incompatible, and ConfigureSodiumDefaults only knew about
+    # Fabric's sodium-options.json, so the Forge ports booted with the Mesa/UWP
+    # unsafe defaults (ASYNC staging, render-ahead 3) and no conflict guard.
+    recommended_path = ROOT / "config" / "recommended-mods.json"
+    try:
+        recommended = json.loads(recommended_path.read_text(encoding="utf-8-sig"))
+    except (OSError, json.JSONDecodeError) as exc:
+        errors.append(f"config/recommended-mods.json is not valid JSON: {exc}")
+        recommended = {}
+    renderers = {"sodium", "embeddium", "rubidium"}
+    for loader_name, versions in recommended.items():
+        for mc_version, slugs in versions.items():
+            present = renderers.intersection(slugs)
+            if len(present) > 1:
+                errors.append(
+                    f"recommended-mods.json {loader_name}.{mc_version} lists several "
+                    f"mutually exclusive renderers: {', '.join(sorted(present))}"
+                )
+    forge_1201 = (recommended.get("forge") or {}).get("1.20.1") or []
+    if "embeddium" not in forge_1201:
+        errors.append("recommended-mods.json forge.1.20.1 does not recommend Embeddium")
+    if "rubidium" in forge_1201:
+        errors.append("recommended-mods.json forge.1.20.1 still recommends abandoned Rubidium")
+    mod_defaults = read("MC.Xbox/mods/mod_defaults.cpp")
+    sodium_family = read("MC.Xbox/mods/sodium_family.h")
+    if '#include "sodium_family.h"' not in mod_defaults:
+        errors.append("mod_defaults.cpp does not use the portable sodium_family.h classification")
+    for needle in (
+        "ConfigureSodiumFamilyDefaults",
+        "KeepOneSodiumFamilyRenderer",
+        "MovePathIfExists",
+        "SodiumFamilyForFileName",
+        "always_defer_chunk_updates_v2",
+        "arena_memory_allocator",
+        "use_advanced_staging_buffers",
+        "cpu_render_ahead_limit",
+    ):
+        if needle not in mod_defaults:
+            errors.append(f"mod_defaults.cpp is missing {needle}")
+    for needle in ("embeddium-options.json", "rubidium-options.json", "sodium-options.json",
+                   "PreferredSodiumFamilyIndex", "IsSodiumFamilyAddon"):
+        if needle not in sodium_family:
+            errors.append(f"sodium_family.h is missing {needle}")
+    if "tests/sodium_family_test.cpp" not in read("tests/run-tests.sh"):
+        errors.append("tests/run-tests.sh does not run the sodium family classification test")
+    if "ConfigureSodiumDefaults(" in mod_defaults:
+        errors.append("mod_defaults.cpp still calls the Fabric-only ConfigureSodiumDefaults")
+    if 'CompareVersionNumbers(w2a(minecraftVersion), "1.20.1") > 0' not in mod_defaults:
+        errors.append("mod_defaults.cpp legacy mixin repair still excludes Minecraft 1.20.1")
+    if "ConfigureSodiumFamilyDefaults(gameDir, userModsDir, minecraftVersion)" not in mod_defaults:
+        errors.append("mod_defaults.cpp does not call the Sodium-family defaults resolver")
+
     for warning in warnings:
         print(f"WARN  {warning}")
     for error in errors:
