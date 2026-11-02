@@ -32,11 +32,14 @@ jobs:
             echo "== token scopes =="
             gh api --include "repos/$GITHUB_REPOSITORY" 2>&1 \
               | grep -iE '^(HTTP/|x-oauth-scopes|x-accepted-github-permissions)' | head -10 || true
-            echo "== probe: can GITHUB_TOKEN create a release? =="
-            gh release create ci-permission-probe --target "$GITHUB_SHA" \
-              --title "probe" --notes "probe" --draft 2>&1 | head -5 || true
-            gh release delete ci-permission-probe --yes 2>&1 | head -5 || true
-            git push origin --delete refs/tags/ci-permission-probe 2>&1 | head -5 || true
+            echo "== probe: can GITHUB_TOKEN publish a new tagged release? =="
+            set +e
+            gh release create ci-permission-probe2 --target "$GITHUB_SHA" \
+              --title "probe" --notes "probe" --prerelease 2>&1 | head -5
+            echo "probe exit: ${PIPESTATUS[0]}"
+            set -e
+            gh release delete ci-permission-probe2 --yes 2>&1 | head -5 || true
+            git push origin --delete refs/tags/ci-permission-probe2 2>&1 | head -5 || true
             echo "== gh run view --log-failed =="
             gh run view "$RUN_ID" --repo "$GITHUB_REPOSITORY" --log-failed 2>&1 || true
             echo "== api job logs =="
