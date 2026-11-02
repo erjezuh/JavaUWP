@@ -2,6 +2,12 @@
 
 Notable changes to Bandit Launcher. Nightly packages are numbered by build revision rather than by release, so entries here are dated.
 
+## 2026-11-02 — Arreglada la firma del APPX en builds con caché caliente
+
+### Fixed
+
+**El primer build con caché caliente llegaba al empaquetado y fallaba con `No code signing certificate for 'CN=Microsoft Corporation...' in Cert:\CurrentUser\My`.** La caché de `actions/cache` restaura `staging\certs` (incluido el `.pfx`), pero el almacén personal de certificados de un runner nuevo está vacío; `build.ps1` sólo generaba el certificado cuando el archivo no existía, así que no había nada con que firmar. Ahora, si el `.pfx` está cacheado y no hay un certificado con esa misma entidad en el almacén, se importa con `Import-PfxCertificate` antes de buscar candidatos de firma. Esto conserva el mismo certificado entre builds (mejor para actualizar el APPX en la consola) en lugar de regenerarlo cada vez.
+
 ## 2026-11-02 — Controlify sustituye al Bandit Controller y el APPX compila mucho más rápido
 
 ### Changed

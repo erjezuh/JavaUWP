@@ -1317,14 +1317,22 @@ foreach ($name in $appxAssetNames) {
 Write-Phase "Packaging"
 $cert = Join-Path $certDir $ProjectConfig.CertificateFileName
 $certName = [string]$sourceManifest.Package.Identity.Publisher
+$certPassword = ConvertTo-SecureString $ProjectConfig.CertificatePassword -AsPlainText -Force
 
 if (-not (Test-Path $cert)) {
     $c = New-SelfSignedCertificate -Type CodeSigningCert -Subject $certName `
         -KeyUsage DigitalSignature -CertStoreLocation "Cert:\CurrentUser\My" `
         -TextExtension @("2.5.29.37={text}1.3.6.1.5.5.7.3.3","2.5.29.19={text}")
-    Export-PfxCertificate -Cert $c -FilePath $cert `
-        -Password (ConvertTo-SecureString $ProjectConfig.CertificatePassword -AsPlainText -Force) | Out-Null
+    Export-PfxCertificate -Cert $c -FilePath $cert -Password $certPassword | Out-Null
     Write-Host "Generated cert"
+} elseif (-not (Get-ChildItem Cert:\CurrentUser\My -ErrorAction SilentlyContinue |
+        Where-Object { $_.Subject -eq $certName -and $_.HasPrivateKey })) {
+    # CI restores staging\certs from actions/cache, but a fresh runner has an
+    # empty personal certificate store. Import the cached PFX or signtool has
+    # nothing to sign with. Without this, every warm-cache build fails here.
+    Import-PfxCertificate -FilePath $cert -CertStoreLocation "Cert:\CurrentUser\My" `
+        -Password $certPassword | Out-Null
+    Write-Host "Imported cached signing cert"
 }
 
 $allSigningCertCandidates = Get-ChildItem Cert:\CurrentUser\My |
