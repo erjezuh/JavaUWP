@@ -316,6 +316,8 @@ Measured on run `41446496020`: the build took 2,317.2 s (39 min), of which 1,633
 
 `build.ps1` generates one download manifest for each of the 56 rows in `config/versions.tsv` and compiles the UWP compatibility mods for the Fabric targets. Every one of those outputs, plus the Java UWP patches and `MC.Xbox.exe`, already has a content-hash stamp (`New-BuildStamp` / `Test-BuildStampCurrent`) in `staging\build` or `staging\cache\manifests`. On a fresh Actions runner those directories are empty, so all of it is rebuilt: that is the long cold build.
 
+**Package versioning.** `build.ps1` derives the APPX version from `-AppxVersion`, then from `GITHUB_RUN_NUMBER` on CI (`1.0.<run>.0`), and finally from `.local\app_build.txt` for local builds. The CI branch exists because a clean runner has no `.local\app_build.txt`: without it every nightly would be stamped `1.0.0.0`, and Windows/Xbox refuses an `Add` operation for an identity+version that is already registered (`0x80070005`). Always install the `.cer` from the same Release as the `.appx`.
+
 `native-neoforge.yml` restores `staging/cache`, `staging/build`, `staging/certs` and `staging/notes` from `actions/cache` **after** `clean.ps1 -Apply` (which deletes `staging/build`, `staging/package`, `staging/certs` and `output`), and saves a fresh cache after the build. `staging/package` is deliberately not cached because it is the final package content. With a warm cache the stamps short-circuit the downloads and the ~50 Java compiles; only files whose inputs actually changed are rebuilt. `Write-Phase` in `build.ps1` prints per-phase elapsed times so a slow build can be attributed.
 
 - The **first** build after enabling the cache is still cold (it creates the cache). Every build after that is warm.

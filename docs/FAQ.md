@@ -18,6 +18,17 @@ Bandit Launcher requires a valid copy of Minecraft: Java Edition. The launcher d
 ## My Minecraft account won't sign in!
 If you have Minecraft through Game Pass, you need to create an account on minecraft.net and set a player name.
 
+## Installing the APPX fails with error 0x80070005 (Access denied)
+This is a deployment error, not a launcher crash. The usual causes, in order:
+
+1. **A package with the same identity and version is already installed.** Every CI build used to be stamped `1.0.0.0`, so an update was rejected. Builds now use `GITHUB_RUN_NUMBER` as the third version field (`1.0.<run>.0`), which is always higher. If your console still has an old `1.0.0.0` registration, uninstall Bandit Launcher from **Dev Home / My games & apps** before adding the new APPX.
+2. **The signing certificate is not trusted on the console.** In the Windows Device Portal (`https://<xbox-ip>:11443`), open **Apps → Deploy apps → Install Certificate** and install the `.cer` **from the same Release as the APPX** before deploying. The certificate can change if GitHub evicts the build cache, so always use the `.cer` shipped with the package you are installing.
+3. **Dev Mode is not active.** Switch the console to Dev Mode and make sure the Dev Mode app is running.
+4. **A stale or partial deployment.** Restart the console, rename the download to a simple name without spaces (for example `BanditLauncherNative.appx`, not `... (1).appx`) and try again.
+5. **Not enough free space on the console's app volume.** The APPX is ~450 MB and expands to well over 1 GB when unpacked.
+
+The Spanish step-by-step guide is in [FORK-NATIVE-NEOFORGE.es.md](FORK-NATIVE-NEOFORGE.es.md).
+
 ## How do I use my mouse?
 Plug a USB mouse into the Xbox. This branch packages Bandit Launcher as `Microsoft.MicrosoftEdge.BanditLauncher` so the Xbox shell can pass mouse input to it. The native mouse build has been tested on Xbox. It installs separately from the normal `BanditVault.Launcher` build and starts with its own LocalState.
 

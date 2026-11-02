@@ -139,6 +139,18 @@ redistribuir APPX: esta publicación se hace bajo la responsabilidad del
 propietario de este fork. El workflow original `nightly.yml` sigue igual,
 referido a `main-native`.
 
+## Error `0x80070005` al instalar el APPX («Acceso denegado»)
+
+El mensaje completo suele ser: *«Error 0x80070005 en la operación de implementación de Add con el volumen D: en el paquete Microsoft.MicrosoftEdge.BanditLauncher_1.0.0.0_x64_8wekyb3d8bbwe»*. Es un error del **servicio de despliegue de Windows/Xbox**, no del launcher: la consola se niega a registrar el paquete. Haz esto en orden:
+
+1. **Desinstala la versión anterior.** En la Xbox: *Dev Home → Mis juegos y aplicaciones → Bandit Launcher → Desinstalar*. Hasta ahora todos los builds de CI llevaban la versión `1.0.0.0`; intentar añadir un paquete con la misma identidad y versión que ya está registrado produce este `0x80070005`. Desde este cambio el workflow usa `GITHUB_RUN_NUMBER` como tercer campo (`1.0.<n>.0`), así que cada Release es una versión superior y se puede actualizar sin desinstalar.
+2. **Instala el certificado ANTES del APPX.** Descarga el `.cer` **de la misma Release** que el `.appx`. En el Portal de Dispositivos Windows (`https://<ip-de-la-xbox>:11443`): *Apps → Deploy apps → Install Certificate*, selecciona el `.cer` y pulsa *Install*. El certificado debe coincidir con el que firma ese APPX; si la caché de GitHub se pierde el build genera uno nuevo, así que no reutilices un `.cer` de otra Release.
+3. **Comprueba el Modo desarrollador.** La consola debe estar en Dev Mode con la app *Xbox Dev Mode* activa; en modo comercial el despliegue de paquetes `runFullTrust` se deniega.
+4. **Limpia el nombre del archivo.** El navegador suele guardarlo como `BanditLauncherNative-neoforge (1).appx`. Renómbralo a `BanditLauncherNative.appx` (sin espacios ni paréntesis) y vuelve a subirlo.
+5. **Reinicia la consola y libera espacio.** El APPX ocupa ~450 MB y se expande a más de 1 GB; si el volumen de aplicaciones está lleno, el *Add* falla.
+
+Si después de esto sigue fallando, pásame el texto completo del error y la versión que figura en las notas de la Release (`Package version: X.Y.Z.R`).
+
 ## Cómo compilar
 
 Requisitos: Windows, Visual Studio con C++/WinRT, Windows SDK, JDK 17, 21 y

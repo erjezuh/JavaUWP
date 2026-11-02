@@ -135,9 +135,19 @@ $appVersionBase = "$($baseVersionParts[0]).$($baseVersionParts[1]).$($baseVersio
 # update in place while CI can provide an exact APPX_VERSION for nightlies.
 $verFile = Join-Path $root ".local\app_build.txt"
 $verFileExisted = Test-Path $verFile
+# GitHub Actions checks out a clean worktree with no .local\app_build.txt, so
+# without this branch every CI build would stamp the manifest base (1.0.0.0).
+# Windows/Xbox then refuse the Add operation with 0x80070005 when a package
+# with that same identity and version is already registered on the console.
+# GITHUB_RUN_NUMBER increases monotonically for this workflow, so use it as the
+# third version field. An explicit -AppxVersion still wins.
+$ciVersioned = $env:GITHUB_RUN_NUMBER -match '^\d+$'
 if ($AppxVersion) {
     Assert-AppxVersion $AppxVersion
     $appVersion = $AppxVersion
+} elseif ($ciVersioned) {
+    $appVersion = "$appVersionBase.$($env:GITHUB_RUN_NUMBER).0"
+    Assert-AppxVersion $appVersion
 } else {
     $verRev = [int]$baseVersionParts[3]
     if ($verFileExisted) {
@@ -168,6 +178,8 @@ $fabricLoaderSource = if ($FabricLoader) {
 }
 $appVersionSource = if ($AppxVersion) {
     "-AppxVersion"
+} elseif ($ciVersioned) {
+    "GITHUB_RUN_NUMBER"
 } elseif ($verFileExisted) {
     ".local\app_build.txt"
 } else {
@@ -193,7 +205,7 @@ foreach ($inherited in @(
     }
 }
 
-if (-not $AppxVersion -and -not $verFileExisted) {
+if (-not $AppxVersion -and -not $ciVersioned -and -not $verFileExisted) {
     Write-Warning "No .local\app_build.txt in this worktree, so the appx stamps $appVersion. Anything already installed on the console at a higher version will not be replaced by it."
 }
 
