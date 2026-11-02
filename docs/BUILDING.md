@@ -313,6 +313,12 @@ The GitHub Actions workflow in `.github/workflows/nightly.yml` builds and publis
 - A commit message containing `[skip appx]` skips the APPX job entirely for docs/preview-only pushes.
 - The workflow uses `cancel-in-progress: false`, so a build that is about to publish is not killed by the next push. New runs queue and then benefit from the warm cache.
 
+### If the Release step fails
+
+The APPX artifact is uploaded *before* the Release step, so a publish failure never loses the package. `native-neoforge.yml` writes the failing run id to `docs/ci/.publish-trigger`; that push triggers `publish-appx-artifact.yml`, which downloads the artifact from that run, creates or edits `nightly-native` and uploads the `.appx`, `.sha256` and `.cer` with `--clobber` in under a minute. You can invoke the same recovery manually by putting any successful build's run id in that file and pushing it. The workflow commits its `gh` transcript to `docs/ci/publish-log.md`.
+
+The first cold build hit `HTTP 403: Resource not accessible by integration` on `gh release create` for a brand-new tag. The tag and Release now exist, so normal builds take the `edit` path. `scripts\publish-release.ps1` no longer passes `--target` when editing (moving the tag is unnecessary and blocked for the Actions token) and retries cold creation three times.
+
 The workflow publishes `BanditLauncherNative-nightly.appx`, `BanditLauncherNative-nightly.sha256`, and the matching public certificate to the `nightly-native` release. It moves the `nightly-native` tag to the commit that produced the package.
 
 Nightly releases are experimental, unsupported, and not full game releases. The generated release notes also remind users that APPX redistribution, public install tutorials, public mirrors, public modified copies, and auth bypass builds are not permitted before the full release.

@@ -2,6 +2,18 @@
 
 Notable changes to Bandit Launcher. Nightly packages are numbered by build revision rather than by release, so entries here are dated.
 
+## 2026-11-02 — Release garantizada y recuperable desde el artefacto
+
+### Fixed
+
+**El primer build completo terminó el APPX pero falló al publicarlo.** El log del paso mostró `HTTP 403: Resource not accessible by integration` al llamar `gh release create` con `GITHUB_TOKEN` para un tag que aún no existía. `scripts\publish-release.ps1` ya no pasa `--target` al editar una Release existente (mover el tag no es necesario y el token de Actions no puede hacerlo), y reintenta hasta tres veces la creación en frío de un tag nuevo. La Release y el tag `nightly-native` ya existen, así que los builds siguientes usan la ruta `edit` + `upload --clobber`, verificada en CI.
+
+### Added
+
+**Red de seguridad para «siempre hay un APPX descargable».** Si el paso de publicación falla, el propio build escribe su `run id` en `docs/ci/.publish-trigger`; eso dispara `.github/workflows/publish-appx-artifact.yml`, que descarga el artefacto `.appx` ya subido por ese mismo run y lo adjunta a la Release en ~40 s, sin recompilar nada. Se puede usar también a mano poniendo cualquier `run id` en ese archivo. El workflow guarda su transcripción en `docs/ci/publish-log.md` para poder diagnosticar fallos sin descargar logs desde el exterior.
+
+**Resultado:** <https://github.com/erjezuh/JavaUWP/releases/tag/nightly-native> con `BanditLauncherNative-neoforge.appx` (437 MB), su `.sha256` y el `.cer` correspondiente.
+
 ## 2026-11-02 — Build de APPX más rápido en CI
 
 ### Changed

@@ -210,6 +210,7 @@ jobs:
           if-no-files-found: error
 
       - name: Publish nightly-native release
+        id: publish-release
         if: ${{ (github.event_name == 'push' || inputs.publish_release == true) && inputs.fast_build != true }}
         shell: powershell
         env:
@@ -222,8 +223,30 @@ jobs:
             -RunUrl "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID" `
             -Asset dist\BanditLauncherNative-neoforge.appx, dist\BanditLauncherNative-neoforge.sha256, dist\BanditLauncherNative-neoforge.cer
 
+      # Safety net: the APPX artifact is already uploaded at this point. If the
+      # Release API refuses the publish, ask the recovery workflow to attach
+      # that same artifact to the Release. No rebuild, and "every build always
+      # leaves a downloadable APPX" still holds.
+      - name: Trigger APPX recovery from artifact
+        if: ${{ failure() && steps.publish-release.outcome == 'failure' && (github.event_name == 'push' || inputs.publish_release == true) && inputs.fast_build != true }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p docs/ci
+          echo "$GITHUB_RUN_ID" > docs/ci/.publish-trigger
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f docs/ci/.publish-trigger
+          if ! git diff --cached --quiet; then
+            git commit -m "CI: recover APPX Release from run $GITHUB_RUN_ID"
+            git pull --rebase origin "$GITHUB_REF_NAME"
+            git push origin "HEAD:$GITHUB_REF_NAME"
+          fi
+
       - name: Print download link
-        if: ${{ (github.event_name == 'push' || inputs.publish_release == true) && inputs.fast_build != true }}
+        if: ${{ always() && (github.event_name == 'push' || inputs.publish_release == true) && inputs.fast_build != true }}
         shell: powershell
         run: |
           $url = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/releases/tag/nightly-native"

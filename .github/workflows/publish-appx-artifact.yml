@@ -1,9 +1,10 @@
 name: Publish APPX from a completed build
 
-# Recovery path: if the build succeeds but the release step fails, put the run
-# id in docs/ci/.publish-trigger and push. This downloads that run's APPX
-# artifact and publishes it without rebuilding (a cold build is ~30 minutes).
-# It also commits its transcript so the failure can be diagnosed from the repo.
+# Recovery path: the native build writes this file automatically when its
+# Release step fails. You can also put a run id in docs/ci/.publish-trigger
+# and push it manually. Either way this downloads that run's APPX artifact and
+# attaches it to the nightly-native Release without rebuilding (a cold build
+# is ~30 minutes). It also commits its transcript for diagnosis.
 on:
   push:
     branches:

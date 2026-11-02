@@ -84,13 +84,29 @@ try {
     if ($DryRun) { Write-Host "gh release view $Tag  ->  exists=$exists" }
 
     $verb = if ($exists) { "edit" } else { "create" }
-    $ghArgs = @("release", $verb, $Tag, "--target", $Sha, "--title", $Tag, "--notes-file", $notesFile)
+    $ghArgs = @("release", $verb, $Tag, "--title", $Tag, "--notes-file", $notesFile)
+    if ($verb -eq "create") {
+        # Only a brand-new release needs a target commitish. Passing --target
+        # to edit asks GitHub to move the tag, which the Actions token is not
+        # allowed to do here (HTTP 403 "Resource not accessible by integration").
+        $ghArgs += @("--target", $Sha)
+    }
     if ($prerelease) {
         $ghArgs += "--prerelease"
     } elseif ($verb -eq "edit") {
         $ghArgs += @("--prerelease=false")
     }
-    $code = Invoke-Gh $ghArgs
+
+    # Cold creation of a tagged release can get a transient 403 from the
+    # Actions integration; retry briefly instead of failing a 30-minute build.
+    $attempts = if ($verb -eq "create") { 3 } else { 1 }
+    $code = 1
+    for ($i = 1; $i -le $attempts; $i++) {
+        Write-Host "gh $($ghArgs -join ' ')  (attempt $i/$attempts)"
+        $code = Invoke-Gh $ghArgs
+        if ($code -eq 0) { break }
+        if ($i -lt $attempts) { Start-Sleep -Seconds 5 }
+    }
     if ($code -ne 0) { throw "gh release $verb failed with exit code $code" }
 
     $code = Invoke-Gh (@("release", "upload", $Tag) + $Asset + @("--clobber"))
