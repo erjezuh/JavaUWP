@@ -2,6 +2,62 @@
 
 Notable changes to Bandit Launcher. Nightly packages are numbered by build revision rather than by release, so entries here are dated.
 
+## 2026-11-02 — Corregido `OpenAL.dll (error code = 127)` después del arreglo de OSHI
+
+### Fixed
+
+Con `1.0.17.0` el crasheo de `Ole32` **desapareció** (la captura ya llegaba más
+adelante en el arranque), pero `1.20.1 / Forge / 47.4.20` seguía diciendo
+«Minecraft crasheo mientras cargaba los mods» con:
+
+```
+Failed to load library: <pkg>\runtime\natives\1.20.1-forge-47.4.20\OpenAL.dll (error code = 127)
+  org.lwjgl.system.windows.WindowsLibrary.loadLibrary
+  org.lwjgl.system.Library.loadNativeFromLibraryPath
+  org.lwjgl.openal.ALC.create / ALC.<clinit>
+```
+
+El `127` es **`ERROR_PROC_NOT_FOUND`**, no «archivo no encontrado» (que sería
+`126`). Causa: `OpenAL.dll` es OpenAL Soft y su backend WASAPI está enlazado
+con `ole32.lib`, así que su tabla de importaciones pide, entre otros,
+`PropVariantClear`, `CoTaskMemAlloc`, `CoTaskMemFree`, `CoCreateInstance` y
+`CoInitializeEx` por el **nombre suelto** `ole32.dll`. Windows resuelve esas
+importaciones por nombre base: al cargar JNA nuestro shim empaquetado como
+`Ole32.dll` (durante la consulta OSHI/WMI de Embeddium, que ocurre *antes* de
+`ALC.<clinit>`), `OpenAL.dll` puede enlazarse contra él. El shim sólo exportaba
+los puntos de entrada que JNA llama desde Java y **no tenía
+`PropVariantClear`**, así que `LoadLibrary` abortaba con 127. En el target por
+defecto (1.21.1 NeoForge) no aparece porque allí no hay consulta OSHI temprana
+y el shim nunca se carga.
+
+Cambios:
+
+- `shims/ole32_uwp.cpp` exporta ahora también la superficie que consumen las
+  bibliotecas **nativas** de `ole32.lib` / `oleaut32.lib`:
+  `PropVariantInit`/`PropVariantClear`, `CoTaskMemAlloc`/`Realloc`/`CoGetMalloc`,
+  `StringFromIID`/`StringFromCLSID`, `CLSIDFromProgID`/`ProgIDFromCLSID`,
+  `CoGetClassObject`, `CoRegisterClassObject`, `CoRevokeClassObject`,
+  `CoMarshalInterface`/`CoUnmarshalInterface`/`CoReleaseMarshalData`,
+  `CoDisconnectObject`, `CoFreeUnusedLibraries`, `CoGetCurrentProcess`,
+  `CreateStreamOnHGlobal`/`GetHGlobalFromStream`, `OleRun`,
+  `SysAllocStringByteLen`/`SysStringByteLen`/`SysReAllocString`,
+  `VariantCopy`/`VariantCopyInd`, `SafeArrayCreate`/`Destroy`,
+  `LoadTypeLib`/`RegisterTypeLib`. Siguen siendo fallos/no-ops controlados:
+  el contrato con OSHI (`E_FAIL`) no cambia.
+- `MC.Xbox/launch/minecraft_launch.cpp` **precarga los `ole32.dll` y
+  `oleaut32.dll` reales del sistema antes de crear la JVM**
+  (`LoadLibraryW` con nombre KnownDLL y, si falla, ruta absoluta a
+  `%SystemRoot%\System32`), para que `OpenAL.dll` enlace contra la
+  implementación del SO y conserve su backend WASAPI. Queda registrado en `mc_launch.log` como
+  `System COM DLL preloaded: ole32.dll` / `oleaut32.dll`.
+- `tests/ole32_shim_test.cpp` enlaza y comprueba todas esas exportaciones (si
+  falta alguna, el test no compila); `scripts/validate-fork-targets.py`
+  (check 14) exige los símbolos y la precarga.
+
+> Sin verificación en consola todavía: este arreglo se valida con la siguiente
+> captura / `mc_launch.log`. No se cambian `java21`, GL/Mesa, el catálogo de
+> mods ni los demás targets.
+
 ## 2026-11-02 — Arreglado el crasheo de OSHI / JNA / WMI al cargar mods en 1.20.1 Forge
 
 ### Fixed

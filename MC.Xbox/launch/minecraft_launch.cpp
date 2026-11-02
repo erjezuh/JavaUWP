@@ -28,6 +28,7 @@
 #include <chrono>
 #include <fstream>
 #include <functional>
+#include <initializer_list>
 #include <map>
 #include <mutex>
 #include <sstream>
@@ -578,6 +579,32 @@ static bool PreloadJvm(
     const std::wstring path = jreBin + L";" + jreServer + L";" + exeDir + L";" + nativesDir + L";" + GetEnvVarString(L"PATH");
     SetEnvironmentVariableW(L"PATH", path.c_str());
     SetEnvironmentVariableW(L"JAVA_HOME", jreDir.c_str());
+
+    // Native libraries resolve ole32.lib / oleaut32.lib imports by the bare DLL
+    // name. JNA loads the packaged COM shim as "Ole32.dll" by absolute path
+    // during OSHI/WMI hardware probes, which puts a module with that base name
+    // in the process before LWJGL loads OpenAL.dll. Windows can then bind
+    // OpenAL.dll's COM imports to the shim instead of the system DLL, and a
+    // missing export aborts the load with ERROR_PROC_NOT_FOUND (error 127).
+    // Preload the real OS COM DLLs first, before the JVM exists, so native
+    // audio binds to the OS implementation and keeps its WASAPI backend.
+    // Use plain LoadLibraryW (already used by the packaged glfw shim): a bare
+    // KnownDLL name is accepted here, while JNA's LoadLibraryExW with
+    // LOAD_WITH_ALTERED_SEARCH_PATH is what the app container rejects.
+    const std::wstring systemRoot = GetEnvVarString(L"SystemRoot");
+    for (const wchar_t* comDll : {L"ole32.dll", L"oleaut32.dll"}) {
+        HMODULE realCom = LoadLibraryW(comDll);
+        if (!realCom && !systemRoot.empty()) {
+            realCom = LoadLibraryW((systemRoot + L"\\System32\\" + comDll).c_str());
+        }
+        if (realCom) {
+            WriteLogF(L"System COM DLL preloaded: %s", comDll);
+            // Intentionally NOT FreeLibrary'd: the handle must stay resident
+            // for the whole lifetime of the JVM.
+        } else {
+            WriteLogF(L"System COM DLL preload failed: %s err=%u", comDll, GetLastError());
+        }
+    }
 
     const std::wstring packagedPrefix = packagedJreRelativeDir.empty() ? L"jre" : packagedJreRelativeDir;
     auto loadPackaged = [&](const std::wstring& relativePath, const wchar_t* label) -> HMODULE {

@@ -35,10 +35,32 @@
 // app container rejects. Exporting those entry points here too means every
 // JNA/COM library gets an absolute path and no second UnsatisfiedLinkError.
 //
+// Native libraries also bind to Ole32.dll by its bare name
+// --------------------------------------------------------
+// LWJGL's OpenAL.dll (OpenAL Soft, WASAPI backend) is linked against
+// ole32.lib, so its import table asks for PropVariantClear, CoTaskMemAlloc,
+// CoTaskMemFree, CoCreateInstance, CoInitializeEx and friends. Windows
+// resolves an import by the DLL's BASE NAME: once JNA has loaded this shim as
+// Ole32.dll, OpenAL.dll can be bound to it instead of the system DLL. If one
+// of those symbols is missing, LoadLibrary fails with ERROR_PROC_NOT_FOUND
+// (Win32 error 127) and LWJGL reports:
+//
+//   Failed to load library: ...\OpenAL.dll (error code = 127)
+//   at org.lwjgl.openal.ALC.create / ALC.<clinit>
+//
+// That happens after mod loading (OSHI) but before ALC.<clinit>, and it is
+// exactly what 1.0.17.0 showed on 1.20.1 Forge. So this shim must export the
+// complete ole32/oleaut32 surface that native consumers import, not only the
+// handful of entry points JNA calls from Java. The extra exports below are
+// harmless no-ops/failures; they only exist so dependency resolution succeeds.
+// The launcher additionally preloads the real system ole32.dll/oleaut32.dll
+// before the JVM starts, so audio normally binds to the OS implementation.
+//
 // This DLL is deliberately dependency-free: no Windows headers, no CRT calls,
 // no COM runtime. tests/ole32_shim_test.cpp compiles this exact source on
 // Linux to verify the failure contract.
 
+#include <cstddef>
 #include <cstdint>
 
 #if defined(_WIN32)
@@ -106,6 +128,120 @@ BANDIT_OLE32_EXPORT HResult CoSetProxyBlanket(void* proxy, DWord authnSvc, DWord
 
 BANDIT_OLE32_EXPORT void CoTaskMemFree(void* memory) { (void)memory; }
 
+// ---------------------------------------------------------------------------
+// ole32.lib imports used by native (non-Java) consumers such as OpenAL Soft.
+// They must be present even though JNA never calls most of them from Java,
+// otherwise binding this module as "ole32.dll" fails with error code 127.
+// ---------------------------------------------------------------------------
+
+BANDIT_OLE32_EXPORT void* CoTaskMemAlloc(std::size_t size) {
+    (void)size;
+    return nullptr;
+}
+
+BANDIT_OLE32_EXPORT void* CoTaskMemRealloc(void* memory, std::size_t size) {
+    (void)memory; (void)size;
+    return nullptr;
+}
+
+BANDIT_OLE32_EXPORT void PropVariantInit(void* variant) { (void)variant; }
+
+BANDIT_OLE32_EXPORT HResult PropVariantClear(void* variant) {
+    (void)variant;
+    return kComUnavailable;
+}
+
+BANDIT_OLE32_EXPORT HResult CoGetMalloc(DWord context, void** allocator) {
+    (void)context;
+    if (allocator) *allocator = nullptr;
+    return kComUnavailable;
+}
+
+BANDIT_OLE32_EXPORT HResult StringFromIID(void* iid, void** text) {
+    (void)iid;
+    if (text) *text = nullptr;
+    return kComUnavailable;
+}
+
+BANDIT_OLE32_EXPORT HResult StringFromCLSID(void* clsid, void** text) {
+    (void)clsid;
+    if (text) *text = nullptr;
+    return kComUnavailable;
+}
+
+BANDIT_OLE32_EXPORT HResult CLSIDFromProgID(void* progId, void* clsid) {
+    (void)progId; (void)clsid;
+    return kComUnavailable;
+}
+
+BANDIT_OLE32_EXPORT HResult ProgIDFromCLSID(void* clsid, void** progId) {
+    (void)clsid;
+    if (progId) *progId = nullptr;
+    return kComUnavailable;
+}
+
+BANDIT_OLE32_EXPORT HResult CoGetClassObject(void* clsid, DWord context, void* reserved,
+                                             void* iid, void** result) {
+    (void)clsid; (void)context; (void)reserved; (void)iid;
+    if (result) *result = nullptr;
+    return kComUnavailable;
+}
+
+BANDIT_OLE32_EXPORT DWord CoGetCurrentProcess() { return 0; }
+
+BANDIT_OLE32_EXPORT void CoFreeUnusedLibraries() {}
+
+BANDIT_OLE32_EXPORT HResult CoRegisterClassObject(void* clsid, void* object, DWord context,
+                                                  DWord flags, DWord* cookie) {
+    (void)clsid; (void)object; (void)context; (void)flags;
+    if (cookie) *cookie = 0;
+    return kComUnavailable;
+}
+
+BANDIT_OLE32_EXPORT HResult CoRevokeClassObject(DWord cookie) {
+    (void)cookie;
+    return kComUnavailable;
+}
+
+BANDIT_OLE32_EXPORT HResult CoMarshalInterface(void* stream, void* iid, void* object,
+                                               DWord context, void* reserved, DWord flags) {
+    (void)stream; (void)iid; (void)object; (void)context; (void)reserved; (void)flags;
+    return kComUnavailable;
+}
+
+BANDIT_OLE32_EXPORT HResult CoUnmarshalInterface(void* stream, void* iid, void** result) {
+    (void)stream; (void)iid;
+    if (result) *result = nullptr;
+    return kComUnavailable;
+}
+
+BANDIT_OLE32_EXPORT HResult CoReleaseMarshalData(void* stream) {
+    (void)stream;
+    return kComUnavailable;
+}
+
+BANDIT_OLE32_EXPORT HResult CoDisconnectObject(void* object, DWord reserved) {
+    (void)object; (void)reserved;
+    return kComUnavailable;
+}
+
+BANDIT_OLE32_EXPORT HResult CreateStreamOnHGlobal(void* global, int deleteOnRelease, void** stream) {
+    (void)global; (void)deleteOnRelease;
+    if (stream) *stream = nullptr;
+    return kComUnavailable;
+}
+
+BANDIT_OLE32_EXPORT HResult GetHGlobalFromStream(void* stream, void** global) {
+    (void)stream;
+    if (global) *global = nullptr;
+    return kComUnavailable;
+}
+
+BANDIT_OLE32_EXPORT HResult OleRun(void* object) {
+    (void)object;
+    return kComUnavailable;
+}
+
 BANDIT_OLE32_EXPORT HResult CoCreateGuid(void* guid) {
     (void)guid;
     return kComUnavailable;
@@ -166,5 +302,57 @@ BANDIT_OLE32_EXPORT HResult VariantClear(void* variant) {
 BANDIT_OLE32_EXPORT HResult VariantChangeType(void* destination, void* source,
                                               std::uint16_t flags, std::uint16_t type) {
     (void)destination; (void)source; (void)flags; (void)type;
+    return kComUnavailable;
+}
+
+// ---------------------------------------------------------------------------
+// oleaut32.lib imports used by native consumers (see the note above). Without
+// these, binding this module as "OleAut32.dll" fails with error code 127 too.
+// ---------------------------------------------------------------------------
+
+BANDIT_OLE32_EXPORT void* SysAllocStringByteLen(const void* text, DWord length) {
+    (void)text; (void)length;
+    return nullptr;
+}
+
+BANDIT_OLE32_EXPORT DWord SysStringByteLen(void* bstr) {
+    (void)bstr;
+    return 0;
+}
+
+BANDIT_OLE32_EXPORT int SysReAllocString(void** bstr, const void* text) {
+    (void)text;
+    if (bstr) *bstr = nullptr;
+    return 0;
+}
+
+BANDIT_OLE32_EXPORT HResult VariantCopy(void* destination, void* source) {
+    (void)destination; (void)source;
+    return kComUnavailable;
+}
+
+BANDIT_OLE32_EXPORT HResult VariantCopyInd(void* destination, void* source) {
+    (void)destination; (void)source;
+    return kComUnavailable;
+}
+
+BANDIT_OLE32_EXPORT void* SafeArrayCreate(std::uint16_t type, DWord dimensions, void* bounds) {
+    (void)type; (void)dimensions; (void)bounds;
+    return nullptr;
+}
+
+BANDIT_OLE32_EXPORT HResult SafeArrayDestroy(void* array) {
+    (void)array;
+    return kComUnavailable;
+}
+
+BANDIT_OLE32_EXPORT HResult LoadTypeLib(void* path, void** typeLib) {
+    (void)path;
+    if (typeLib) *typeLib = nullptr;
+    return kComUnavailable;
+}
+
+BANDIT_OLE32_EXPORT HResult RegisterTypeLib(void* typeLib, void* path, void* helpDir) {
+    (void)typeLib; (void)path; (void)helpDir;
     return kComUnavailable;
 }

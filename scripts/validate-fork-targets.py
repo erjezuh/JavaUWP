@@ -346,6 +346,18 @@ def main() -> int:
         "VariantClear",
         "0x80004005u",
         "WmiQueryHandler.queryWMI()",
+        # Native (non-Java) consumers resolve ole32.lib / oleaut32.lib imports
+        # by bare DLL name. OpenAL Soft's WASAPI backend imports
+        # PropVariantClear; missing it makes LoadLibrary("OpenAL.dll") fail
+        # with ERROR_PROC_NOT_FOUND (error 127) at ALC.<clinit>.
+        "PropVariantClear",
+        "CoTaskMemAlloc",
+        "CoTaskMemRealloc",
+        "StringFromIID",
+        "CLSIDFromProgID",
+        "SysAllocStringByteLen",
+        "VariantCopy",
+        "SafeArrayCreate",
     ):
         if needle not in ole32_source:
             errors.append(f"shims/ole32_uwp.cpp is missing {needle}")
@@ -361,6 +373,17 @@ def main() -> int:
     for needle in ("-Djna.library.path=", "ole32ShimDir", "Ole32.dll", "wmi"):
         if needle.lower() not in minecraft_launch.lower():
             errors.append(f"minecraft_launch.cpp is missing the JNA COM shim wiring ({needle})")
+    # Loading the JNA shim as Ole32.dll puts a same-named module in the process
+    # before LWJGL loads OpenAL.dll. Preloading the real OS COM DLLs first keeps
+    # native audio bound to the system implementation.
+    for needle in ("System COM DLL preloaded", "LoadLibraryW(comDll)",
+                   "L\"ole32.dll\"", "L\"oleaut32.dll\""):
+        if needle not in minecraft_launch:
+            errors.append(f"minecraft_launch.cpp is missing the system COM preload ({needle})")
+    ole32_test = read("tests/ole32_shim_test.cpp")
+    for needle in ("PropVariantClear", "CoTaskMemAlloc", "SafeArrayCreate"):
+        if needle not in ole32_test:
+            errors.append(f"tests/ole32_shim_test.cpp does not cover the native import surface ({needle})")
     if "tests/ole32_shim_test.cpp" not in run_tests:
         errors.append("tests/run-tests.sh does not run the Ole32 shim contract test")
     matrix_validator = read("scripts/validate-modern-version-matrix.ps1")

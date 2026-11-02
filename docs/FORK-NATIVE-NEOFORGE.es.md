@@ -293,6 +293,66 @@ still crash mod loading`, el APPX instalado es anterior a este cambio.
 > en la ruta Mesa/UWP. El aviso de la UI queda como último recurso por si otro
 > mod llama a una API nativa distinta.
 
+## `OpenAL.dll (error code = 127)` justo después del arreglo de `Ole32`
+
+Con la `1.0.17.0` el fallo de OSHI ya no aparecía, pero el mismo perfil
+`1.20.1 / forge / 47.4.20` murió un poco más adelante:
+
+```
+Failed to load library: <pkg>\runtime\natives\1.20.1-forge-47.4.20\OpenAL.dll (error code = 127)
+  org.lwjgl.system.windows.WindowsLibrary.loadLibrary
+  org.lwjgl.system.Library.loadNativeFromLibraryPath
+  org.lwjgl.openal.ALC.create / ALC.<clinit>
+```
+
+**127 = `ERROR_PROC_NOT_FOUND`** (falta una exportación), no `126`
+(`ERROR_MOD_NOT_FOUND`, falta el archivo). `OpenAL.dll` es OpenAL Soft: su
+backend WASAPI se enlaza con `ole32.lib`, de modo que su tabla de importaciones
+pide `PropVariantClear`, `CoTaskMemAlloc`, `CoTaskMemFree`, `CoCreateInstance`,
+`CoInitializeEx`… por el **nombre suelto** `ole32.dll`. Windows resuelve esas
+importaciones por nombre base: como JNA ya había cargado nuestro shim
+empaquetado con el nombre `Ole32.dll` durante la consulta OSHI/WMI de
+Embeddium (que ocurre **antes** de `ALC.<clinit>`), `OpenAL.dll` puede enlazarse
+contra ese shim. La primera versión del shim sólo exportaba lo que JNA llama
+desde Java y **no tenía `PropVariantClear`**; `LoadLibrary` abortaba con 127.
+En `1.21.1 / NeoForge` no se reproduce porque allí no hay consulta OSHI
+temprana y el shim nunca llega a cargarse.
+
+Arreglo, sin tocar `java21`, GL/Mesa, el catálogo de mods ni el resto de
+targets:
+
+- El shim (`shims/ole32_uwp.cpp`) exporta también la superficie que usan los
+  consumidores **nativos** de `ole32.lib` / `oleaut32.lib`:
+  `PropVariantInit`/`PropVariantClear`, `CoTaskMemAlloc`/`Realloc`/`CoGetMalloc`,
+  `StringFromIID`/`StringFromCLSID`, `CLSIDFromProgID`/`ProgIDFromCLSID`,
+  `CoGetClassObject`, `CoRegisterClassObject`/`CoRevokeClassObject`,
+  `CoMarshalInterface`/`CoUnmarshalInterface`/`CoReleaseMarshalData`,
+  `CoDisconnectObject`, `CoFreeUnusedLibraries`, `CoGetCurrentProcess`,
+  `CreateStreamOnHGlobal`/`GetHGlobalFromStream`, `OleRun`,
+  `SysAllocStringByteLen`/`SysStringByteLen`/`SysReAllocString`,
+  `VariantCopy`/`VariantCopyInd`, `SafeArrayCreate`/`Destroy`,
+  `LoadTypeLib`/`RegisterTypeLib`. Siguen devolviendo `E_FAIL` / valores nulos,
+  así que el contrato con OSHI no cambia.
+- `MC.Xbox/launch/minecraft_launch.cpp` **precarga los `ole32.dll` y
+  `oleaut32.dll` reales del SO antes de crear la JVM**, para que el audio nativo
+  enlace contra la implementación del sistema y conserve WASAPI.
+- `tests/ole32_shim_test.cpp` enlaza todas esas exportaciones (si falta una, el
+  test no compila) y el check 14 de `scripts/validate-fork-targets.py` las exige.
+
+### Cómo comprobarlo
+
+En `mc_launch.log` deben aparecer, además de `JNA COM shim enabled`, dos líneas:
+
+```
+System COM DLL preloaded: ole32.dll
+System COM DLL preloaded: oleaut32.dll
+```
+
+> Sin verificación en consola todavía. Si `ALC.<clinit>` sigue fallando, adjunta
+> `mc_launch.log` y el `BanditLauncher-crash-*.zip`: un 127 con las dos líneas
+> anteriores presentes indicaría **otra** exportación ausente, y el log dice
+> qué bibliotecas se precargaron. No basta con la captura para distinguirlo.
+
 ## Cómo compilar
 
 Requisitos: Windows, Visual Studio con C++/WinRT, Windows SDK, JDK 17, 21 y

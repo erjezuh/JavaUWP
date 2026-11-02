@@ -61,6 +61,30 @@ detection to enable driver workarounds will simply skip them, which is intended 
 Mesa/UWP path. The Spanish guide has the full stack trace:
 [FORK-NATIVE-NEOFORGE.es.md](FORK-NATIVE-NEOFORGE.es.md).
 
+## Minecraft still crashes with "Failed to load library: ...\OpenAL.dll (error code = 127)"
+
+This one appears **after** the OSHI/WMI fix, at `ALC.<clinit>` while LWJGL opens
+the audio library. Win32 error `127` is `ERROR_PROC_NOT_FOUND` (a missing
+export), **not** `126` (`ERROR_MOD_NOT_FOUND`): the DLL is present.
+
+`OpenAL.dll` is OpenAL Soft; its WASAPI backend links `ole32.lib`, so its import
+table asks for `PropVariantClear`, `CoTaskMemAlloc`, `CoTaskMemFree`,
+`CoCreateInstance` and `CoInitializeEx` by the bare name `ole32.dll`. Windows
+resolves imports by base name, so once JNA has loaded the packaged COM shim as
+`Ole32.dll` (during Embeddium's OSHI probe, which runs *before* `ALC.<clinit>`),
+`OpenAL.dll` can bind to the shim. The shim originally exported only the entry
+points JNA calls from Java and had no `PropVariantClear`, so `LoadLibrary` failed
+with 127. The default 1.21.1 NeoForge target is unaffected because it has no
+early OSHI probe and never loads the shim.
+
+The fork now (a) exports the complete `ole32.lib`/`oleaut32.lib` surface used by
+native consumers from the shim, and (b) preloads the real system `ole32.dll` and
+`oleaut32.dll` before creating the JVM, so native audio binds to the OS
+implementation and keeps WASAPI. Look for `System COM DLL preloaded: ole32.dll`
+in `mc_launch.log`. If the crash persists, attach `mc_launch.log` and the
+`BanditLauncher-crash-*.zip`: error 127 there would mean a *different* missing
+export, and the log shows which libraries were preloaded.
+
 ## Installing the APPX fails with error 0x80070005 (Access denied)
 This is a deployment error, not a launcher crash. The usual causes, in order:
 
