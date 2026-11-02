@@ -139,6 +139,14 @@ redistribuir APPX: esta publicación se hace bajo la responsabilidad del
 propietario de este fork. El workflow original `nightly.yml` sigue igual,
 referido a `main-native`.
 
+## La cruceta no coincide con donde el juego cree que está el ratón
+
+Síntoma: dentro de Minecraft la cruceta (`+`) aparece en un sitio, pero los *tooltips* y los clics caen hacia la esquina superior izquierda. Afectaba a todas las versiones y no dependía de la sensibilidad.
+
+Causa: el shim de GLFW dibuja la cruceta en píxeles del **framebuffer**, pero entregaba a Minecraft la posición en otro espacio de coordenadas. En `main-native` se quedó `g_menu_window_width = g_framebuffer_width` (el tamaño *anterior*), así que tras `glfwCreateWindow(854, 480)` el juego creía que el ratón se movía en 854×480 sobre una superficie de 1920×1080. La rama `main` ya lo había arreglado (`newFramebufferWidth`), pero el merge de `main-native` no lo incorporó.
+
+Arreglado en este fork: el espacio del cursor es ahora el framebuffer **actual** y la cruceta se dibuja con la misma función (`WindowToMenuInputX/Y`) que genera `glfwGetCursorPos`. Si sigue pasando, abre el log del shim y pásame la línea que empieza por `Window size` (ahora incluye `cursor space` y `scale`); con esos tres tamaños se puede ajustar el mapeo exacto de tu TV.
+
 ## Error `0x80070005` al instalar el APPX («Acceso denegado»)
 
 El mensaje completo suele ser: *«Error 0x80070005 en la operación de implementación de Add con el volumen D: en el paquete Microsoft.MicrosoftEdge.BanditLauncher_1.0.0.0_x64_8wekyb3d8bbwe»*. Es un error del **servicio de despliegue de Windows/Xbox**, no del launcher: la consola se niega a registrar el paquete. Haz esto en orden:

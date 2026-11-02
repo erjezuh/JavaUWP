@@ -1896,8 +1896,16 @@ static void RefreshWindowMetrics(bool fireCallbacks) {
 
     g_window_width = newWindowWidth;
     g_window_height = newWindowHeight;
-    g_menu_window_width = g_framebuffer_width;
-    g_menu_window_height = g_framebuffer_height;
+    // Minecraft compares glfwGetCursorPos against glfwGetFramebufferSize, and
+    // bandit_cursor::Draw() draws the crosshair in framebuffer coordinates.
+    // The menu cursor space therefore has to be the CURRENT framebuffer size,
+    // not the previous one. main-native kept g_framebuffer_width (the stale
+    // value) when main was merged, so after glfwCreateWindow(854,480) the game
+    // was told the mouse lived in an 854x480 space while the crosshair was
+    // drawn on a 1920x1080 (or 3840x2160) surface: tooltips and clicks landed
+    // towards the top left and the crosshair sat far to the bottom right.
+    g_menu_window_width = newFramebufferWidth;
+    g_menu_window_height = newFramebufferHeight;
     g_framebuffer_width = newFramebufferWidth;
     g_framebuffer_height = newFramebufferHeight;
     g_content_scale_x = newContentScaleX;
@@ -1906,9 +1914,10 @@ static void RefreshWindowMetrics(bool fireCallbacks) {
     g_vidmode.height = g_framebuffer_height;
     g_fake_window.width = g_window_width;
     g_fake_window.height = g_window_height;
-    ShimLog("Window size %dx%d, framebuffer %dx%d, scale %.3fx%.3f%s",
+    ShimLog("Window size %dx%d, framebuffer %dx%d, cursor space %dx%d, scale %.3fx%.3f%s",
         g_window_width, g_window_height,
         g_framebuffer_width, g_framebuffer_height,
+        g_menu_window_width, g_menu_window_height,
         g_content_scale_x, g_content_scale_y,
         rawScaledFramebuffer ? " raw-scaled" : "");
 
@@ -2134,6 +2143,10 @@ extern "C" __declspec(dllexport) int glfwInit(void) {
     if (g_initialised) return GLFW_TRUE;
     if (!AcquireCoreWindow()) return GLFW_FALSE;
     RefreshWindowMetrics(false);
+    // RefreshWindowMetrics returns early when the defaults already match the
+    // console, so keep the cursor space aligned even in that case.
+    g_menu_window_width = g_framebuffer_width;
+    g_menu_window_height = g_framebuffer_height;
     g_fake_window = {0x58574C47u, g_window_width, g_window_height, FALSE, NULL};
     g_initialised = TRUE;
     ShimLog("glfwInit OK window %dx%d framebuffer %dx%d",
@@ -2753,6 +2766,9 @@ GLFWwindow* glfwCreateWindow(int w, int h, const char* title, GLFWmonitor*, GLFW
             : h;
     }
     RefreshWindowMetrics(false);
+    // Do not leave the menu cursor space at the 854x480 Minecraft asked for.
+    g_menu_window_width = g_framebuffer_width;
+    g_menu_window_height = g_framebuffer_height;
     if (!CreateEglContext()) {
         ShimLog("CreateEglContext FAILED");
         return NULL;
@@ -3578,10 +3594,11 @@ static void Draw() {
 
     const float fbw = (float)(g_framebuffer_width > 0 ? g_framebuffer_width : 1920);
     const float fbh = (float)(g_framebuffer_height > 0 ? g_framebuffer_height : 1080);
-    const float sx = g_window_width > 0 ? fbw / (float)g_window_width : 1.0f;
-    const float sy = g_window_height > 0 ? fbh / (float)g_window_height : 1.0f;
-    const float cx = (float)g_menu_abs_x * sx;
-    const float cy = (float)g_menu_abs_y * sy;
+    // Use the very same mapping that glfwGetCursorPos reports, so the drawn
+    // crosshair and the position Minecraft uses for hover/clicks cannot drift
+    // apart at any DPI scale (including after a resolution change).
+    const float cx = (float)WindowToMenuInputX(g_menu_abs_x);
+    const float cy = (float)WindowToMenuInputY(g_menu_abs_y);
 
     const float L = 14.0f, T = 2.0f, B = 5.0f;
     GLfloat buf[3 * 6 * 6];

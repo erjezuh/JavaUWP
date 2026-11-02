@@ -2,6 +2,17 @@
 
 Notable changes to Bandit Launcher. Nightly packages are numbered by build revision rather than by release, so entries here are dated.
 
+## 2026-11-02 — Arreglado el desajuste entre la cruceta y la posición real del ratón
+
+### Fixed
+
+**En el juego, la cruceta se dibujaba en un sitio y los clics/tooltips caían hacia la esquina superior izquierda, en todas las versiones de Minecraft y en todas las resoluciones.** No era un fallo del ratón ni de la sensibilidad, sino de espacios de coordenadas dentro de `glfw_shim/glfw_uwp.cpp`. La cruceta (`bandit_cursor::Draw()`) se dibuja en coordenadas de **framebuffer** (píxeles reales), mientras que `glfwGetCursorPos` se entregaba a Minecraft en `g_menu_window_*`. En la rama `main-native` (merge `01ab727`) se conservó la línea `g_menu_window_width = g_framebuffer_width`, que usa el valor **anterior** del framebuffer; `main` ya la había corregido a `newFramebufferWidth` en `f707781`. Como `glfwCreateWindow(854, 480)` fija ese espacio al tamaño que pide Minecraft, el juego creía que el ratón vivía en 854×480 mientras la superficie era 1920×1080 (o 3840×2160 en 4K): de ahí el factor ~0,44 de desplazamiento hacia arriba a la izquierda.
+
+- `RefreshWindowMetrics` ahora usa `newFramebufferWidth` / `newFramebufferHeight` para el espacio del cursor; `glfwInit` y `glfwCreateWindow` lo resincronizan también cuando la lectura de métricas no cambia nada.
+- `bandit_cursor::Draw()` dibuja la cruceta con `WindowToMenuInputX/Y`, **la misma función** que produce `glfwGetCursorPos`, así que dibujo y coordenada notificada no pueden separarse a ningún DPI ni tras un cambio de resolución.
+- El log del shim ahora imprime `Window size ... framebuffer ... cursor space ... scale ...`, para poder verificar los tres tamaños en la consola.
+- `scripts/validate-fork-targets.py` añade la comprobación 12, que falla si un merge vuelve a introducir el valor obsoleto; se verificó que detecta el código anterior.
+
 ## 2026-11-02 — Arreglado el error `0x80070005` al instalar el APPX en la Xbox
 
 ### Fixed

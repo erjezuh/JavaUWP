@@ -18,6 +18,9 @@ Bandit Launcher requires a valid copy of Minecraft: Java Edition. The launcher d
 ## My Minecraft account won't sign in!
 If you have Minecraft through Game Pass, you need to create an account on minecraft.net and set a player name.
 
+## The crosshair is drawn somewhere else than where clicks land
+The GLFW shim draws the crosshair in framebuffer coordinates but was reporting `glfwGetCursorPos` in a smaller, stale coordinate space (the size Minecraft requested, e.g. 854x480, instead of the real 1920x1080/3840x2160 surface). Hover tooltips and clicks therefore landed toward the top left. The shim now uses the current framebuffer size for the cursor space and draws the crosshair through the exact same mapping it reports to the game, at every DPI scale. If it still happens, send the shim log line starting with `Window size` (it now includes `cursor space` and `scale`).
+
 ## Installing the APPX fails with error 0x80070005 (Access denied)
 This is a deployment error, not a launcher crash. The usual causes, in order:
 

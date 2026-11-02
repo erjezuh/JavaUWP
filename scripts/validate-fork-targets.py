@@ -238,6 +238,42 @@ def main() -> int:
     if "Controlify" not in read("MC.Xbox/ui/auth_screen.h"):
         errors.append("the launcher UI still advertises the Bandit controller toggle")
 
+    # 12. The GLFW shim must report menu cursor positions in the current
+    # framebuffer space and draw the crosshair through the same mapping.
+    # main-native merged over main's fix and kept the stale framebuffer size,
+    # which made Minecraft think the mouse lived at 854x480 on a 1920x1080
+    # surface: tooltips/clicks landed near the top left, the crosshair elsewhere.
+    shim = read("glfw_shim/glfw_uwp.cpp")
+    def cpp_function(text: str, signature: str) -> str:
+        start = text.find(signature)
+        if start < 0:
+            return ""
+        brace = text.find("{", start)
+        if brace < 0:
+            return ""
+        depth = 0
+        for i in range(brace, len(text)):
+            if text[i] == "{":
+                depth += 1
+            elif text[i] == "}":
+                depth -= 1
+                if depth == 0:
+                    return text[brace:i + 1]
+        return ""
+
+    metrics = cpp_function(shim, "static void RefreshWindowMetrics(")
+    if not metrics:
+        errors.append("glfw_uwp.cpp: RefreshWindowMetrics not found")
+    else:
+        if "g_menu_window_width = newFramebufferWidth;" not in metrics or \
+           "g_menu_window_height = newFramebufferHeight;" not in metrics:
+            errors.append("glfw_uwp.cpp: menu cursor space is not the current framebuffer size")
+        if "g_menu_window_width = g_framebuffer_width;" in metrics:
+            errors.append("glfw_uwp.cpp: menu cursor space uses the stale framebuffer size")
+    if "const float cx = (float)WindowToMenuInputX(g_menu_abs_x);" not in shim or \
+       "const float cy = (float)WindowToMenuInputY(g_menu_abs_y);" not in shim:
+        errors.append("glfw_uwp.cpp: the crosshair overlay does not use the cursor coordinate mapping")
+
     for warning in warnings:
         print(f"WARN  {warning}")
     for error in errors:
