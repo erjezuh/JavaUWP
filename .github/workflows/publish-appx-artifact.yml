@@ -48,10 +48,16 @@ jobs:
             --jq '.artifacts[] | select(.name=="BanditLauncherNative-neoforge") | .id' | head -1)
           echo "Artifact id: $ARTIFACT_ID"
           test -n "$ARTIFACT_ID"
-          curl -sSL -H "Authorization: Bearer $GH_TOKEN" \
-            -H "Accept: application/octet-stream" \
-            "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID/zip" \
-            -o /tmp/appx-artifact.zip
+          # gh api follows the signed redirect itself; curl with an auth header
+          # can silently store the JSON error body instead of the zip.
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID/zip" \
+            > /tmp/appx-artifact.zip
+          ls -la /tmp/appx-artifact.zip
+          if ! unzip -t /tmp/appx-artifact.zip >/dev/null 2>&1; then
+            echo "Download is not a zip; first bytes:"
+            head -c 500 /tmp/appx-artifact.zip | tr -cd '[:print:]\n'; echo
+            exit 1
+          fi
           rm -rf /tmp/artifact dist
           mkdir -p /tmp/artifact dist
           unzip -o -q /tmp/appx-artifact.zip -d /tmp/artifact
