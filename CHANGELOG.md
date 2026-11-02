@@ -55,6 +55,11 @@ Cambios:
 > crasheo dice **en qué DLL** ocurre; con esa foto (o el ZIP de *Remote Files*)
 > se puede arreglar la capa correcta sin tocar GL/Mesa a ciegas.
 
+También se alinea el orden de claves de `en.json`/`es-419.json` con el orden de
+`Tr()` en `launcher_ui.cpp` (el nuevo uso en `CrashSuspectLine` va antes que el
+de `CrashTraceText`), y `scripts/validate-fork-targets.py` añade la comprobación
+16 para detectar esa deriva sin depender de PowerShell/`-Check` en CI.
+
 ## 2026-11-02 — Corregido `OpenAL.dll (error code = 127)` después del arreglo de OSHI
 
 ### Fixed

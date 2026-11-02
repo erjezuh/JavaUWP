@@ -417,6 +417,20 @@ def main() -> int:
         if "EXCEPTION_ACCESS_VIOLATION" not in read(doc):
             errors.append(f"{doc} does not document the native access-violation diagnosis")
 
+    # 16. update-translations.ps1 -Check compares en.json byte-for-byte with the
+    # keys in source order. CrashSuspectLine uses the Remote Files hint before
+    # CrashTraceText does, so that key must be listed before the memory hint.
+    # Catch the drift here too, without needing Windows/PowerShell.
+    en_json = read("MC.Xbox/lang/en.json")
+    es_json = read("MC.Xbox/lang/es-419.json")
+    remote_hint = '"Open Remote Files on the main menu to read it on a phone or PC."'
+    memory_hint = '"This pack ran out of memory ({0}).'
+    for lang, text in (("en.json", en_json), ("es-419.json", es_json)):
+        if remote_hint not in text:
+            errors.append(f"{lang} is missing the crash-screen Remote Files hint")
+    if remote_hint in en_json and memory_hint in en_json and en_json.index(remote_hint) > en_json.index(memory_hint):
+        errors.append("en.json lists the Remote Files hint after the memory hint (source order drift; update-translations.ps1 -Check will fail)")
+
     for warning in warnings:
         print(f"WARN  {warning}")
     for error in errors:
