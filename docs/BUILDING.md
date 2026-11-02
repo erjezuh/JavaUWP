@@ -29,15 +29,17 @@ Forge and NeoForge preparation download their matching official installer automa
 
 Default versions live in `scripts/config.ps1`. The multi target catalog lives in `config\versions.tsv`. Recommended Modrinth project slugs live in `config\recommended-mods.json`, keyed by loader and Minecraft version. Every catalog target needs an entry, including an empty array when there are no recommendations yet.
 
-Current defaults:
+Current defaults in this fork (set in `scripts/config.ps1`):
 
-- Minecraft: `1.21.11`
-- Asset index: `29`
-- Fabric Loader: `0.19.5`
+- Minecraft: `1.21.1`
+- Asset index: `17`
+- Default loader: `neoforge` `21.1.250` (launch version `neoforge-21.1.250`)
+- Default runtime: `java21`, default controller provider: `neoforge`
+- Fabric Loader (still built for other catalog targets): `0.19.5`
 - Java release: `21`
 - JNA: `5.17.0`
 
-The default target is `1.21.11 + Fabric 0.19.5`. The catalog includes every stable Minecraft version from 1.21 through 26.2 for Fabric and NeoForge. Forge is included for each of those versions except 1.21.2, where no Forge loader was published. These modern targets remain experimental until they have been tested on Xbox hardware.
+The default target is `1.21.1 + NeoForge 21.1.250`; upstream defaults to `1.21.11 + Fabric 0.19.5`. `build.ps1` fails early if the compiled default is not exactly one row of `config\versions.tsv`. See [the Spanish fork guide](FORK-NATIVE-NEOFORGE.es.md) for the full change list. The catalog includes every stable Minecraft version from 1.21 through 26.2 for Fabric and NeoForge. Forge is included for each of those versions except 1.21.2, where no Forge loader was published. These modern targets remain experimental until they have been tested on Xbox hardware.
 
 Build every configured target and retain staged package contents with:
 
@@ -58,10 +60,11 @@ These values are passed into setup helpers and into the generated `runtime_confi
 
 The `JavaRelease` value is the minimum Java version the scripts search for when compiling Java helpers and the compatibility mod. The package also copies a current JRE into `jre\` and an exact Java 21 runtime into `jre21\` so targets and mods can choose the runtime they need.
 
-For changing the default target, update:
+For changing the default target, update the `Default*` keys in `scripts/config.ps1` (or pass `-DefaultLoader`, `-DefaultLoaderVersion`, `-DefaultLaunchVersion` to `build.ps1` / set `DEFAULT_LOADER`, `DEFAULT_LOADER_VERSION`, `DEFAULT_LAUNCH_VERSION`, `DEFAULT_JAVA_RUNTIME`, `DEFAULT_CONTROLLER_PROVIDER`):
 
-- `scripts/config.ps1`
-- `config/versions.tsv` if the target should appear in the launcher catalog
+- `scripts/config.ps1` (`DefaultMinecraftVersion`, `DefaultLoader`, `DefaultLoaderVersion`, `DefaultLaunchVersion`, `DefaultJavaRuntime`, `DefaultControllerProvider`)
+- `config/versions.tsv` if the target should appear in the launcher catalog (the row's `javaRuntime` and `controllerProvider` must match the config)
+- `MinecraftVersion` / `MinecraftAssetIndex` for `setup.ps1`, natives and asset downloads
 - `compat_mod/src/main/resources/fabric.mod.json` only if the compatibility mod metadata needs a new default range
 
 Then recreate the local `gameDir`, natives, remapped jars, and patched loader files as needed. The installed app downloads official runtime libraries, client jars, and assets into UWP `LocalState`; they are not bundled into the APPX.
@@ -243,11 +246,11 @@ After setup, these local build cache paths should exist:
 
 ```text
 staging\cache\gameDir\libraries\net\fabricmc\fabric-loader\0.19.5\fabric-loader-0.19.5.jar
-staging\cache\gameDir\.fabric\remappedJars\minecraft-1.21.11-0.19.5\client-intermediary.jar
-staging\cache\natives-1.21.11\
+staging\cache\gameDir\.fabric\remappedJars\minecraft-1.21.1-0.19.5\client-intermediary.jar
+staging\cache\natives-1.21.1\
 ```
 
-If you ran `download-assets.ps1`, `staging\cache\assets\indexes\29.json` should also exist. Runtime assets are still downloaded by the installed app, not copied into the APPX.
+If you ran `download-assets.ps1`, `staging\cache\assets\indexes\17.json` should also exist. Runtime assets are still downloaded by the installed app, not copied into the APPX.
 
 If all of those are there, put launcher owned or explicitly allowed mod jars into `staging\cache\gameDir\mods`. The compatibility mod is generated there automatically by the build.
 
@@ -297,7 +300,7 @@ Run:
 
 ## Nightly Workflow
 
-The GitHub Actions workflow in `.github/workflows/nightly.yml` builds and publishes the moving `nightly-native` release when relevant source, build, runtime, or workflow files change on `main-native`. Documentation only changes such as README updates do not trigger a package.
+The GitHub Actions workflow in `.github/workflows/nightly.yml` builds and publishes the moving `nightly-native` release when relevant source, build, runtime, or workflow files change on `main-native`. Documentation only changes such as README updates do not trigger a package. This fork additionally ships `.github/workflows/native-neoforge.yml`, which builds the same native package from the fork branch and uploads it as a workflow artifact; publishing a Release is opt-in because the upstream license requires written permission to redistribute APPX packages.
 
 The workflow publishes `BanditLauncherNative-nightly.appx`, `BanditLauncherNative-nightly.sha256`, and the matching public certificate to the `nightly-native` release. It moves the `nightly-native` tag to the commit that produced the package.
 
@@ -310,6 +313,8 @@ Useful options:
 - `-StopFileLockers` asks Windows Restart Manager to find processes that lock the output appx.
 - `-MesaRuntimeDir` points at another Mesa runtime folder.
 - `-McVersion`, `-FabricLoader`, and `-AssetIndex` override version values for this build.
+- `-DefaultLoader`, `-DefaultLoaderVersion`, `-DefaultLaunchVersion` choose the compiled default launch target (any catalog row).
+- `bash tests/run-tests.sh` runs the portable C++ and catalog/config consistency checks.
 - `-AppxVersion` sets the package identity version explicitly.
 - `-SkipVersionManifests` skips extra per target manifest generation while testing.
 - `-SkipVersionCompat` skips extra per target compatibility mod builds while testing.
@@ -324,7 +329,7 @@ The build script:
 6. Assembles `staging\package`.
 7. Copies the version catalog.
 8. Copies patched Fabric Loader jars, patched TinyRemapper for legacy Fabric, the securejarhandler patch, bundled mods, log config, natives, Mesa/MobileGlues graphics DLLs, and the JREs.
-9. Generates `download_manifest.tsv` for the default official Minecraft/Fabric runtime downloads.
+9. Generates `download_manifest.tsv` for the configured default target (NeoForge 1.21.1 in this fork).
 10. Generates `runtime\manifests\<target-id>.tsv` for cataloged Fabric, Forge, and NeoForge targets.
 11. Builds per target compatibility mod jars and Fabric, Forge, and NeoForge controller mod jars under `runtime\version-mods`.
 12. Generates UWP tile and splash assets from `MC.Xbox\Assets\Java_UWP_Icon.png`.
@@ -370,7 +375,7 @@ To include all ignored files, including downloaded cache files:
 - Missing `client-intermediary.jar`: run `.\scripts\setup.ps1` for that target.
 - Forge preparation failure: check the official installer download and Java tool error from `scripts\prepare-forge-patched-client.ps1`. The helper downloads the matching installer automatically.
 - Forge controller compile failure: ensure the patched Forge client exists in the local cache and that `config\forge-install-profile.json` is present.
-- Missing native DLLs: run `.\scripts\setup.ps1`, which downloads them into `staging\cache\natives-1.21.11`.
+- Missing native DLLs: run `.\scripts\setup.ps1`, which downloads them into `staging\cache\natives-1.21.1`.
 - First launch downloads every required official file after sign in. A later launch should verify and skip files that are already downloaded.
 - Runtime download failure: check `LocalState\logs\current\mc_launch.log` for the manifest path, URL, HTTP status, or SHA1 mismatch.
 - Modrinth browse/install failure: check `LocalState\logs\current\mc_launch.log` for `Modrinth search`, `Modrinth versions`, HTTP status, download, or SHA1 verification messages.

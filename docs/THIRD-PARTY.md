@@ -25,8 +25,11 @@ that is where Fabric Loader shades them. `build.ps1` rewrites the package back t
 `net.fabricmc.tinyremapper` when it patches the standalone 0.8.2 jar for legacy
 Fabric targets.
 
-The securejarhandler patch targets 3.0.8, which is what NeoForge `21.1.233`
-resolves. Forge `1.20.1` resolves 2.1.10 and is deliberately left unpatched.
+The securejarhandler patch was originally compiled against 3.0.8, which is what
+NeoForge `21.1.233` resolved. This fork now builds it against the version the
+configured default NeoForge target resolves (falling back to 3.0.8), because
+newer NeoForge releases ship newer securejarhandler versions. Forge `1.20.1`
+resolves 2.1.10 and is deliberately left unpatched.
 
 **The Fabric Loader release these files were copied from is not recorded.** The
 versions above are the releases the patch is applied against, which is not

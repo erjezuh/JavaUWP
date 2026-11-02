@@ -944,7 +944,7 @@ public:
         }
         g_minecraftRunning.store(true);
         const bool jvmSpentBeforeLaunch = EmbeddedJvmAlreadyUsed();
-        const std::wstring effLaunchVersion = versionInfo.launchVersion.empty() ? a2w(kFabricLaunchVersion) : versionInfo.launchVersion;
+        const std::wstring effLaunchVersion = versionInfo.launchVersion.empty() ? std::wstring(kDefaultLaunchVersionW) : versionInfo.launchVersion;
         const std::wstring effAssetIndex = versionInfo.assetIndex.empty() ? a2w(kMinecraftAssetIndex) : versionInfo.assetIndex;
         const bool launched = RunLaunchTaskWithLiveUi(
             launchRenderer,

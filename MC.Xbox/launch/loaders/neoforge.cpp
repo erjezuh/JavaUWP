@@ -117,9 +117,10 @@ static bool NeoForgeClientArtifactsReady(
     const std::wstring& runtimeRoot,
     const std::wstring& minecraftVersion,
     const std::wstring& launchVersion,
+    const std::wstring& catalogLoaderVersion,
     const std::vector<std::wstring>& extraGameArgs,
     const std::wstring& manifestNeoFormVersion) {
-    const std::wstring neoForgeVersion = NeoForgeVersionFromLaunchVersion(launchVersion);
+    const std::wstring neoForgeVersion = ResolveNeoForgeLoaderVersion(launchVersion, catalogLoaderVersion);
     const std::wstring neoFormVersion = !manifestNeoFormVersion.empty()
         ? manifestNeoFormVersion
         : FirstArgValue(extraGameArgs, L"--fml.neoFormVersion");
@@ -151,11 +152,12 @@ static bool PrepareNeoForgeClientArtifacts(
     const std::wstring& clientJar,
     const std::wstring& minecraftVersion,
     const std::wstring& launchVersion,
+    const std::wstring& catalogLoaderVersion,
     const std::vector<std::wstring>& extraGameArgs,
     const std::wstring& manifestNeoFormVersion,
     const std::wstring& installToolsVersion,
     const std::wstring& prepClassPath = L"") {
-    const std::wstring neoForgeVersion = NeoForgeVersionFromLaunchVersion(launchVersion);
+    const std::wstring neoForgeVersion = ResolveNeoForgeLoaderVersion(launchVersion, catalogLoaderVersion);
     const std::wstring neoFormVersion = !manifestNeoFormVersion.empty()
         ? manifestNeoFormVersion
         : FirstArgValue(extraGameArgs, L"--fml.neoFormVersion");
@@ -179,6 +181,18 @@ static bool PrepareNeoForgeClientArtifacts(
     const std::wstring installerJar = libraryDir + L"\\" + MavenPath(L"net.neoforged", L"neoforge", neoForgeVersion, L"installer");
     const std::wstring binPatch = runtimeRoot + L"\\game\\neoforge\\" + neoForgeVersion + L"\\client.lzma";
 
+    // Preflight the official inputs. Without these the Java prep tools fail
+    // with an opaque exception instead of a download/manifest error, which is
+    // what made broken NeoForge targets so hard to diagnose.
+    if (!FileExistsNonEmpty(clientJar)) {
+        WriteLogF(L"NeoForge prep missing vanilla client jar: %s", clientJar.c_str());
+        return false;
+    }
+    if (!FileExistsNonEmpty(binPatch) && !FileExistsNonEmpty(installerJar)) {
+        WriteLogF(L"NeoForge prep missing installer jar for data/client.lzma: %s", installerJar.c_str());
+        return false;
+    }
+
     if (NeoForgeModernArtifacts(minecraftVersion)) {
         const std::wstring output = libraryDir + L"\\" +
             MavenPath(L"net.neoforged", L"minecraft-client-patched", neoForgeVersion);
@@ -187,6 +201,10 @@ static bool PrepareNeoForgeClientArtifacts(
             MavenPath(L"net.minecraft", L"client", minecraftVersion, L"mappings", L"txt");
         const std::wstring neoformData = libraryDir + L"\\" +
             MavenPath(L"net.neoforged", L"neoform", mcAndNeoForm, L"mappings", L"tsrg.lzma");
+        if (installToolsVersion.empty()) {
+            WriteLog(L"NeoForge modern prep missing installertools version in the download manifest");
+            return false;
+        }
         const std::wstring installToolsJar = libraryDir + L"\\" +
             MavenPath(L"net.neoforged.installertools", L"installertools", installToolsVersion, L"fatjar");
         if (!FileExistsNonEmpty(installToolsJar)) {
@@ -275,6 +293,10 @@ static bool PrepareNeoForgeClientArtifacts(
     EnsureDirectoryTree(GetParentDir(mojmaps));
     EnsureDirectoryTree(GetParentDir(mergedMappings));
 
+    if (!FileExistsNonEmpty(mappings) && !FileExistsNonEmpty(neoformZip)) {
+        WriteLogF(L"NeoForge prep missing NeoForm archive and mappings for %s: %s", mcAndNeoForm.c_str(), neoformZip.c_str());
+        return false;
+    }
     if (!FileExistsNonEmpty(mappings) &&
         !runInstallTools({ "--task", "MCP_DATA", "--input", w2a(fwd(neoformZip)), "--output", w2a(fwd(mappings)), "--key", "mappings" })) return false;
     if (!FileExistsNonEmpty(mojmaps) &&
@@ -439,14 +461,6 @@ static std::wstring BuildNeoForgeGameClassPath(
     if (droppedOut) *droppedOut = dropped;
     return out;
 }
-std::wstring NeoForgeVersionFromLaunchVersion(const std::wstring& launchVersion) {
-    const std::wstring prefix = L"neoforge-";
-    if (launchVersion.rfind(prefix, 0) == 0) {
-        return launchVersion.substr(prefix.size());
-    }
-    return launchVersion;
-}
-
 void NeoForgeFinalizeVersionInfo(
     MinecraftVersionInfo& info,
     const LaunchTarget& target,
@@ -463,7 +477,7 @@ void NeoForgeBeforeLaunch(const LoaderPreLaunchContext& ctx) {
         CopyDirectoryContentsAlways(ctx.packagedLibrariesDir, ctx.sharedGameDir + L"\\libraries");
         WriteLogF(L"Deployed bundled NeoForge client artifacts into %s\\libraries with overwrite", ctx.sharedGameDir.c_str());
     }
-    const std::wstring neoForgeVersion = NeoForgeVersionFromLaunchVersion(ctx.versionInfo.launchVersion);
+    const std::wstring neoForgeVersion = ResolveNeoForgeLoaderVersion(ctx.versionInfo.launchVersion, ctx.versionInfo.loaderVersion);
     const std::wstring neoFormVersion = !ctx.versionInfo.neoFormVersion.empty()
         ? ctx.versionInfo.neoFormVersion
         : FirstArgValue(ctx.versionInfo.extraGameArgs, L"--fml.neoFormVersion");
@@ -495,6 +509,7 @@ void NeoForgeAdjustClasspath(const LoaderJvmContext& ctx, std::wstring& classPat
             ctx.exeDir,
             ctx.minecraftVersion,
             ctx.launchVersion,
+            ctx.loaderVersion,
             ctx.extraGameArgs,
             ctx.neoFormVersion);
     if (artifactsReady || ctx.mainClass == L"net.neoforged.fml.startup.Client") {
@@ -560,6 +575,7 @@ bool NeoForgePrepareArtifactsAfterJvm(
             ctx.clientJar,
             ctx.minecraftVersion,
             ctx.launchVersion,
+            ctx.loaderVersion,
             ctx.extraGameArgs,
             ctx.neoFormVersion,
             ctx.neoForgeInstallToolsVersion,

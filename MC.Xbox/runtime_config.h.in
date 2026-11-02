@@ -1,23 +1,35 @@
 // runtime_config.h.in - template substituted by build.ps1 before compiling App.cpp.
 //
 // The build script replaces the placeholders below with values from
-// scripts/config.ps1 (overridable via the -McVersion, -FabricLoader,
-// -AssetIndex parameters on build.ps1). The substituted output is written to
-// the build directory as runtime_config.h and picked up via the compiler
-// INCLUDE path.
+// scripts/config.ps1 (overridable via build.ps1 parameters and the matching
+// environment variables). The substituted output is written to the build
+// directory as runtime_config.h and picked up via the compiler INCLUDE path.
 //
 // Do not include this template directly. Do not check in the generated header.
 
 #pragma once
 
+// The launcher's default launch target. This fork defaults to NeoForge 1.21.1,
+// but every value here comes from scripts/config.ps1, so a build can target any
+// catalog row without editing C++ sources.
 static constexpr wchar_t kDefaultMinecraftVersionW[] = L"@@MC_VERSION@@";
 static constexpr char    kDefaultMinecraftVersion[]  = "@@MC_VERSION@@";
-static constexpr char    kDefaultFabricLoaderVersion[] = "@@FABRIC_LOADER_VERSION@@";
-static constexpr char    kDefaultFabricLaunchVersion[] = "fabric-loader-@@FABRIC_LOADER_VERSION@@-@@MC_VERSION@@";
+static constexpr wchar_t kDefaultLoaderW[]            = L"@@DEFAULT_LOADER@@";
+static constexpr char    kDefaultLoader[]             = "@@DEFAULT_LOADER@@";
+static constexpr wchar_t kDefaultLoaderVersionW[]     = L"@@DEFAULT_LOADER_VERSION@@";
+static constexpr char    kDefaultLoaderVersion[]      = "@@DEFAULT_LOADER_VERSION@@";
+static constexpr wchar_t kDefaultLaunchVersionW[]     = L"@@DEFAULT_LAUNCH_VERSION@@";
+static constexpr char    kDefaultLaunchVersion[]      = "@@DEFAULT_LAUNCH_VERSION@@";
+static constexpr wchar_t kDefaultControllerProviderW[] = L"@@DEFAULT_CONTROLLER_PROVIDER@@";
+static constexpr wchar_t kDefaultJavaRuntimeW[]       = L"@@DEFAULT_JAVA_RUNTIME@@";
+static constexpr wchar_t kDefaultSupportLevelW[]      = L"@@DEFAULT_SUPPORT_LEVEL@@";
 static constexpr char    kDefaultMinecraftAssetIndex[] = "@@MC_ASSET_INDEX@@";
 
-// Compatibility aliases while the launcher is moved from one compile-time
-// Minecraft version to profile-owned launch targets.
+// Compatibility aliases used by older call sites. These are the *Fabric* values
+// for this build's Minecraft version, not the default target's launcher values.
+// New code should use the kDefault* constants above.
+static constexpr char    kDefaultFabricLoaderVersion[] = "@@FABRIC_LOADER_VERSION@@";
+static constexpr char    kDefaultFabricLaunchVersion[] = "fabric-loader-@@FABRIC_LOADER_VERSION@@-@@MC_VERSION@@";
 static constexpr wchar_t kMinecraftVersionW[] = L"@@MC_VERSION@@";
 static constexpr char    kFabricLoaderVersion[] = "@@FABRIC_LOADER_VERSION@@";
 static constexpr char    kFabricLaunchVersion[] = "fabric-loader-@@FABRIC_LOADER_VERSION@@-@@MC_VERSION@@";

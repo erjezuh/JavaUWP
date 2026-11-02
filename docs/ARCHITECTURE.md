@@ -139,6 +139,10 @@ Shared parsing helpers live in `launch/loaders/loader_common.*`.
 
 NeoForge generates patched client artifacts on first launch from downloaded official inputs. Do not commit or redistribute generated NeoForge client jars.
 
+The version used for Maven paths comes from the catalog row (`LaunchTarget.loaderVersion`), which is the version whose installer and artifacts were downloaded. `MC.Xbox/launch/loaders/neoforge_version.h` provides the pure resolver; it falls back to parsing the installer's `version.json` id only for legacy profiles without a catalog row, and accepts `neoforge-21.1.250`, `1.21.1-neoforge-21.1.250` and bare `21.1.250` ids. The same header is unit tested outside the UWP build in `tests/neoforge_version_test.cpp`.
+
+In this fork the default launch target is compiled from `scripts/config.ps1` (`DefaultLoader`, `DefaultLoaderVersion`, `DefaultLaunchVersion`, `DefaultJavaRuntime`, `DefaultControllerProvider`), and `build.ps1` uses those same values for `download_manifest.tsv`, the default per-target manifest and the default `runtime/version-mods/<id>` directory. Upstream hardcodes Fabric in all of those places.
+
 ### Forge
 
 `launch/loaders/forge.cpp` implements the experimental Forge provider. It follows the same loader hook pattern as NeoForge:

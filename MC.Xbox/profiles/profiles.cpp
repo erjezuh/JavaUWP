@@ -75,17 +75,29 @@ std::wstring MakeTargetId(const std::wstring& minecraftVersion, const std::wstri
     return minecraftVersion + L"-" + loader + L"-" + (loaderVersion.empty() ? L"none" : loaderVersion);
 }
 
+std::wstring Capitalize(std::wstring s);
+
+static std::wstring LoaderDisplayName(const std::wstring& loader) {
+    if (loader == L"neoforge") return L"NeoForge";
+    if (loader == L"fabric") return L"Fabric";
+    if (loader == L"forge" || loader == L"cleanroom") return L"Forge";
+    return Capitalize(loader);
+}
+
 LaunchTarget DefaultLaunchTarget() {
+    // The default target is compiled in from scripts/config.ps1. This fork
+    // ships NeoForge 1.21.1, but any catalog row can be the default without
+    // touching this file (DEFAULT_LOADER / DEFAULT_LOADER_VERSION / ...).
     LaunchTarget t;
     t.minecraftVersion = kDefaultMinecraftVersionW;
-    t.loader = L"fabric";
-    t.controllerProvider = L"fabric";
-    t.loaderVersion = a2w(kDefaultFabricLoaderVersion);
+    t.loader = ToLowerW(kDefaultLoaderW);
+    t.controllerProvider = ToLowerW(kDefaultControllerProviderW);
+    t.loaderVersion = kDefaultLoaderVersionW;
     t.targetId = MakeTargetId(t.minecraftVersion, t.loader, t.loaderVersion);
-    t.displayName = t.minecraftVersion + L" Fabric";
-    t.javaRuntime = L"current";
-    t.supportLevel = L"supported";
-    t.notes = L"Current launcher default";
+    t.displayName = t.minecraftVersion + L" " + LoaderDisplayName(t.loader);
+    t.javaRuntime = kDefaultJavaRuntimeW;
+    t.supportLevel = kDefaultSupportLevelW;
+    t.notes = L"Default launch target for this build";
     return t;
 }
 

@@ -3,8 +3,8 @@
 #include <string>
 
 #include "loader.h"
+#include "neoforge_version.h"
 
-std::wstring NeoForgeVersionFromLaunchVersion(const std::wstring& launchVersion);
 std::wstring NeoForgeSrgJarSummary(const std::wstring& zipPath);
 
 void NeoForgeFinalizeVersionInfo(

@@ -4,6 +4,11 @@ param(
     [string]$McVersion,
     [string]$FabricLoader,
     [string]$AssetIndex,
+    # Default launch target for this package. Anything in config/versions.tsv can
+    # be selected; this fork ships with NeoForge 1.21.1 as the default.
+    [string]$DefaultLoader,
+    [string]$DefaultLoaderVersion,
+    [string]$DefaultLaunchVersion,
     [string]$AppxVersion = $env:APPX_VERSION,
     [ValidateSet("", "nightly", "stable", "nightly-native")]
     [string]$ReleaseChannel = "",
@@ -50,12 +55,21 @@ $inheritedAssetIndex    = $env:MC_ASSET_INDEX
 
 # Push command-line overrides into the environment before sourcing config.
 # scripts/config.ps1 honors these so every downstream script (compat mod,
-# patch-fabric, etc.) sees the same chosen version.
-if ($McVersion)    { $env:MC_VERSION = $McVersion }
-if ($FabricLoader) { $env:FABRIC_LOADER_VERSION = $FabricLoader }
-if ($AssetIndex)   { $env:MC_ASSET_INDEX = $AssetIndex }
+# patch-fabric, etc.) sees the same chosen version and default target.
+if ($McVersion)           { $env:MC_VERSION = $McVersion }
+if ($FabricLoader)        { $env:FABRIC_LOADER_VERSION = $FabricLoader }
+if ($AssetIndex)          { $env:MC_ASSET_INDEX = $AssetIndex }
+if ($DefaultLoader)       { $env:DEFAULT_LOADER = $DefaultLoader.ToLowerInvariant() }
+if ($DefaultLoaderVersion) { $env:DEFAULT_LOADER_VERSION = $DefaultLoaderVersion }
+if ($DefaultLaunchVersion) { $env:DEFAULT_LAUNCH_VERSION = $DefaultLaunchVersion }
 
 . (Join-Path $PSScriptRoot "scripts\common.ps1")
+
+# The compiled default and the build-time Minecraft version must describe the
+# same target, otherwise download_manifest.tsv and the launcher disagree.
+if ($ProjectConfig.DefaultMinecraftVersion -ne $ProjectConfig.MinecraftVersion) {
+    throw "Default target MC mismatch: DEFAULT_MC_VERSION=$($ProjectConfig.DefaultMinecraftVersion) but MC_VERSION=$($ProjectConfig.MinecraftVersion). Use -McVersion / MC_VERSION for both."
+}
 
 Write-Host "=== Build preflight ==="
 
@@ -151,6 +165,8 @@ $appVersionSource = if ($AppxVersion) {
 Write-Host ""
 Write-Host "Resolved build target:"
 Write-Host ("  MC version      {0}  ({1})" -f $ProjectConfig.MinecraftVersion, $mcVersionSource)
+Write-Host ("  Default target  {0}-{1}-{2}" -f $ProjectConfig.DefaultMinecraftVersion, $ProjectConfig.DefaultLoader, $ProjectConfig.DefaultLoaderVersion)
+Write-Host ("  Launch version  {0}" -f $ProjectConfig.DefaultLaunchVersion)
 Write-Host ("  Fabric loader   {0}  ({1})" -f $ProjectConfig.FabricLoaderVersion, $fabricLoaderSource)
 Write-Host ("  Asset index     {0}" -f $ProjectConfig.MinecraftAssetIndex)
 Write-Host ("  Appx version    {0}  ({1})" -f $appVersion, $appVersionSource)
@@ -385,10 +401,16 @@ $runtimeConfigContent = [System.IO.File]::ReadAllText($runtimeConfigTemplate)
 $runtimeConfigContent = $runtimeConfigContent.Replace('@@MC_VERSION@@',           $ProjectConfig.MinecraftVersion)
 $runtimeConfigContent = $runtimeConfigContent.Replace('@@FABRIC_LOADER_VERSION@@', $ProjectConfig.FabricLoaderVersion)
 $runtimeConfigContent = $runtimeConfigContent.Replace('@@MC_ASSET_INDEX@@',       $ProjectConfig.MinecraftAssetIndex)
+$runtimeConfigContent = $runtimeConfigContent.Replace('@@DEFAULT_LOADER@@',       $ProjectConfig.DefaultLoader)
+$runtimeConfigContent = $runtimeConfigContent.Replace('@@DEFAULT_LOADER_VERSION@@', $ProjectConfig.DefaultLoaderVersion)
+$runtimeConfigContent = $runtimeConfigContent.Replace('@@DEFAULT_LAUNCH_VERSION@@', $ProjectConfig.DefaultLaunchVersion)
+$runtimeConfigContent = $runtimeConfigContent.Replace('@@DEFAULT_CONTROLLER_PROVIDER@@', $ProjectConfig.DefaultControllerProvider)
+$runtimeConfigContent = $runtimeConfigContent.Replace('@@DEFAULT_JAVA_RUNTIME@@',  $ProjectConfig.DefaultJavaRuntime)
+$runtimeConfigContent = $runtimeConfigContent.Replace('@@DEFAULT_SUPPORT_LEVEL@@', $ProjectConfig.DefaultSupportLevel)
 $runtimeConfigContent = $runtimeConfigContent.Replace('@@RELEASE_CHANNEL@@',      $ReleaseChannel)
 if ($runtimeConfigContent -match '@@[A-Z_]+@@') { throw "runtime_config.h still contains unsubstituted tokens after generation: $($Matches[0])" }
 [System.IO.File]::WriteAllText($runtimeConfigOutput, $runtimeConfigContent)
-Write-Host "runtime_config.h written for MC $($ProjectConfig.MinecraftVersion) / fabric-loader $($ProjectConfig.FabricLoaderVersion) / asset index $($ProjectConfig.MinecraftAssetIndex)"
+Write-Host "runtime_config.h written for MC $($ProjectConfig.MinecraftVersion) / default $($ProjectConfig.DefaultLoader)-$($ProjectConfig.DefaultLoaderVersion) / fabric-loader $($ProjectConfig.FabricLoaderVersion) / asset index $($ProjectConfig.MinecraftAssetIndex)"
 
 Write-Host "=== Building MC.Xbox.exe ==="
 $mcSources = Get-ChildItem (Join-Path $root "MC.Xbox") -Recurse -File -Include *.cpp, *.c, *.h, *.hpp |
@@ -593,6 +615,24 @@ function Ensure-TinyRemapperJar {
 }
 
 $catalog = @(Import-Csv -Path $versionCatalogSource -Delimiter "`t")
+
+# The compiled default must be a real catalog row: the launcher resolves the
+# default target through runtime/version_catalog.tsv, and the package must carry
+# that row's download manifest and bundled mods.
+$defaultTargetId = "$($ProjectConfig.DefaultMinecraftVersion)-$($ProjectConfig.DefaultLoader)-$($ProjectConfig.DefaultLoaderVersion)"
+$defaultCatalogRow = @($catalog | Where-Object {
+    $_.minecraftVersion -eq $ProjectConfig.DefaultMinecraftVersion -and
+    $_.loader -eq $ProjectConfig.DefaultLoader -and
+    $_.loaderVersion -eq $ProjectConfig.DefaultLoaderVersion
+})
+if ($defaultCatalogRow.Count -ne 1) {
+    throw "Default target '$defaultTargetId' must appear exactly once in $versionCatalogSource (found $($defaultCatalogRow.Count)). Add the row or override DEFAULT_LOADER / DEFAULT_LOADER_VERSION."
+}
+if ($defaultCatalogRow[0].javaRuntime -ne $ProjectConfig.DefaultJavaRuntime) {
+    Write-Warning "Default target '$defaultTargetId' uses javaRuntime '$($defaultCatalogRow[0].javaRuntime)' in the catalog but '$($ProjectConfig.DefaultJavaRuntime)' is compiled into the launcher. Set DEFAULT_JAVA_RUNTIME to match."
+}
+Write-Host "Default launch target: $defaultTargetId (javaRuntime=$($defaultCatalogRow[0].javaRuntime))"
+
 $manifestTargets = @(
     $catalog |
         Where-Object { $_.loader -and $_.loaderVersion -and $_.loaderVersion -ne "selected" -and $_.loaderVersion -ne "none" }
@@ -716,19 +756,35 @@ function Copy-CachedVersionManifest {
     Copy-Item -LiteralPath $cachePath -Destination $OutputPath -Force
 }
 
+# download_manifest.tsv is the launcher's fallback manifest for the *default*
+# target, so it has to describe the same loader the compiled default uses.
 $defaultDownloadManifest = Join-Path $pkg "download_manifest.tsv"
 Copy-CachedVersionManifest `
-    -MinecraftVersion $ProjectConfig.MinecraftVersion `
-    -Loader "fabric" `
-    -LoaderVersion $ProjectConfig.FabricLoaderVersion `
+    -MinecraftVersion $ProjectConfig.DefaultMinecraftVersion `
+    -Loader $ProjectConfig.DefaultLoader `
+    -LoaderVersion $ProjectConfig.DefaultLoaderVersion `
     -OutputPath $defaultDownloadManifest
+
+# Warn (do not fail) when the official installer metadata uses a different id
+# than the compiled fallback. The manifest header is authoritative at runtime;
+# this only catches stale DEFAULT_LAUNCH_VERSION values in scripts/config.ps1.
+$manifestLaunchVersion = (Select-String -LiteralPath $defaultDownloadManifest -Pattern "^# launchVersion`t" | Select-Object -First 1).Line
+if ($manifestLaunchVersion) {
+    $manifestLaunchVersion = ($manifestLaunchVersion -split "`t", 2)[1]
+    if ($manifestLaunchVersion -ne $ProjectConfig.DefaultLaunchVersion) {
+        Write-Warning "Default manifest launchVersion is '$manifestLaunchVersion' but DEFAULT_LAUNCH_VERSION is '$($ProjectConfig.DefaultLaunchVersion)'. The manifest wins at runtime; update scripts/config.ps1 to silence this warning."
+    }
+}
 
 $manifestsDir = Join-Path $pkg "runtime\manifests"
 Ensure-Dir $manifestsDir
-$defaultTargetId = "$($ProjectConfig.MinecraftVersion)-fabric-$($ProjectConfig.FabricLoaderVersion)"
 Ensure-Dir (Join-Path $pkg "runtime\version-mods\$defaultTargetId")
-foreach ($name in @("banditvault-xbox-compat-1.0.0.jar", "banditvault-fabric-controller-1.0.0.jar")) {
-    Copy-Item (Join-Path $pkg "runtime\bundled-mods\$name") (Join-Path $pkg "runtime\version-mods\$defaultTargetId\$name") -Force
+if ($ProjectConfig.DefaultLoader -eq "fabric") {
+    # The bundled compat + controller jars are Fabric only. For other default
+    # loaders the per-target loops below fill version-mods/<defaultTargetId>.
+    foreach ($name in @("banditvault-xbox-compat-1.0.0.jar", "banditvault-fabric-controller-1.0.0.jar")) {
+        Copy-Item (Join-Path $pkg "runtime\bundled-mods\$name") (Join-Path $pkg "runtime\version-mods\$defaultTargetId\$name") -Force
+    }
 }
 Copy-Item -Force $defaultDownloadManifest (Join-Path $manifestsDir "$defaultTargetId.tsv")
 Write-Host "Default per-version manifest: $defaultTargetId.tsv"
@@ -851,6 +907,10 @@ if (-not $SkipVersionCompat) {
             if (Test-Path $outDir) { Remove-Item -Recurse -Force $outDir }
         }
     }
+    # A failed optional controller build must never delete the default target's
+    # version-mods directory: ResolveVersionInfo marks a target unsupported when
+    # that directory is absent, even if controller support is optional.
+    Ensure-Dir (Join-Path $versionModsRoot $defaultTargetId)
 } else {
     Write-Host "Skipping per-version compat mods (-SkipVersionCompat)"
 }
@@ -1248,7 +1308,31 @@ Build-JavaZipfsRealpathPatch -JavaHome $jreSrc -OutputJar (Join-Path $pkg "java-
 Build-JavaZipfsRealpathPatch -JavaHome $jre21Src -OutputJar (Join-Path $pkg "java-zipfs-realpath-21.jar") -WorkName "java_zipfs_realpath_patch_21"
 Build-JavaDesktopUwpAwtPatch -JavaHome $jreSrc -OutputJar (Join-Path $pkg "java-desktop-uwp-awt.jar") -WorkName "java_desktop_uwp_awt_patch_current"
 Build-JavaDesktopUwpAwtPatch -JavaHome $jre21Src -OutputJar (Join-Path $pkg "java-desktop-uwp-awt-21.jar") -WorkName "java_desktop_uwp_awt_patch_21"
-Build-SecureJarHandlerUwpPatch -JavaHome $jre21Src -Version "3.0.8" -OutputJar (Join-Path $pkg "securejarhandler-uwp-patch.jar")
+# Build the UWP patch against the securejarhandler version the default
+# NeoForge target actually resolves. Older baseline was pinned to 3.0.8; new
+# NeoForge releases ship newer SJH versions, and a patch compiled against the
+# wrong one can fail to load. Fall back to 3.0.8 when metadata is unavailable.
+$sjhVersion = "3.0.8"
+$sjhMatch = Select-String -LiteralPath $defaultDownloadManifest -Pattern 'cpw/mods/securejarhandler/([^/]+)/securejarhandler-' -ErrorAction SilentlyContinue | Select-Object -First 1
+if ($sjhMatch -and $sjhMatch.Matches.Count -gt 0) {
+    $resolvedSjh = $sjhMatch.Matches[0].Groups[1].Value
+    if ($resolvedSjh) { $sjhVersion = $resolvedSjh }
+}
+$sjhCandidates = @($sjhVersion)
+if ($sjhVersion -ne "3.0.8") { $sjhCandidates += "3.0.8" }
+$sjhPatchJar = Join-Path $pkg "securejarhandler-uwp-patch.jar"
+$sjhBuilt = $false
+foreach ($candidate in $sjhCandidates) {
+    try {
+        Write-Host "Building securejarhandler UWP patch against $candidate"
+        Build-SecureJarHandlerUwpPatch -JavaHome $jre21Src -Version $candidate -OutputJar $sjhPatchJar
+        $sjhBuilt = $true
+        break
+    } catch {
+        Write-Warning "securejarhandler $candidate patch build failed: $($_.Exception.Message)"
+    }
+}
+if (-not $sjhBuilt) { throw "Could not build the securejarhandler UWP patch against any candidate version: $($sjhCandidates -join ', ')" }
 
 Write-Host "Copying UWP tile assets..."
 $appxAssetSource = Join-Path $root "MC.Xbox\Assets\appx"

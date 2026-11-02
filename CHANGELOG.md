@@ -2,6 +2,20 @@
 
 Notable changes to Bandit Launcher. Nightly packages are numbered by build revision rather than by release, so entries here are dated.
 
+## 2026-11-02 — Fork «Native + NeoForge»
+
+### Added
+
+**This fork builds the native keyboard/mouse package with NeoForge 1.21.1 as the default target.** It is based on upstream's `main-native` branch (direct USB mouse and keyboard, separate app identity), and the compiled default, `download_manifest.tsv`, the default per-version manifest and new profiles now all point at `1.21.1 / neoforge / 21.1.250` with the Java 21 runtime. The default target is configurable from `scripts/config.ps1` or `-DefaultLoader` / `-DefaultLoaderVersion` / `-DefaultLaunchVersion`, so any catalog row can be the default. See `docs/FORK-NATIVE-NEOFORGE.es.md`.
+
+**Portable checks.** `tests/run-tests.sh` runs a C++ unit test for NeoForge version resolution and `scripts/validate-fork-targets.py`, which checks catalog/default consistency, `runtime_config.h` token substitution and NeoForge controller variant coverage. `.github/workflows/native-neoforge.yml` builds the native APPX from this branch and uploads it as a workflow artifact; publishing a Release is opt-in.
+
+### Fixed
+
+**NeoForge version resolution.** The launcher now uses the catalog's loader version (the one whose installer and artifacts were downloaded) and only falls back to parsing the installer's `version.json` id for legacy profiles. All known id shapes are accepted and Fabric/Forge ids are rejected instead of producing invalid Maven coordinates. `neoforge.cpp` now checks for the vanilla client jar, installer jar, installertools metadata and NeoForm archive up front and logs which input is missing.
+
+**NeoForge manifest generation is resilient.** Missing `.sha1` sidecars are computed from the artifact, a single unpublished installer artifact no longer aborts a whole target manifest, the NeoForm coordinate is resolved from `version.json`, `minecraftArguments` or `install_profile.json`, and tool versions are looked up across all Maven groups NeoForge has used. Helper scripts (`gen-neoforge-artifacts.ps1`, the NeoForge controller mod build) no longer hardcode `21.1.233` while the catalog uses `21.1.250`. The securejarhandler UWP patch is built against the version the default target resolves, with a `3.0.8` fallback.
+
 ## 2026-11-01
 
 ### Fixed

@@ -849,7 +849,10 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
     std::wstring mainClassPath = effectiveMainClass;
     std::replace(mainClassPath.begin(), mainClassPath.end(), L'.', L'/');
     const std::wstring libraryDir = exeDir + L"\\game\\libraries";
-    const std::wstring neoForgeVersionForLaunch = NeoForgeVersionFromLaunchVersion(launchVersion);
+    // The catalog row is the version whose installer and patched client were
+    // downloaded; only fall back to parsing the installer's version id for
+    // legacy profiles that have no catalog loader version.
+    const std::wstring neoForgeVersionForLaunch = ResolveNeoForgeLoaderVersion(launchVersion, loaderVersion);
     std::wstring neoFormVersionForLaunch = !neoFormVersion.empty()
         ? neoFormVersion
         : FirstArgValue(extraGameArgs, L"--fml.neoFormVersion");

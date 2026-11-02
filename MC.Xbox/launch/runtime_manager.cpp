@@ -1178,7 +1178,7 @@ MinecraftVersionInfo ResolveVersionInfo(const std::wstring& packageDir, const st
     }
 
     if (info.assetIndex.empty() && isDefault) info.assetIndex = a2w(kMinecraftAssetIndex);
-    if (info.launchVersion.empty() && isDefault) info.launchVersion = a2w(kFabricLaunchVersion);
+    if (info.launchVersion.empty() && isDefault) info.launchVersion = kDefaultLaunchVersionW;
 
     const std::wstring perVersionMods = packageDir + L"\\runtime\\version-mods\\" + target.targetId;
     if (GetFileAttributesW(perVersionMods.c_str()) != INVALID_FILE_ATTRIBUTES) {

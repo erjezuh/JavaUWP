@@ -8,6 +8,20 @@ Bandit Launcher runs **Minecraft Java Edition directly on Xbox Series X|S in Dev
 
 > **Xbox One, Xbox One S and Xbox One X are not supported.** Both launcher builds are for Xbox Series S and Xbox Series X only.
 
+## Edición de este fork: native + NeoForge
+
+Este repositorio es la edición **native con teclado y ratón** (la rama `main-native` del proyecto original: ratón USB directo, sin *mouse relay*) con **NeoForge 1.21.1 como objetivo por defecto** y arreglos para que NeoForge funcione en todas las versiones del catálogo. No es un port a PC: sigue siendo una app UWP para Xbox Series S|X, y mantiene intactas la autenticación Microsoft/Xbox y la verificación de propiedad de Java Edition.
+
+📄 **[Guía completa en español: `docs/FORK-NATIVE-NEOFORGE.es.md`](docs/FORK-NATIVE-NEOFORGE.es.md)** — qué se cambió, cómo compilar el APPX nativo, cómo elegir otra versión de NeoForge como objetivo por defecto y qué limitaciones hay.
+
+Resumen rápido:
+
+- Objetivo por defecto: `1.21.1 / neoforge / 21.1.250` (Java 21). El original usa `1.21.11 / Fabric 0.19.5`.
+- `download_manifest.tsv`, el target compilado y los perfiles nuevos apuntan todos al mismo objetivo configurable desde `scripts/config.ps1`.
+- Los scripts auxiliares y el launcher resuelven la versión de NeoForge desde el catálogo y el instalador oficial, sin versiones hardcodeadas.
+- `bash tests/run-tests.sh` ejecuta las comprobaciones portables (test C++ + validador del catálogo/config).
+- El APPX nativo se genera con `.github/workflows/native-neoforge.yml` como artefacto de la ejecución; la publicación en un Release es opt-in por la licencia del proyecto original.
+
 [Website](https://launcher.banditvault.co.uk/) ·
 [Download](#download) · [Getting started](#getting-started) · [Minecraft versions](#minecraft-versions) · [Discord](https://discord.gg/XTFYUKbG7g) · [Video guide](https://youtu.be/ATHiVaBenY8)
 
@@ -27,7 +41,9 @@ Java and controller support are included in the launcher package for the targets
 | Nightly | [Main nightly release](https://github.com/veroxsity/JavaUWP/releases/tag/nightly) | Optional mouse relay from a phone or PC on the same network. |
 | Native mouse | [Native mouse nightly release](https://github.com/veroxsity/JavaUWP/releases/tag/nightly-native) | Direct USB mouse input in launcher menus and Minecraft. |
 
-This branch builds the **native mouse package**. Download the `.appx` from the chosen release. For the native mouse build, also use the matching public `.cer` certificate from that release. Both releases include a `.sha256` file for checking the package download.
+These are the **upstream** releases, shown for reference. This fork builds the **native mouse package** through the `native-neoforge` workflow and attaches it to the workflow run instead of publishing a public release; see the [Spanish fork guide](docs/FORK-NATIVE-NEOFORGE.es.md) for the build command and the licensing note on redistributing APPX files.
+
+Download the `.appx` from the chosen release. For the native mouse build, also use the matching public `.cer` certificate from that release. Both releases include a `.sha256` file for checking the package download.
 
 These are pre-release testing builds. Nightly builds are experimental and do not come with support. Read the release notes before installing.
 
@@ -39,7 +55,7 @@ These are pre-release testing builds. Nightly builds are experimental and do not
 2. Open **Bandit Launcher**.
 3. When the Microsoft device code appears, open [microsoft.com/link](https://www.microsoft.com/link) on another device. Enter the code and sign in with the account that has Java Edition.
 4. Wait for the launcher to verify the account and Minecraft entitlement.
-5. Choose or create a profile, then select its Minecraft version and loader. The default is **Minecraft 1.21.11 with Fabric**.
+5. Choose or create a profile, then select its Minecraft version and loader. In this fork the default is **Minecraft 1.21.1 with NeoForge 21.1.250** (upstream defaults to 1.21.11 with Fabric).
 6. Press **Play**. The first launch downloads the game, libraries, assets and loader files for that target. Allow time for this to finish.
 
 Use the **Mods** page to manage profiles and install content. Start **Remote Files** to upload worlds, edit configs or download logs from another device.
@@ -57,7 +73,7 @@ Use the **Mods** page to manage profiles and install content. Start **Remote Fil
 
 ## Minecraft versions
 
-The default target is **1.21.11 + Fabric 0.19.5**, using Java 21. The catalog also includes these targets.
+This fork's default target is **1.21.1 + NeoForge 21.1.250**, using Java 21 (upstream's default is **1.21.11 + Fabric 0.19.5**). The default is configurable from `scripts/config.ps1`; the catalog also includes these targets.
 
 | Minecraft version | Loaders in the catalog | Status |
 | --- | --- | --- |
