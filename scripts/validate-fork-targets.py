@@ -295,10 +295,12 @@ def main() -> int:
                     f"mutually exclusive renderers: {', '.join(sorted(present))}"
                 )
     forge_1201 = (recommended.get("forge") or {}).get("1.20.1") or []
-    if "embeddium" not in forge_1201:
-        errors.append("recommended-mods.json forge.1.20.1 does not recommend Embeddium")
-    if "rubidium" in forge_1201:
-        errors.append("recommended-mods.json forge.1.20.1 still recommends abandoned Rubidium")
+    # Embeddium 0.3.x's chunk renderer has no off switch and crashes Mesa/WGL
+    # UWP (EXCEPTION_ACCESS_VIOLATION a few seconds into a world). 1.20.1 Forge
+    # must boot with Minecraft's own renderer; Fabric's Sodium is unaffected.
+    for renderer in ("embeddium", "rubidium", "sodium"):
+        if renderer in forge_1201:
+            errors.append(f"recommended-mods.json forge.1.20.1 still recommends the UWP-incompatible renderer {renderer}")
     mod_defaults = read("MC.Xbox/mods/mod_defaults.cpp")
     sodium_family = read("MC.Xbox/mods/sodium_family.h")
     if '#include "sodium_family.h"' not in mod_defaults:
@@ -312,15 +314,21 @@ def main() -> int:
         "arena_memory_allocator",
         "use_advanced_staging_buffers",
         "cpu_render_ahead_limit",
+        "DisableUwpUnsupportedRenderers",
+        "SodiumFamilyRendererUnsupportedOnUwp",
+        "bandit-keep-forge-renderer.txt",
     ):
         if needle not in mod_defaults:
             errors.append(f"mod_defaults.cpp is missing {needle}")
     for needle in ("embeddium-options.json", "rubidium-options.json", "sodium-options.json",
-                   "PreferredSodiumFamilyIndex", "IsSodiumFamilyAddon"):
+                   "PreferredSodiumFamilyIndex", "IsSodiumFamilyAddon",
+                   "SodiumFamilyRendererUnsupportedOnUwp"):
         if needle not in sodium_family:
             errors.append(f"sodium_family.h is missing {needle}")
     if "tests/sodium_family_test.cpp" not in read("tests/run-tests.sh"):
         errors.append("tests/run-tests.sh does not run the sodium family classification test")
+    if "SodiumFamilyRendererUnsupportedOnUwp" not in read("tests/sodium_family_test.cpp"):
+        errors.append("tests/sodium_family_test.cpp does not cover the 1.20.1 Forge UWP renderer rule")
     if "ConfigureSodiumDefaults(" in mod_defaults:
         errors.append("mod_defaults.cpp still calls the Fabric-only ConfigureSodiumDefaults")
     if 'CompareVersionNumbers(w2a(minecraftVersion), "1.20.1") > 0' not in mod_defaults:

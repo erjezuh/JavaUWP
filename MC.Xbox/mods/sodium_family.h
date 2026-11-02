@@ -85,3 +85,28 @@ inline size_t PreferredSodiumFamilyIndex(const std::vector<SodiumRendererJar>& j
     }
     return winner;
 }
+
+// Embeddium 0.3.x (and its abandoned predecessor Rubidium) replace Minecraft's
+// chunk renderer unconditionally. In the 20.1/forge sources there is no
+// use_chunk_multidraw switch at all: DefaultChunkRenderer always issues
+// glMultiDrawElementsBaseVertex, backed by UBOs and immutable/persistent buffer
+// storage. Mesa's WGL/llvmpipe software path on Xbox UWP reports those GL 3.2+
+// features but dies with EXCEPTION_ACCESS_VIOLATION a few seconds after joining
+// a world. There is no config value that turns that pipeline off, so the only
+// reliable fix is not to load those Forge ports on 1.20.1.
+//
+// Fabric's Sodium jar is a different mod on a different loader and stays
+// usable; other Minecraft versions (1.21.x / NeoForge) are left untouched.
+inline bool SodiumFamilyRendererUnsupportedOnUwp(
+    const std::wstring& minecraftVersion, const SodiumFamily& family) {
+    // Accept both the plain catalog version and a decorated target id such as
+    // "1.20.1-forge-47.4.20", but never match 1.20.10 or later versions.
+    const std::wstring prefix(L"1.20.1");
+    if (minecraftVersion.compare(0, prefix.size(), prefix) != 0) return false;
+    if (minecraftVersion.size() > prefix.size()) {
+        const wchar_t next = minecraftVersion[prefix.size()];
+        if (next != L'-' && next != L'+' && next != L'/' && next != L' ') return false;
+    }
+    const std::wstring token(family.token);
+    return token == L"embeddium" || token == L"rubidium";
+}

@@ -95,10 +95,35 @@ int main() {
         ++g_failures;
     }
 
+    // Embeddium/Rubidium on 1.20.1 Forge must be disabled: their chunk
+    // renderer has no off switch and crashes the Mesa/WGL UWP path. Fabric's
+    // Sodium jar and other Minecraft versions must be left alone.
+    const SodiumFamily* embeddium = SodiumFamilyForFileName(L"embeddium-0.3.31.jar");
+    const SodiumFamily* rubidium = SodiumFamilyForFileName(L"rubidium-0.7.1.jar");
+    const SodiumFamily* sodium = SodiumFamilyForFileName(L"sodium-0.5.8.jar");
+    const struct { const wchar_t* version; const SodiumFamily* family; bool expected; } uwpCases[] = {
+        { L"1.20.1", embeddium, true },
+        { L"1.20.1", rubidium, true },
+        { L"1.20.1", sodium, false },
+        { L"1.20.1-forge-47.4.20", embeddium, true },
+        { L"1.20.10", embeddium, false },
+        { L"1.18.2", embeddium, false },
+        { L"1.21.1", embeddium, false },
+        { L"1.21.1", sodium, false },
+    };
+    for (const auto& test : uwpCases) {
+        const bool got = SodiumFamilyRendererUnsupportedOnUwp(test.version, *test.family);
+        if (got != test.expected) {
+            std::fwprintf(stderr, L"FAIL UWP renderer rule %ls/%ls: expected %d, got %d\n",
+                test.version, test.family->token, test.expected ? 1 : 0, got ? 1 : 0);
+            ++g_failures;
+        }
+    }
+
     if (g_failures) {
         std::fwprintf(stderr, L"%d sodium family test(s) failed\n", g_failures);
         return 1;
     }
-    std::wprintf(L"sodium family checks passed (renderers, addons, conflict winner, configs)\n");
+    std::wprintf(L"sodium family checks passed (renderers, addons, conflict winner, configs, UWP rule)\n");
     return 0;
 }

@@ -161,50 +161,53 @@ Si después de esto sigue fallando, pásame el texto completo del error y la ver
 
 ## Los mods de render no funcionan en 1.20.1 Forge (Embeddium / Rubidium)
 
-`1.20.1 / Forge / 47.4.20` es un objetivo `experimental` del catálogo. Los mods
-de optimización gráfica de la familia Sodium (Embeddium, Rubidium y similares)
-fallaban ahí por tres motivos que se sumaban:
+`1.20.1 / Forge / 47.4.20` es un objetivo `experimental` del catálogo.
+**Embeddium 0.3.x y Rubidium no son compatibles con la ruta Mesa/WGL UWP de
+este fork**: entran al mundo y a los pocos segundos la JVM muere con
+`EXCEPTION_ACCESS_VIOLATION` (`0xc0000005`). Ocurre en cualquier mundo, incluso
+uno nuevo, y con sólo los mods recomendados.
 
-1. **Dos renderizadores recomendados a la vez.** En la pestaña *Recomendados* de
-   Forge 1.20.1 aparecían `rubidium` **y** `embeddium`. Modrinth declara
-   Rubidium como *incompatible* con todas las versiones 1.20.1 de Embeddium:
-   los dos reescriben el mismo renderizador de chunks y aplican los mismos
-   mixins. Instalar ambos aborta el arranque. Rubidium está abandonado desde
-   2023; Embeddium es su reemplazo mantenido.
-2. **Ajustes gráficos que sólo se aplicaban a Fabric.** El launcher siembra
-   valores conservadores para la ruta Mesa/UWP (`SWAP` en vez de `ASYNC`,
-   staging avanzado desactivado, un solo fotograma en vuelo, actualizaciones de
-   chunks diferidas) porque los valores de fábrica de Sodium se cuelgan en la
-   consola. Pero esa rutina buscaba `fabric.mod.json` con id `sodium` y
-   escribía únicamente `config/sodium-options.json`. Los mods de Forge se
-   declaran en `META-INF/mods.toml` y usan `embeddium-options.json` o
-   `rubidium-options.json`, así que el perfil 1.20.1 Forge se quedaba siempre
-   con los valores peligrosos.
-3. **Reparación de mixins que excluía justo 1.20.1.** La limpieza de las
-   desactivaciones antiguas de `sodium-mixins.properties` se ejecutaba sólo con
-   `minecraftVersion < "1.20.1"`.
+La causa está en el propio mod, no en el launcher: en la rama `20.1/forge` de
+Embeddium **no existe la opción `use_chunk_multidraw`**. `DefaultChunkRenderer`
+llama siempre a `glMultiDrawElementsBaseVertex` (GL 3.2) y usa UBOs y buffers
+inmutables/persistentes. Mesa llvmpipe en el contenedor UWP anuncia esas
+extensiones pero revienta al ejecutarlas. Las claves que el launcher sembraba
+(`use_advanced_staging_buffers=false`, `cpu_render_ahead_limit=1`,
+`always_defer_chunk_updates_v2=true`) son útiles para los cuelgues de staging,
+pero **no pueden apagar ese renderizador de chunks**: Gson ignora las claves que
+no existen en `SodiumGameOptions`. No hay arreglo por configuración.
 
-Desde este cambio:
+Qué hace este build:
 
-- El launcher detecta las tres familias por nombre de jar (`sodium`,
-  `embeddium`, `rubidium`) e ignora los complementos (`sodium-extra`,
-  `embeddium-extra`, `reeses-sodium-options`,
-  `textrues-embeddium-options`, Indium, Oculus, Iris…).
-- Si hay más de un renderizador en el perfil, conserva **Embeddium** y aparta
-  los otros como `*.jar.disabled`. No se borra nada: para volver a usar
-  Rubidium basta con quitar el sufijo `.disabled`. La decisión queda registrada
-  en `mc_launch.log`.
-- Se siembran las claves seguras en el fichero de opciones correcto, incluida
-  `always_defer_chunk_updates_v2` (Embeddium 0.3.x cambió el nombre de esa
-  clave), y la reparación de mixins cubre también 1.20.1.
-- `config/recommended-mods.json` ya no recomienda Rubidium en Forge 1.18.2 ni
-  1.20.1; Embeddium va primero.
+- `config/recommended-mods.json` **ya no recomienda ningún renderizador de la
+  familia Sodium en `forge."1.20.1"`**. El resto de mods recomendados
+  (`ferrite-core`, `entityculling`, `canary`, `immediatelyfast`, `saturn`,
+  `modernfix`, `clumps`, `memoryleakfix`, `noisiumed`, `fastload`) se mantienen.
+- Antes de cada lanzamiento, en Minecraft **1.20.1**, el launcher aparta los
+  jars `embeddium-*` y `rubidium-*` como `*.jar.disabled` (**no los borra**) y
+  lo escribe en `mc_launch.log`:
+  `Disabled UWP-incompatible renderer ... -> ... (Minecraft 1.20.1 / Mesa WGL)`.
+  El perfil arranca con el renderizador de Minecraft. El jar de **Sodium de
+  Fabric y las demás versiones de Minecraft no se tocan**.
+- Para volver a experimentar con el renderer, crea un fichero vacío
+  `config/bandit-keep-forge-renderer.txt` en el perfil (se puede hacer desde
+  *Archivos Remotos*). Con ese marcador el launcher no aparta ningún jar.
 
-Instala **solo un** renderizador por perfil. Para comprobar que el arreglo se
-aplicó, busca en `mc_launch.log` la línea `UWP graphics defaults seeded in
-...\embeddium-options.json`. Si aparece `Disabled conflicting renderer ...`,
-el launcher ha apartado un jar incompatible.
+### Cómo aplicarlo ahora mismo, sin reinstalar
 
+Renombra `embeddium-<versión>.jar` a `embeddium-<versión>.jar.disabled` dentro
+de `mods/` del perfil (o sácalo de la carpeta). Con el renderizador de vanilla
+el mundo debería aguantar. Si aun así crashea, entonces el problema no es
+Embeddium y hay que mirar el frame del `hs_err_pid*.log`.
+
+> El historial anterior (dos renderizadores recomendados a la vez, defaults que
+> sólo se aplicaban a Fabric, reparación de mixins que excluía 1.20.1) sigue
+> siendo válido para otros targets: el launcher continúa detectando las tres
+> familias, ignorando complementos, conservando un solo renderer cuando hay
+> varios y sembrando las opciones conservadoras en
+> `embeddium-options.json` / `rubidium-options.json` / `sodium-options.json`.
+> Simplemente, en 1.20.1 esos dos ports de Forge ya no se cargan.
+>
 > Sin verificación en consola todavía. Además, el parche UWP de
 > `securejarhandler` sigue sin aplicarse a Forge 47 (`2.1.10`), porque el
 > código incluido está compilado contra NeoForge `3.0.8`; un mod con
@@ -402,18 +405,29 @@ el `BanditLauncher-crash-<fecha>.zip`, que incluye
 crasheo. Con el frame se arregla la capa correcta; no conviene tocar GL/Mesa a
 ciegas.
 
-Pruebas rápidas para acotar sin recompilar:
+**Confirmado en consola:** el `EXCEPTION_ACCESS_VIOLATION` que quedaba en
+`1.20.1 / Forge` es el chunk renderer de **Embeddium**, no la ruta de
+audio/COM. Mira la sección [Los mods de render no funcionan en 1.20.1
+Forge](#los-mods-de-render-no-funcionan-en-1201-forge-embeddium--rubidium):
+el launcher aparta esos jars y el perfil usa el renderizador de Minecraft.
 
-1. Mundo nuevo con **sólo Embeddium** (o con `mods/` vacía). Si con vanilla no
-   crashea, es el renderer; si crashea igual, es la ruta gráfica/audio base.
+Pruebas rápidas si aun así crashea:
+
+1. Comprueba en `mc_launch.log` la línea `Disabled UWP-incompatible renderer
+   ...`. Si no aparece, el jar de Embeddium sigue activo: renómbralo a
+   `*.jar.disabled` a mano.
 2. Revisa que no haya **Xaero's Minimap / Xaero's World Map**: están en la lista
    de bloqueo del launcher por «Exception Access Violation». Ojo, el bloqueo
    busca `xaeros-minimap` con guion y los jars reales suelen llamarse
    `Xaeros_Minimap_...` con guion bajo; si están, quítalos a mano.
+3. Con `mods/` vacía: si con vanilla crashea igual, el frame del
+   `hs_err_pid*.log` dice en qué DLL y hay que mirar esa capa, no Mesa a ciegas.
 
 > Sin verificación en consola todavía. En `mc_launch.log` deben seguir
 > apareciendo `JNA COM shim enabled` y las dos líneas
-> `System COM DLL preloaded: ole32.dll` / `oleaut32.dll`.
+> `System COM DLL preloaded: ole32.dll` / `oleaut32.dll`. **Actualización:**
+> se confirmó que el AV al entrar al mundo era de Embeddium y no de esta ruta
+> COM/audio; mira la sección de renderizado más arriba.
 
 ## Cómo compilar
 

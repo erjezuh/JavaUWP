@@ -23,16 +23,34 @@ The GLFW shim draws the crosshair in framebuffer coordinates but was reporting `
 
 ## Rendering mods (Embeddium/Rubidium) do not work on 1.20.1 Forge
 
-Install only one Sodium-family renderer per profile. The Recommended tab used to
-list Rubidium and Embeddium together, but Modrinth marks them mutually
-incompatible and both patch the same chunk renderer. This fork now recommends
-Embeddium alone, keeps it if a profile contains several renderers, and moves the
-others aside as `*.jar.disabled` (remove the suffix to restore one). The
-launcher also seeds the conservative Mesa/UWP graphics defaults into
-`config/embeddium-options.json` or `config/rubidium-options.json`; previously
-those defaults were written only to Fabric's `sodium-options.json`, so Forge
-1.20.1 booted with the unsafe ASYNC staging and three-frame render-ahead
-defaults. The Spanish guide has the full diagnosis:
+**Embeddium 0.3.x and Rubidium are not supported on `1.20.1 / Forge` in this
+fork.** They replace Minecraft's chunk renderer unconditionally; in the
+`20.1/forge` sources there is no `use_chunk_multidraw` switch at all, so
+`DefaultChunkRenderer` always issues `glMultiDrawElementsBaseVertex` backed by
+UBOs and immutable/persistent buffer storage. Mesa's WGL/llvmpipe software path
+on Xbox UWP reports those GL 3.2+ features but dies with
+`EXCEPTION_ACCESS_VIOLATION` a few seconds after joining a world (any world,
+even a new one, with only the recommended mods). No `embeddium-options.json`
+value can turn that pipeline off — the conservative staging/render-ahead
+defaults the launcher seeds are not enough.
+
+Since this build, the launcher:
+
+- no longer recommends Embeddium (or Rubidium/Sodium) for `forge.1.20.1`; the
+  other optimization mods in that list are unchanged;
+- moves any `embeddium-*.jar` / `rubidium-*.jar` aside as `*.jar.disabled`
+  before launch on Minecraft 1.20.1, so the profile boots with Minecraft's own
+  renderer. Nothing is deleted and the choice is logged in `mc_launch.log`
+  (`Disabled UWP-incompatible renderer ...`). Fabric's `sodium` jar and every
+  other Minecraft version are untouched.
+- honours an explicit opt-in: create an empty file
+  `config/bandit-keep-forge-renderer.txt` in the profile (Remote Files can do
+  this) to keep the renderer for experiments.
+
+To apply it right now without reinstalling, rename
+`embeddium-<version>.jar` to `embeddium-<version>.jar.disabled` in the profile's
+`mods/` folder. The rest of the recommended 1.20.1 Forge mods work with the
+vanilla renderer. The Spanish guide has the full diagnosis:
 [FORK-NATIVE-NEOFORGE.es.md](FORK-NATIVE-NEOFORGE.es.md).
 
 ## Minecraft crashes while loading mods with "Unable to load library 'Ole32'"
@@ -87,13 +105,16 @@ world. They now zero `vt` and the payload and return `S_OK`, like the OS; only
 `CoInitializeEx` / `CoCreateInstance` keep returning `E_FAIL` so OSHI's WMI
 probe still fails into a caught `COMException`.
 
-If the crash survives that fix, the frame tells us which layer to fix. Do not
-change GL/Mesa settings blindly: first try a new world with only Embeddium (or
-with `mods/` empty) to separate a renderer mod from the base path. Also check
-the mod list for **Xaero's Minimap / Xaero's World Map** — they are on the
-launcher's blocked list precisely for "Exception Access Violation". Note that
-the blocker matches `xaeros-minimap` with a hyphen, while real Modrinth jars are
-often named `Xaeros_Minimap_...` with underscores, so remove those manually.
+**Confirmed on console:** the remaining `EXCEPTION_ACCESS_VIOLATION` on
+`1.20.1 / Forge` is Embeddium's chunk renderer, not the audio/COM path. See
+[Rendering mods (Embeddium/Rubidium) do not work on 1.20.1 Forge](#rendering-mods-embeddiumrubidium-do-not-work-on-1201-forge)
+— the launcher now disables those jars and the profile runs with Minecraft's
+own renderer. If the crash survives *that*, the frame tells us which other
+layer to fix; do not change GL/Mesa settings blindly. Also check the mod list
+for **Xaero's Minimap / Xaero's World Map** — they are on the launcher's
+blocked list precisely for "Exception Access Violation". Note that the blocker
+matches `xaeros-minimap` with a hyphen, while real Modrinth jars are often
+named `Xaeros_Minimap_...` with underscores, so remove those manually.
 
 ## Minecraft still crashes with "Failed to load library: ...\OpenAL.dll (error code = 127)"
 

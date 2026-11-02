@@ -2,6 +2,49 @@
 
 Notable changes to Bandit Launcher. Nightly packages are numbered by build revision rather than by release, so entries here are dated.
 
+## 2026-11-02 — Embeddium/Rubidium se apartan en 1.20.1 Forge (AV de renderizado)
+
+### Changed
+
+Confirmado en consola: con los frentes de OSHI, `OpenAL.dll` y COM ya cerrados,
+el `EXCEPTION_ACCESS_VIOLATION` que aparece a los pocos segundos de **entrar al
+mundo** es de renderizado y viene de **Embeddium**. Ocurre en cualquier mundo,
+incluso uno nuevo, y con sólo los mods recomendados.
+
+Revisando la rama `20.1/forge` de `FiniteReality/embeddium` se confirma que
+**no hay forma de desactivar su chunk renderer por configuración**: no existe
+`use_chunk_multidraw` en `SodiumGameOptions` (la clave que el launcher escribía
+para versiones < 1.17 es ignorada por Gson), y `DefaultChunkRenderer` llama
+siempre a `glMultiDrawElementsBaseVertex` con UBOs y buffers
+inmutables/persistentes. Mesa WGL/llvmpipe en UWP anuncia esas extensiones pero
+revienta al ejecutarlas. Los defaults conservadores que ya se sembraban
+(`use_advanced_staging_buffers=false`, `cpu_render_ahead_limit=1`,
+`always_defer_chunk_updates_v2=true`) no pueden evitarlo.
+
+Cambios, limitados a Minecraft **1.20.1**:
+
+- `config/recommended-mods.json`: `forge."1.20.1"` deja de recomendar
+  `embeddium` (y sigue sin recomendar Rubidium/Sodium). Los otros diez mods de
+  optimización se mantienen.
+- `MC.Xbox/mods/sodium_family.h`: nueva regla portable
+  `SodiumFamilyRendererUnsupportedOnUwp()` → `embeddium`/`rubidium` en 1.20.1
+  (acepta también ids tipo `1.20.1-forge-47.4.20`, sin confundir `1.20.10`).
+  `sodium` de Fabric y el resto de versiones quedan fuera.
+- `MC.Xbox/mods/mod_defaults.cpp`: `DisableUwpUnsupportedRenderers()` aparta
+  esos jars como `*.jar.disabled` antes del lanzamiento (**no los borra**) y lo
+  registra en `mc_launch.log`. El perfil arranca con el renderizador de
+  Minecraft. **Opt-in**: crear `config/bandit-keep-forge-renderer.txt` en el
+  perfil para conservar el renderer y experimentar.
+- `tests/sodium_family_test.cpp` cubre la regla (1.20.1/forge, Fabric Sodium,
+  1.18.2, 1.21.1, ids decorados); check 13 de
+  `scripts/validate-fork-targets.py` exige que el catálogo no recomiende
+  ningún renderer de la familia en `forge.1.20.1` y que exista la regla.
+- FAQ, README, guía en español y `docs/COMPATIBLE-MODS.md` documentan el
+  motivo y el procedimiento inmediato (renombrar el jar a `.jar.disabled`).
+
+> Sin verificación en consola de este build todavía. No se tocan `java21`,
+> GL/Mesa, `mods_browser.cpp` ni otros targets.
+
 ## 2026-11-02 — `EXCEPTION_ACCESS_VIOLATION` al entrar al mundo: limpieza de VARIANT y diagnóstico en pantalla
 
 ### Fixed
@@ -51,9 +94,10 @@ Cambios:
 - FAQ, guía en español y README documentan el síntoma y cómo obtener el
   `hs_err_pid*.log` / el ZIP.
 
-> Sigue sin verificación en consola. Si el AV persiste, la nueva pantalla de
-> crasheo dice **en qué DLL** ocurre; con esa foto (o el ZIP de *Remote Files*)
-> se puede arreglar la capa correcta sin tocar GL/Mesa a ciegas.
+> Sigue sin verificación en consola de este build. **Actualización:** el AV que
+> quedaba tras este arreglo se confirmó que era el chunk renderer de Embeddium,
+> no la ruta COM/audio; véase la entrada más reciente. La pantalla de crasheo
+> con el frame sigue siendo útil para cualquier DLL que quede por aislar.
 
 También se alinea el orden de claves de `en.json`/`es-419.json` con el orden de
 `Tr()` en `launcher_ui.cpp` (el nuevo uso en `CrashSuspectLine` va antes que el
@@ -112,9 +156,11 @@ Cambios:
   falta alguna, el test no compila); `scripts/validate-fork-targets.py`
   (check 14) exige los símbolos y la precarga.
 
-> Sin verificación en consola todavía: este arreglo se valida con la siguiente
-> captura / `mc_launch.log`. No se cambian `java21`, GL/Mesa, el catálogo de
-> mods ni los demás targets.
+> Sin verificación en consola todavía: se valida con la siguiente captura /
+> `mc_launch.log`. **Actualización:** este fix de contrato/carga de COM y
+> `OpenAL.dll` no era la causa del `EXCEPTION_ACCESS_VIOLATION` al entrar al
+> mundo; ese AV es de Embeddium (entrada más reciente). No se cambian `java21`,
+> GL/Mesa, el catálogo de mods ni los demás targets.
 
 ## 2026-11-02 — Arreglado el crasheo de OSHI / JNA / WMI al cargar mods en 1.20.1 Forge
 

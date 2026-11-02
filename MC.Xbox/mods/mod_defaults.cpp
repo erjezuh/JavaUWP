@@ -479,6 +479,42 @@ static void KeepOneSodiumFamilyRenderer(std::vector<SodiumRendererJar>& jars) {
     WriteLogF(L"Disabled %d conflicting Sodium-family renderer jar(s)", disabled);
 }
 
+// Embeddium/Rubidium 1.20.1 Forge have no switch for their chunk renderer, and
+// that renderer crashes Mesa/WGL UWP (EXCEPTION_ACCESS_VIOLATION shortly after
+// joining a world). Move those jars aside instead of deleting them, so the
+// profile boots with Minecraft's own renderer and the decision stays visible.
+// A marker file lets a user explicitly opt back in for experiments.
+static void DisableUwpUnsupportedRenderers(
+    std::vector<SodiumRendererJar>& jars,
+    const std::wstring& gameDir,
+    const std::wstring& minecraftVersion) {
+    const std::wstring optInMarker =
+        gameDir + L"\\config\\bandit-keep-forge-renderer.txt";
+    if (GetFileAttributesW(optInMarker.c_str()) != INVALID_FILE_ATTRIBUTES) {
+        WriteLogF(L"Forge renderer opt-in present (%s); keeping Sodium-family jars",
+            optInMarker.c_str());
+        return;
+    }
+
+    std::vector<SodiumRendererJar> kept;
+    for (const SodiumRendererJar& jar : jars) {
+        if (!SodiumFamilyRendererUnsupportedOnUwp(minecraftVersion, *jar.family)) {
+            kept.push_back(jar);
+            continue;
+        }
+        const std::wstring disabledPath = jar.path + L".disabled";
+        if (MovePathIfExists(jar.path, disabledPath, true)) {
+            WriteLogF(L"Disabled UWP-incompatible renderer %s -> %s (Minecraft %s / Mesa WGL). "
+                L"Create config\\bandit-keep-forge-renderer.txt to opt in.",
+                jar.name.c_str(), disabledPath.c_str(), minecraftVersion.c_str());
+        } else {
+            WriteLogF(L"Could not disable UWP-incompatible renderer %s err=%u",
+                jar.name.c_str(), GetLastError());
+        }
+    }
+    jars.swap(kept);
+}
+
 static void SeedSodiumFamilyOptions(
     const std::wstring& gameDir,
     const std::wstring& minecraftVersion,
@@ -587,6 +623,7 @@ static bool ConfigureSodiumFamilyDefaults(const std::wstring& gameDir, const std
         }
     }
 
+    DisableUwpUnsupportedRenderers(jars, gameDir, minecraftVersion);
     if (jars.empty()) return false;
     KeepOneSodiumFamilyRenderer(jars);
     for (const SodiumRendererJar& jar : jars) {
