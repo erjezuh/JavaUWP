@@ -2,6 +2,14 @@
 
 Notable changes to Bandit Launcher. Nightly packages are numbered by build revision rather than by release, so entries here are dated.
 
+## 2026-11-02 — APPX descargable en cada build
+
+### Changed
+
+**Every `native-neoforge` workflow run now publishes a downloadable Release.** Previously the build only attached the package to the workflow run and publishing a Release was opt-in (`publish_release=false`); workflow artifacts are not reachable from every client. The Release at tag `nightly-native` is created/updated automatically on every push to this branch and on manual dispatches, with `BanditLauncherNative-neoforge.appx`, its `.sha256` and the matching signing `.cer`. `publish_release=false` on a manual dispatch still skips it. The run summary prints the download URL. README and `docs/FORK-NATIVE-NEOFORGE.es.md` now point at the fork's own Release.
+
+Note: the upstream license requires prior written permission from veroxsity / BanditVault to redistribute APPX packages. Publishing is done at the fork owner's explicit request and their responsibility.
+
 ## 2026-11-02 — Ergonomía del dashboard (UI)
 
 ### Changed

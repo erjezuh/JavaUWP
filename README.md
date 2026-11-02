@@ -20,7 +20,7 @@ Resumen rápido:
 - `download_manifest.tsv`, el target compilado y los perfiles nuevos apuntan todos al mismo objetivo configurable desde `scripts/config.ps1`.
 - Los scripts auxiliares y el launcher resuelven la versión de NeoForge desde el catálogo y el instalador oficial, sin versiones hardcodeadas.
 - `bash tests/run-tests.sh` ejecuta las comprobaciones portables (test C++ + validador del catálogo/config).
-- El APPX nativo se genera con `.github/workflows/native-neoforge.yml` como artefacto de la ejecución; la publicación en un Release es opt-in por la licencia del proyecto original.
+- **Descarga:** cada build de `.github/workflows/native-neoforge.yml` publica automáticamente el Release [`nightly-native`](../../releases/tag/nightly-native) con `BanditLauncherNative-neoforge.appx`, su `.sha256` y el `.cer` firmante. También queda como artefacto de la ejecución.
 
 [Website](https://launcher.banditvault.co.uk/) ·
 [Download](#download) · [Getting started](#getting-started) · [Minecraft versions](#minecraft-versions) · [Discord](https://discord.gg/XTFYUKbG7g) · [Video guide](https://youtu.be/ATHiVaBenY8)
@@ -41,7 +41,7 @@ Java and controller support are included in the launcher package for the targets
 | Nightly | [Main nightly release](https://github.com/veroxsity/JavaUWP/releases/tag/nightly) | Optional mouse relay from a phone or PC on the same network. |
 | Native mouse | [Native mouse nightly release](https://github.com/veroxsity/JavaUWP/releases/tag/nightly-native) | Direct USB mouse input in launcher menus and Minecraft. |
 
-These are the **upstream** releases, shown for reference. This fork builds the **native mouse package** through the `native-neoforge` workflow and attaches it to the workflow run instead of publishing a public release; see the [Spanish fork guide](docs/FORK-NATIVE-NEOFORGE.es.md) for the build command and the licensing note on redistributing APPX files.
+These are the **upstream** releases, shown for reference. **This fork publishes its own downloadable build**: every `native-neoforge` workflow run publishes the [`nightly-native`](../../releases/tag/nightly-native) Release with `BanditLauncherNative-neoforge.appx`, its `.sha256` and the matching `.cer`. The same three files are attached to the workflow run. See the [Spanish fork guide](docs/FORK-NATIVE-NEOFORGE.es.md) for the build command and the licensing note on redistributing APPX files.
 
 Download the `.appx` from the chosen release. For the native mouse build, also use the matching public `.cer` certificate from that release. Both releases include a `.sha256` file for checking the package download.
 

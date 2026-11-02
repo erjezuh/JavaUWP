@@ -1,16 +1,16 @@
 name: Native NeoForge fork build
 
-# Builds the native keyboard/mouse APPX from this fork's branch. By default the
-# package is only attached to the workflow run: the upstream license requires
-# written permission from veroxsity / BanditVault to redistribute APPX builds.
-# Set publish_release=true explicitly if you have that permission.
+# Builds the native keyboard/mouse APPX from this fork's branch. Every build
+# publishes a downloadable Release (tag nightly-native) with the .appx, its
+# .sha256 and the matching .cer, and also attaches the same files to the run.
+# Set publish_release=false on a manual dispatch to skip the Release.
 on:
   workflow_dispatch:
     inputs:
       publish_release:
-        description: "Publish a nightly-native release (requires APPX redistribution permission)"
+        description: "Publish the downloadable nightly-native Release"
         type: boolean
-        default: false
+        default: true
       default_loader_version:
         description: "Optional NeoForge loader version override (defaults to scripts/config.ps1)"
         type: string
@@ -149,8 +149,8 @@ jobs:
             dist/BanditLauncherNative-neoforge.cer
           if-no-files-found: error
 
-      - name: Publish nightly-native release (opt-in)
-        if: ${{ inputs.publish_release == true }}
+      - name: Publish nightly-native release
+        if: ${{ github.event_name == 'push' || inputs.publish_release == true }}
         shell: powershell
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -161,3 +161,11 @@ jobs:
             -AppxVersion $env:APPX_VERSION `
             -RunUrl "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID" `
             -Asset dist\BanditLauncherNative-neoforge.appx, dist\BanditLauncherNative-neoforge.sha256, dist\BanditLauncherNative-neoforge.cer
+
+      - name: Print download link
+        if: ${{ github.event_name == 'push' || inputs.publish_release == true }}
+        shell: powershell
+        run: |
+          $url = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/releases/tag/nightly-native"
+          Write-Host "APPX_RELEASE_URL $url"
+          "## Descarga del APPX`n`n$url" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append

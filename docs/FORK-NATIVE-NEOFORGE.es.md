@@ -114,10 +114,19 @@ o con variables de entorno (`DEFAULT_MC_VERSION`, `DEFAULT_LOADER`,
 ### CI
 
 `.github/workflows/native-neoforge.yml` compila el APPX nativo desde esta rama
-(`workflow_dispatch` o push) y lo deja como **artefacto de la ejecución**. La
-publicación en un Release público es opt-in (`publish_release`), porque la
-licencia del proyecto original requiere permiso por escrito para redistribuir
-APPX. El workflow original `nightly.yml` sigue igual, referido a `main-native`.
+(`workflow_dispatch` o push) y **publica siempre un Release descargable** en la
+etiqueta `nightly-native`, con `BanditLauncherNative-neoforge.appx`, su
+`.sha256` y el `.cer` del certificado firmante. Los tres archivos también
+quedan como artefacto de la ejecución. En un `workflow_dispatch` se puede
+omitir la publicación con `publish_release=false`.
+
+Descarga: <https://github.com/erjezuh/JavaUWP/releases/tag/nightly-native>.
+Instala el `.appx` y el `.cer` desde el Portal de Dispositivos Xbox; el `.cer`
+debe coincidir con el que firma ese mismo APPX. Ten en cuenta que la licencia
+original exige permiso por escrito de veroxsity / BanditVault para
+redistribuir APPX: esta publicación se hace bajo la responsabilidad del
+propietario de este fork. El workflow original `nightly.yml` sigue igual,
+referido a `main-native`.
 
 ## Cómo compilar
 
