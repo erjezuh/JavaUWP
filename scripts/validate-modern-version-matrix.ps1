@@ -39,6 +39,12 @@ try {
     }
     Require-Entry "runtime\version_catalog.tsv"
     Require-Entry "runtime\recommended-mods.json"
+    # OSHI/JNA/WMI hardware probes abort mod loading on UWP unless JNA gets an
+    # absolute path for these two COM libraries. Verify them inside the signed
+    # APPX, not just in the staging directory, so a packaging regression is
+    # caught by CI instead of showing up as a console crash.
+    Require-Entry "natives\Ole32.dll"
+    Require-Entry "natives\OleAut32.dll"
     foreach ($inputFile in @(
         @{ Source = $CatalogPath; Relative = 'runtime/version_catalog.tsv' },
         @{ Source = (Join-Path $root 'config/recommended-mods.json'); Relative = 'runtime/recommended-mods.json' }

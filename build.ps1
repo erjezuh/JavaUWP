@@ -760,6 +760,13 @@ Write-Host "Copying Ole32/OleAut32 COM UWP shims..."
 # container too. Both names must resolve to an absolute packaged path.
 Copy-Item $ole32ShimDll (Join-Path $pkg "natives\Ole32.dll") -Force
 Copy-Item $ole32ShimDll (Join-Path $pkg "natives\OleAut32.dll") -Force
+foreach ($shimName in @("Ole32.dll", "OleAut32.dll")) {
+    $packagedShim = Join-Path $pkg "natives\$shimName"
+    if (-not (Test-Path -LiteralPath $packagedShim -PathType Leaf) -or
+        (Get-Item -LiteralPath $packagedShim).Length -eq 0) {
+        throw "Packaged COM shim missing or empty: $packagedShim"
+    }
+}
 
 Write-Host "Extracting JNA native..."
 Add-Type -AssemblyName System.IO.Compression.FileSystem

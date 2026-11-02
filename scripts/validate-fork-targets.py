@@ -363,6 +363,10 @@ def main() -> int:
             errors.append(f"minecraft_launch.cpp is missing the JNA COM shim wiring ({needle})")
     if "tests/ole32_shim_test.cpp" not in run_tests:
         errors.append("tests/run-tests.sh does not run the Ole32 shim contract test")
+    matrix_validator = read("scripts/validate-modern-version-matrix.ps1")
+    for needle in ('natives\\Ole32.dll', 'natives\\OleAut32.dll'):
+        if needle not in matrix_validator:
+            errors.append(f"validate-modern-version-matrix.ps1 does not verify {needle} in the APPX")
     for doc in ("docs/FAQ.md", "docs/FORK-NATIVE-NEOFORGE.es.md"):
         if "OSHI" not in read(doc):
             errors.append(f"{doc} does not document the OSHI/WMI COM shim")
