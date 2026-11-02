@@ -14,7 +14,20 @@ constexpr int kModsTargetRowsVisible = 10;
 
 constexpr int kMainMenuItems = 7;
 
+// Information the main menu needs every frame. It used to be packed into the
+// free-form status/detail strings, which navigation then overwrote (and which
+// could not be laid out independently). Keeping it typed makes the header, the
+// Play hero and the profile card three views of the same facts.
+struct MainMenuSummary {
+    std::wstring account;
+    std::wstring profileName;
+    std::wstring targetText;
+};
+
 struct AuthUiState {
+    MainMenuSummary mainMenu;
+    // Transient two-step guard for the destructive Sign out action.
+    bool signOutConfirm = false;
     std::wstring title;
     std::wstring userCode;
     std::wstring verificationUri;

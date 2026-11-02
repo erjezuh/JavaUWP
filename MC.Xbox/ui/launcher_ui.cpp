@@ -161,6 +161,8 @@ bool RunLaunchTaskWithLiveUi(
 
 static void ShowRemoteFilesPage(ICoreWindow* window, AuthScreenRenderer* renderer, AuthUiState& state, const std::wstring& runtimeRoot) {
     WriteLog(L"Remote files page opened");
+    const std::wstring previousStatus = state.status;
+    const std::wstring previousDetail = state.detail;
     StartRemoteFileServer(runtimeRoot);
 
     state.showMainMenu = false;
@@ -201,8 +203,8 @@ static void ShowRemoteFilesPage(ICoreWindow* window, AuthScreenRenderer* rendere
             state.showRemoteFiles = false;
             state.showMainMenu = true;
             state.isError = false;
-            state.status = Tr(L"Remote file manager stopped");
-            state.detail = L"";
+            state.status = previousStatus;
+            state.detail = previousDetail;
             WriteLog(L"Remote files page closed");
             return;
         }
@@ -603,6 +605,8 @@ static void ShowChangelogScreen(
 static void ShowSettingsPage(ICoreWindow* window, AuthScreenRenderer* renderer, AuthUiState& state) {
     constexpr int kSettingsRows = 7;
     WriteLog(L"Settings page opened");
+    const std::wstring previousStatus = state.status;
+    const std::wstring previousDetail = state.detail;
 
     state.showMainMenu = false;
     state.showModsPage = false;
@@ -780,11 +784,25 @@ static void ShowSettingsPage(ICoreWindow* window, AuthScreenRenderer* renderer, 
 
     state.showSettings = false;
     state.showMainMenu = true;
-    state.status = telemetry::ConsentGranted()
-        ? Tr(L"Crash reporting is on")
-        : Tr(L"Crash reporting is off");
-    state.detail = L"";
+    state.status = previousStatus;
+    state.detail = previousDetail;
     WriteLog(L"Settings page closed");
+}
+
+// The header, the Play hero and the profile card all read typed facts instead
+// of the free-form status/detail strings, which navigation and sub-pages used
+// to overwrite. Called on entry and after the Mods page, where the active
+// profile can change.
+static void RefreshMainMenuSummary(AuthUiState& state, const LaunchAuthConfig& authConfig,
+    const std::wstring& runtimeRoot) {
+    EnsureProfilesInitialized(runtimeRoot);
+    const std::wstring activeId = GetActiveProfileId(runtimeRoot);
+    const Profile activeProfile = GetProfileById(runtimeRoot, activeId);
+    const LaunchTarget activeTarget = ResolveProfileTarget(runtimeRoot, activeProfile);
+    state.mainMenu.account = a2w(authConfig.username.c_str());
+    state.mainMenu.profileName = activeProfile.name;
+    state.mainMenu.targetText = TargetProfileText(activeTarget);
+    state.detail = TrFormat(L"Active profile: {0} - {1}", { activeProfile.name, state.mainMenu.targetText });
 }
 
 MainMenuAction ShowMainMenu(ICoreWindow* window, const LaunchAuthConfig& authConfig, const std::wstring& runtimeRoot) {
@@ -802,15 +820,10 @@ MainMenuAction ShowMainMenu(ICoreWindow* window, const LaunchAuthConfig& authCon
     state.showDeviceCode = false;
     state.showMainMenu = true;
     state.status = TrFormat(L"Signed in as {0}", { a2w(authConfig.username.c_str()) });
-    EnsureProfilesInitialized(runtimeRoot);
-    {
-        const std::wstring activeId = GetActiveProfileId(runtimeRoot);
-        const Profile activeProfile = GetProfileById(runtimeRoot, activeId);
-        const LaunchTarget activeTarget = ResolveProfileTarget(runtimeRoot, activeProfile);
-        state.detail = TrFormat(L"Active profile: {0} - {1}", { activeProfile.name, TargetProfileText(activeTarget) });
-    }
+    RefreshMainMenuSummary(state, authConfig, runtimeRoot);
 
     int selected = 0;
+    ULONGLONG signOutConfirmTick = 0;
     bool upWasDown = false;
     bool downWasDown = false;
     bool selectWasDown = false;
@@ -842,6 +855,10 @@ MainMenuAction ShowMainMenu(ICoreWindow* window, const LaunchAuthConfig& authCon
             }
         }
         state.selectedMenuIndex = selected;
+        if (selected != kMainMenuItems - 1 ||
+            (state.signOutConfirm && GetTickCount64() - signOutConfirmTick > 4000)) {
+            state.signOutConfirm = false;
+        }
         state.animation = static_cast<float>((GetTickCount64() % 100000) / 1000.0);
         {
             std::wstring newest;
@@ -872,11 +889,9 @@ MainMenuAction ShowMainMenu(ICoreWindow* window, const LaunchAuthConfig& authCon
 
         if (upDown && !upWasDown) {
             selected = (selected + kMainMenuItems - 1) % kMainMenuItems;
-            state.detail = L"";
         }
         if (downDown && !downWasDown) {
             selected = (selected + 1) % kMainMenuItems;
-            state.detail = L"";
         }
         if ((selectDown && !selectWasDown) || (mouseClicked && hovered >= 0)) {
             if (selected == 0) {
@@ -887,7 +902,9 @@ MainMenuAction ShowMainMenu(ICoreWindow* window, const LaunchAuthConfig& authCon
             if (selected == 1) {
                 WriteLog(L"Main menu: Mods selected");
                 ShowModsPage(window, renderer, state, runtimeRoot);
-                state.detail = Tr(L"Browse installed, popular, and latest Fabric mods.");
+                // Profiles can be created, renamed or activated there.
+                RefreshMainMenuSummary(state, authConfig, runtimeRoot);
+                state.status = TrFormat(L"Signed in as {0}", { a2w(authConfig.username.c_str()) });
             } else if (selected == 2) {
                 WriteLog(L"Main menu: Remote files selected");
                 ShowRemoteFilesPage(window, renderer, state, runtimeRoot);
@@ -906,13 +923,20 @@ MainMenuAction ShowMainMenu(ICoreWindow* window, const LaunchAuthConfig& authCon
                 SleepWithAuthUi(renderer, state, 350);
                 return MainMenuAction::RepairDownloads;
             } else {
-                WriteLog(L"Main menu: Sign out selected");
-                StopRemoteFileServer();
-                state.status = Tr(L"Signing out");
-                state.detail = Tr(L"Clearing saved Microsoft session");
-                RenderAuth(renderer, state);
-                SleepWithAuthUi(renderer, state, 350);
-                return MainMenuAction::SignOut;
+                if (!state.signOutConfirm) {
+                    state.signOutConfirm = true;
+                    signOutConfirmTick = GetTickCount64();
+                    WriteLog(L"Main menu: Sign out needs confirmation");
+                } else {
+                    state.signOutConfirm = false;
+                    WriteLog(L"Main menu: Sign out selected");
+                    StopRemoteFileServer();
+                    state.status = Tr(L"Signing out");
+                    state.detail = Tr(L"Clearing saved Microsoft session");
+                    RenderAuth(renderer, state);
+                    SleepWithAuthUi(renderer, state, 350);
+                    return MainMenuAction::SignOut;
+                }
             }
         }
 

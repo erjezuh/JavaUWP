@@ -59,6 +59,10 @@ jobs:
           PREVIEW_LANGUAGE: ${{ inputs.language }}
         run: .\tools\ui-preview\render.ps1 -OutDir ui-preview-out -Language $env:PREVIEW_LANGUAGE
 
+      - name: Regenerate en.json from source strings
+        shell: pwsh
+        run: .\scripts\update-translations.ps1
+
       - name: Resolve preview destination
         id: destination
         shell: powershell
@@ -89,8 +93,9 @@ jobs:
           New-Item -ItemType Directory -Force -Path $dest | Out-Null
           $names = @(
             "signin-device-code", "main-menu", "main-menu-update",
-            "settings-modrinth", "remote-files", "crash-summary",
-            "mods-0-profiles", "mods-1-popular", "mods-5-resource-packs"
+            "main-menu-sign-out-confirm", "settings-modrinth", "remote-files",
+            "crash-summary", "mods-0-profiles", "mods-1-popular",
+            "mods-5-resource-packs"
           )
           foreach ($name in $names) {
             $src = Join-Path "ui-preview-out" "$name.png"
@@ -99,7 +104,7 @@ jobs:
           }
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -f "docs/previews/$env:PREVIEW_SUBDIR/*.png"
+          git add -f "docs/previews/$env:PREVIEW_SUBDIR/*.png" "MC.Xbox/lang/en.json"
           if (git diff --cached --quiet) {
             Write-Host "No preview changes to commit"
           } else {
