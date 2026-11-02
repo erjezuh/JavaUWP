@@ -146,7 +146,7 @@ if ($AppxVersion) {
     Assert-AppxVersion $AppxVersion
     $appVersion = $AppxVersion
 } elseif ($ciVersioned) {
-    $appVersion = "$appVersionBase.$($env:GITHUB_RUN_NUMBER).0"
+    $appVersion = "$($baseVersionParts[0]).$($baseVersionParts[1]).$($env:GITHUB_RUN_NUMBER).0"
     Assert-AppxVersion $appVersion
 } else {
     $verRev = [int]$baseVersionParts[3]
