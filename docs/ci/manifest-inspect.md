@@ -1,84 +1,34 @@
 # Packaged manifest diagnostics
 
-Run: 41439893991
+Run: 41439893991  APPX: /tmp/a/BanditLauncherNative-neoforge.appx
 
-## Files inside the APPX matching download_manifest
-download_manifest.tsv
-runtime/manifests/1.21.1-neoforge-21.1.250.tsv
-runtime/manifests/26.2-fabric-0.19.5.tsv
-runtime/manifests/26.2-forge-65.1.3.tsv
-runtime/manifests/26.2-neoforge-26.2.0.82.tsv
-runtime/manifests/26.1.2-fabric-0.19.5.tsv
-runtime/manifests/26.1.2-forge-64.1.3.tsv
-runtime/manifests/26.1.2-neoforge-26.1.2.107.tsv
-runtime/manifests/26.1.1-fabric-0.19.5.tsv
-runtime/manifests/26.1.1-forge-63.0.2.tsv
-runtime/manifests/26.1.1-neoforge-26.1.1.15-beta.tsv
-runtime/manifests/26.1-fabric-0.19.5.tsv
-runtime/manifests/26.1-forge-62.0.9.tsv
-runtime/manifests/26.1-neoforge-26.1.0.19-beta.tsv
-runtime/manifests/1.21.11-fabric-0.19.5.tsv
-runtime/manifests/1.21.11-forge-61.2.1.tsv
-runtime/manifests/1.21.11-neoforge-21.11.45.tsv
-runtime/manifests/1.21.10-fabric-0.19.5.tsv
-runtime/manifests/1.21.10-forge-60.1.15.tsv
-runtime/manifests/1.21.10-neoforge-21.10.64.tsv
+## Total rows
+4021
 
-## Default manifest header
-# MinecraftJavaUWP official download manifest
-# minecraftVersion	1.21.1
-# loader	neoforge
-# loaderVersion	21.1.250
-# assetIndex	17
-# launchVersion	neoforge-21.1.250
-# mainClass	cpw.mods.bootstraplauncher.BootstrapLauncher
-# jvmArgs	-Djava.net.preferIPv6Addresses=system-DignoreList=client-extra,${version_name}.jar-DlibraryDirectory=${library_directory}--module-path=${library_directory}/cpw/mods/bootstraplauncher/2.0.2/bootstraplauncher-2.0.2.jar${classpath_separator}${library_directory}/cpw/mods/securejarhandler/3.0.8/securejarhandler-3.0.8.jar${classpath_separator}${library_directory}/org/ow2/asm/asm-commons/9.10.1/asm-commons-9.10.1.jar${classpath_separator}${library_directory}/org/ow2/asm/asm-util/9.10.1/asm-util-9.10.1.jar${classpath_separator}${library_directory}/org/ow2/asm/asm-analysis/9.10.1/asm-analysis-9.10.1.jar${classpath_separator}${library_directory}/org/ow2/asm/asm-tree/9.10.1/asm-tree-9.10.1.jar${classpath_separator}${library_directory}/org/ow2/asm/asm/9.10.1/asm-9.10.1.jar${classpath_separator}${library_directory}/net/neoforged/JarJarFileSystems/0.4.1/JarJarFileSystems-0.4.1.jar--add-modules=ALL-MODULE-PATH--add-opens=java.base/java.util.jar=cpw.mods.securejarhandler--add-opens=java.base/java.lang.invoke=cpw.mods.securejarhandler--add-exports=java.base/sun.security.util=cpw.mods.securejarhandler--add-exports=jdk.naming.dns/com.sun.jndi.dns=java.naming
-# gameArgs	--fml.neoForgeVersion21.1.250--fml.fmlVersion4.0.44--fml.mcVersion1.21.1--fml.neoFormVersion20240808.144430--launchTargetforgeclient
-# neoFormVersion	20240808.144430
-# neoForgeInstallToolsVersion	2.1.2
-# neoForgeJarSplitterVersion	2.1.2
-# neoForgeBinaryPatcherVersion	2.1.2
-# neoForgeAutoRenamingToolVersion	2.0.3
-# path	sha1	size	url
-
-## Rows containing listenablefuture (default manifest)
+## Rows containing listenablefuture
 3915:game/libraries/com/google/guava/listenablefuture/9999.0-empty-to-avoid-conflict-with-guava/listenablefuture-9999.0-empty-to-avoid-conflict-with-guava.jar	b421526c5f297295adef1c886e5246c39d4ac629	2199	https://libraries.minecraft.net/com/google/guava/listenablefuture/9999.0-empty-to-avoid-conflict-with-guava/listenablefuture-9999.0-empty-to-avoid-conflict-with-guava.jar
 
-## Rows containing listenablefuture (per-version manifests)
-### runtime/manifests/1.21.1-neoforge-21.1.250.tsv
-game/libraries/com/google/guava/listenablefuture/9999.0-empty-to-avoid-conflict-with-guava/listenablefuture-9999.0-empty-to-avoid-conflict-with-guava.jar	b421526c5f297295adef1c886e5246c39d4ac629	2199	https://libraries.minecraft.net/com/google/guava/listenablefuture/9999.0-empty-to-avoid-conflict-with-guava/listenablefuture-9999.0-empty-to-avoid-conflict-with-guava.jar
-### runtime/manifests/26.2-neoforge-26.2.0.82.tsv
-game/libraries/com/google/guava/listenablefuture/9999.0-empty-to-avoid-conflict-with-guava/listenablefuture-9999.0-empty-to-avoid-conflict-with-guava.jar	b421526c5f297295adef1c886e5246c39d4ac629	2199	https://libraries.minecraft.net/com/google/guava/listenablefuture/9999.0-empty-to-avoid-conflict-with-guava/listenablefuture-9999.0-empty-to-avoid-conflict-with-guava.jar
-### runtime/manifests/26.1.2-neoforge-26.1.2.107.tsv
-game/libraries/com/google/guava/listenablefuture/9999.0-empty-to-avoid-conflict-with-guava/listenablefuture-9999.0-empty-to-avoid-conflict-with-guava.jar	b421526c5f297295adef1c886e5246c39d4ac629	2199	https://libraries.minecraft.net/com/google/guava/listenablefuture/9999.0-empty-to-avoid-conflict-with-guava/listenablefuture-9999.0-empty-to-avoid-conflict-with-guava.jar
-### runtime/manifests/26.1.1-neoforge-26.1.1.15-beta.tsv
-game/libraries/com/google/guava/listenablefuture/9999.0-empty-to-avoid-conflict-with-guava/listenablefuture-9999.0-empty-to-avoid-conflict-with-guava.jar	b421526c5f297295adef1c886e5246c39d4ac629	2199	https://libraries.minecraft.net/com/google/guava/listenablefuture/9999.0-empty-to-avoid-conflict-with-guava/listenablefuture-9999.0-empty-to-avoid-conflict-with-guava.jar
-### runtime/manifests/26.1-neoforge-26.1.0.19-beta.tsv
-game/libraries/com/google/guava/listenablefuture/9999.0-empty-to-avoid-conflict-with-guava/listenablefuture-9999.0-empty-to-avoid-conflict-with-guava.jar	b421526c5f297295adef1c886e5246c39d4ac629	2199	https://libraries.minecraft.net/com/google/guava/listenablefuture/9999.0-empty-to-avoid-conflict-with-guava/listenablefuture-9999.0-empty-to-avoid-conflict-with-guava.jar
-### runtime/manifests/1.21.11-neoforge-21.11.45.tsv
-game/libraries/com/google/guava/listenablefuture/9999.0-empty-to-avoid-conflict-with-guava/listenablefuture-9999.0-empty-to-avoid-conflict-with-guava.jar	b421526c5f297295adef1c886e5246c39d4ac629	2199	https://libraries.minecraft.net/com/google/guava/listenablefuture/9999.0-empty-to-avoid-conflict-with-guava/listenablefuture-9999.0-empty-to-avoid-conflict-with-guava.jar
-### runtime/manifests/1.21.10-neoforge-21.10.64.tsv
-game/libraries/com/google/guava/listenablefuture/9999.0-empty-to-avoid-conflict-with-guava/listenablefuture-9999.0-empty-to-avoid-conflict-with-guava.jar	b421526c5f297295adef1c886e5246c39d4ac629	2199	https://libraries.minecraft.net/com/google/guava/listenablefuture/9999.0-empty-to-avoid-conflict-with-guava/listenablefuture-9999.0-empty-to-avoid-conflict-with-guava.jar
-### runtime/manifests/1.21.9-neoforge-21.9.16-beta.tsv
-game/libraries/com/google/guava/listenablefuture/9999.0-empty-to-avoid-conflict-with-guava/listenablefuture-9999.0-empty-to-avoid-conflict-with-guava.jar	b421526c5f297295adef1c886e5246c39d4ac629	2199	https://libraries.minecraft.net/com/google/guava/listenablefuture/9999.0-empty-to-avoid-conflict-with-guava/listenablefuture-9999.0-empty-to-avoid-conflict-with-guava.jar
-### runtime/manifests/1.21.8-neoforge-21.8.54.tsv
-game/libraries/com/google/guava/listenablefuture/9999.0-empty-to-avoid-conflict-with-guava/listenablefuture-9999.0-empty-to-avoid-conflict-with-guava.jar	b421526c5f297295adef1c886e5246c39d4ac629	2199	https://libraries.minecraft.net/com/google/guava/listenablefuture/9999.0-empty-to-avoid-conflict-with-guava/listenablefuture-9999.0-empty-to-avoid-conflict-with-guava.jar
-### runtime/manifests/1.21.7-neoforge-21.7.25-beta.tsv
-game/libraries/com/google/guava/listenablefuture/9999.0-empty-to-avoid-conflict-with-guava/listenablefuture-9999.0-empty-to-avoid-conflict-with-guava.jar	b421526c5f297295adef1c886e5246c39d4ac629	2199	https://libraries.minecraft.net/com/google/guava/listenablefuture/9999.0-empty-to-avoid-conflict-with-guava/listenablefuture-9999.0-empty-to-avoid-conflict-with-guava.jar
-### runtime/manifests/1.21.6-neoforge-21.6.20-beta.tsv
-game/libraries/com/google/guava/listenablefuture/9999.0-empty-to-avoid-conflict-with-guava/listenablefuture-9999.0-empty-to-avoid-conflict-with-guava.jar	b421526c5f297295adef1c886e5246c39d4ac629	2199	https://libraries.minecraft.net/com/google/guava/listenablefuture/9999.0-empty-to-avoid-conflict-with-guava/listenablefuture-9999.0-empty-to-avoid-conflict-with-guava.jar
-### runtime/manifests/1.21.5-neoforge-21.5.98.tsv
-game/libraries/com/google/guava/listenablefuture/9999.0-empty-to-avoid-conflict-with-guava/listenablefuture-9999.0-empty-to-avoid-conflict-with-guava.jar	b421526c5f297295adef1c886e5246c39d4ac629	2199	https://libraries.minecraft.net/com/google/guava/listenablefuture/9999.0-empty-to-avoid-conflict-with-guava/listenablefuture-9999.0-empty-to-avoid-conflict-with-guava.jar
-### runtime/manifests/1.21.4-neoforge-21.4.157.tsv
-game/libraries/com/google/guava/listenablefuture/9999.0-empty-to-avoid-conflict-with-guava/listenablefuture-9999.0-empty-to-avoid-conflict-with-guava.jar	b421526c5f297295adef1c886e5246c39d4ac629	2199	https://libraries.minecraft.net/com/google/guava/listenablefuture/9999.0-empty-to-avoid-conflict-with-guava/listenablefuture-9999.0-empty-to-avoid-conflict-with-guava.jar
-### runtime/manifests/1.21.3-neoforge-21.3.97.tsv
-game/libraries/com/google/guava/listenablefuture/9999.0-empty-to-avoid-conflict-with-guava/listenablefuture-9999.0-empty-to-avoid-conflict-with-guava.jar	b421526c5f297295adef1c886e5246c39d4ac629	2199	https://libraries.minecraft.net/com/google/guava/listenablefuture/9999.0-empty-to-avoid-conflict-with-guava/listenablefuture-9999.0-empty-to-avoid-conflict-with-guava.jar
-### runtime/manifests/1.21.2-neoforge-21.2.1-beta.tsv
-game/libraries/com/google/guava/listenablefuture/9999.0-empty-to-avoid-conflict-with-guava/listenablefuture-9999.0-empty-to-avoid-conflict-with-guava.jar	b421526c5f297295adef1c886e5246c39d4ac629	2199	https://libraries.minecraft.net/com/google/guava/listenablefuture/9999.0-empty-to-avoid-conflict-with-guava/listenablefuture-9999.0-empty-to-avoid-conflict-with-guava.jar
-### runtime/manifests/1.21-neoforge-21.0.167.tsv
-game/libraries/com/google/guava/listenablefuture/9999.0-empty-to-avoid-conflict-with-guava/listenablefuture-9999.0-empty-to-avoid-conflict-with-guava.jar	b421526c5f297295adef1c886e5246c39d4ac629	2199	https://libraries.minecraft.net/com/google/guava/listenablefuture/9999.0-empty-to-avoid-conflict-with-guava/listenablefuture-9999.0-empty-to-avoid-conflict-with-guava.jar
-### runtime/manifests/1.20.4-neoforge-20.4.237.tsv
-game/libraries/com/google/guava/listenablefuture/9999.0-empty-to-avoid-conflict-with-guava/listenablefuture-9999.0-empty-to-avoid-conflict-with-guava.jar	b421526c5f297295adef1c886e5246c39d4ac629	2199	https://libraries.minecraft.net/com/google/guava/listenablefuture/9999.0-empty-to-avoid-conflict-with-guava/listenablefuture-9999.0-empty-to-avoid-conflict-with-guava.jar
+## Longest relative paths (length, path)
+153 game/libraries/com/google/guava/listenablefuture/9999.0-empty-to-avoid-conflict-with-guava/listenablefuture-9999.0-empty-to-avoid-conflict-with-guava.jar
+123 game/libraries/io/netty/netty-transport-native-unix-common/4.1.97.Final/netty-transport-native-unix-common-4.1.97.Final.jar
+113 game/libraries/io/netty/netty-transport-classes-epoll/4.1.97.Final/netty-transport-classes-epoll-4.1.97.Final.jar
+102 game/libraries/com/google/errorprone/error_prone_annotations/2.18.0/error_prone_annotations-2.18.0.jar
+95 game/libraries/net/neoforged/accesstransformers/at-modlauncher/10.0.1/at-modlauncher-10.0.1.jar
+95 game/libraries/net/fabricmc/sponge-mixin/0.15.2+mixin.0.8.7/sponge-mixin-0.15.2+mixin.0.8.7.jar
+94 game/libraries/net/neoforged/neoform/1.21.1-20240808.144430/neoform-1.21.1-20240808.144430.zip
+94 game/libraries/net/neoforged/installertools/binarypatcher/2.1.2/binarypatcher-2.1.2-fatjar.jar
+93 game/libraries/org/apache/logging/log4j/log4j-slf4j2-impl/2.22.1/log4j-slf4j2-impl-2.22.1.jar
+92 game/libraries/org/lwjgl/lwjgl-jemalloc/3.3.3/lwjgl-jemalloc-3.3.3-natives-windows-arm64.jar
+92 game/libraries/org/lwjgl/lwjgl-freetype/3.3.3/lwjgl-freetype-3.3.3-natives-windows-arm64.jar
+92 game/libraries/net/minecrell/terminalconsoleappender/1.3.0/terminalconsoleappender-1.3.0.jar
 
-## Total rows in default manifest
-4021
+## Does the failing URL actually work?
+URL: https://libraries.minecraft.net/com/google/guava/listenablefuture/9999.0-empty-to-avoid-conflict-with-guava/listenablefuture-9999.0-empty-to-avoid-conflict-with-guava.jar
+curl: (3) URL rejected: Malformed input to a URL function
+http=000 bytes=0 redirects=0
+curl failed
+sha1sum: /tmp/listenablefuture.jar: No such file or directory
+no file downloaded
+
+## Expected sha1 / size from manifest
+b421526c5f297295adef1c886e5246c39d4ac629	2199
