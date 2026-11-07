@@ -8,6 +8,20 @@ Bandit Launcher runs **Minecraft Java Edition directly on Xbox Series X|S in Dev
 
 > **Xbox One, Xbox One S and Xbox One X are not supported.** Both launcher builds are for Xbox Series S and Xbox Series X only.
 
+## Edición de este fork: native + NeoForge
+
+Este repositorio es la edición **native con teclado y ratón** (la rama `main-native` del proyecto original: ratón USB directo, sin *mouse relay*) con **NeoForge 1.21.1 como objetivo por defecto** y arreglos para que NeoForge funcione en todas las versiones del catálogo. No es un port a PC: sigue siendo una app UWP para Xbox Series S|X, y mantiene intactas la autenticación Microsoft/Xbox y la verificación de propiedad de Java Edition.
+
+📄 **[Guía completa en español: `docs/FORK-NATIVE-NEOFORGE.es.md`](docs/FORK-NATIVE-NEOFORGE.es.md)** — qué se cambió, cómo compilar el APPX nativo, cómo elegir otra versión de NeoForge como objetivo por defecto y qué limitaciones hay.
+
+Resumen rápido:
+
+- Objetivo por defecto: `1.21.1 / neoforge / 21.1.250` (Java 21). El original usa `1.21.11 / Fabric 0.19.5`.
+- `download_manifest.tsv`, el target compilado y los perfiles nuevos apuntan todos al mismo objetivo configurable desde `scripts/config.ps1`.
+- Los scripts auxiliares y el launcher resuelven la versión de NeoForge desde el catálogo y el instalador oficial, sin versiones hardcodeadas.
+- `bash tests/run-tests.sh` ejecuta las comprobaciones portables (test C++ + validador del catálogo/config).
+- **Descarga:** cada build de `.github/workflows/native-neoforge.yml` publica automáticamente el Release [`nightly-native`](../../releases/tag/nightly-native) con `BanditLauncherNative-neoforge.appx`, su `.sha256` y el `.cer` firmante. Enlace directo al paquete: [`BanditLauncherNative-neoforge.appx`](../../releases/download/nightly-native/BanditLauncherNative-neoforge.appx). También queda como artefacto de la ejecución.
+
 [Website](https://launcher.banditvault.co.uk/) ·
 [Download](#download) · [Getting started](#getting-started) · [Minecraft versions](#minecraft-versions) · [Discord](https://discord.gg/XTFYUKbG7g) · [Video guide](https://youtu.be/ATHiVaBenY8)
 
@@ -27,6 +41,8 @@ Java and controller support are included in the launcher package for the targets
 | Nightly | [Main nightly release](https://github.com/veroxsity/JavaUWP/releases/tag/nightly) | Optional mouse relay from a phone or PC on the same network. |
 | Native mouse | [Native mouse nightly release](https://github.com/veroxsity/JavaUWP/releases/tag/nightly-native) | Direct USB mouse input in launcher menus and Minecraft. |
 
+These are the **upstream** releases, shown for reference. **This fork publishes its own downloadable build**: every `native-neoforge` workflow run publishes the [`nightly-native`](../../releases/tag/nightly-native) Release with `BanditLauncherNative-neoforge.appx`, its `.sha256` and the matching `.cer`. The same three files are attached to the workflow run. See the [Spanish fork guide](docs/FORK-NATIVE-NEOFORGE.es.md) for the build command and the licensing note on redistributing APPX files.
+
 Download the `.appx` from the chosen release. For the native mouse build, also use the matching public `.cer` certificate from that release. Both releases include a `.sha256` file for checking the package download.
 
 These are pre-release testing builds. Nightly builds are experimental and do not come with support. Read the release notes before installing.
@@ -39,7 +55,7 @@ These are pre-release testing builds. Nightly builds are experimental and do not
 2. Open **Bandit Launcher**.
 3. When the Microsoft device code appears, open [microsoft.com/link](https://www.microsoft.com/link) on another device. Enter the code and sign in with the account that has Java Edition.
 4. Wait for the launcher to verify the account and Minecraft entitlement.
-5. Choose or create a profile, then select its Minecraft version and loader. The default is **Minecraft 1.21.11 with Fabric**.
+5. Choose or create a profile, then select its Minecraft version and loader. In this fork the default is **Minecraft 1.21.1 with NeoForge 21.1.250** (upstream defaults to 1.21.11 with Fabric).
 6. Press **Play**. The first launch downloads the game, libraries, assets and loader files for that target. Allow time for this to finish.
 
 Use the **Mods** page to manage profiles and install content. Start **Remote Files** to upload worlds, edit configs or download logs from another device.
@@ -49,7 +65,7 @@ Use the **Mods** page to manage profiles and install content. Start **Remote Fil
 - Separate profiles for different Minecraft versions, loaders and mod setups.
 - Modrinth and CurseForge browsing for mods, modpacks, resource packs and shaders.
 - Recommended mods filtered for the selected launch target.
-- Bundled Bandit Controller support for targets that list a controller provider.
+- Controlify bundled by default (with YACL) for controller support on the default NeoForge 1.21.1 target.
 - Profile backups and restore options, including undoing the last deleted profile.
 - Remote Files for managing profiles and worlds through a browser on the local network.
 - Download repair, current and previous run logs, and crash report ZIPs.
@@ -57,7 +73,7 @@ Use the **Mods** page to manage profiles and install content. Start **Remote Fil
 
 ## Minecraft versions
 
-The default target is **1.21.11 + Fabric 0.19.5**, using Java 21. The catalog also includes these targets.
+This fork's default target is **1.21.1 + NeoForge 21.1.250**, using Java 21 (upstream's default is **1.21.11 + Fabric 0.19.5**). The default is configurable from `scripts/config.ps1`; the catalog also includes these targets.
 
 | Minecraft version | Loaders in the catalog | Status |
 | --- | --- | --- |
@@ -86,11 +102,17 @@ Some CurseForge authors block downloads by third-party launchers. If a pack need
 
 Shader packs need a compatible shader loader such as Iris or Oculus in the same profile. Installing a shader pack does not guarantee it will render correctly or run well on Xbox.
 
+The GLFW shim also avoids redundant per-frame work (no repeated WinRT `get_Bounds` queries from the size getters, environment flags read once, bounded context logs) via the portable `glfw_shim/perf_cache.h` helpers, covered by `tests/perf_cache_test.cpp`. This changes **no graphics setting** — VSync, framebuffer resolution and the Mesa/D3D12 path are untouched; see [docs/FAQ.md](docs/FAQ.md#can-the-launcher-code-itself-give-me-more-fps). It frees render-thread CPU but no FPS gain is claimed without a console measurement.
+
+**Embeddium and Rubidium are not supported on Forge 1.20.1.** Their 0.3.x chunk renderer has no off switch (it always issues `glMultiDrawElementsBaseVertex` with UBO/immutable-buffer storage) and crashes Mesa's WGL/llvmpipe UWP path with `EXCEPTION_ACCESS_VIOLATION` a few seconds after joining a world. `1.20.1 / Forge` no longer recommends any Sodium-family renderer, and the launcher moves those jars aside as `*.jar.disabled` before launch (reversible; opt in with an empty `config/bandit-keep-forge-renderer.txt`). Fabric's Sodium and other Minecraft versions are unaffected. The other recommended optimization mods stay and the profile runs with Minecraft's own renderer. See [docs/FAQ.md](docs/FAQ.md) and [the Spanish guide](docs/FORK-NATIVE-NEOFORGE.es.md#los-mods-de-render-no-funcionan-en-1201-forge-embeddium--rubidium).
+
+Embeddium 0.3.x also probes the GPU through OSHI 6.2.2 / JNA / WMI while mods are loading. That path needs `Ole32` (COM), which the UWP container blocks with `UnsatisfiedLinkError: Unable to load library 'Ole32'`. The package now ships a COM shim as `natives/Ole32.dll` and `natives/OleAut32.dll` and passes `-Djna.library.path` so JNA gets absolute paths and every COM call returns `E_FAIL` / a null BSTR; OSHI turns that into a caught `COMException` and an empty hardware result instead of aborting mod loading. Because Windows resolves native imports by DLL base name, that shim also has to export the whole `ole32.lib`/`oleaut32.lib` surface OpenAL Soft imports (`PropVariantClear`, `CoTaskMemAlloc`, …), otherwise LWJGL fails with `OpenAL.dll (error code = 127)` at `ALC.<clinit>`; the launcher additionally preloads the real system `ole32.dll`/`oleaut32.dll` before creating the JVM. `PropVariantClear`/`VariantClear` reset their structure and return `S_OK` like the OS (OpenAL Soft reuses a `PROPVARIANT` right after `clear()`; a stale pointer there can cause an `EXCEPTION_ACCESS_VIOLATION` once audio starts). For native `hs_err` crashes the main crash screen now shows the problematic frame, so a photo of it identifies the failing DLL. Details in [docs/FAQ.md](docs/FAQ.md) and [the Spanish guide](docs/FORK-NATIVE-NEOFORGE.es.md#minecraft-crasheo-mientras-cargaba-los-mods-por-oshi--jna--wmi-ole32).
+
 ## Controller and mouse
 
-Bandit Controller is included for the catalog targets that have a controller provider. Press **View/Back** in game to open its settings. Controller availability for each target is listed in [the version catalog](config/versions.tsv).
+This fork no longer builds the Bandit Controller mod. **Controlify** (plus its required YACL dependency) is bundled in the APPX and placed in `mods/` automatically for new instances of the default `1.21.1 / NeoForge 21.1.250` target. The pins, hashes and sizes live in [config/controlify-bundle.json](config/controlify-bundle.json).
 
-To use another controller mod, turn **Bandit Controller** off for that profile before installing it.
+For other catalog targets, install the matching Controlify version from the Mods browser. The old per-profile "Bandit On/Off" switch is gone; the **Controlify** button only removes stale Bandit controller jars left by older packages. The UWP compatibility mod `banditvault-xbox-compat` is still bundled because it patches filesystem/LWJGL behaviour on Xbox.
 
 - **Main nightly** uses the optional mouse relay. A browser page is available from the launcher. Companion downloads for Windows, Android and iOS are on the [Mouse Relay release](https://github.com/veroxsity/JavaUWP/releases/tag/mouse-relay-nightly).
 - **Native mouse nightly** accepts a USB mouse directly. Launcher Settings has separate menu and game mouse sensitivity controls.

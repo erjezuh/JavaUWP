@@ -21,7 +21,7 @@ MC.Xbox/
   App.cpp                 UWP entry, App lifecycle, Run() orchestration
   runtime_config.h.in     Build time version template
   common/                 Shared helpers, crash reports
-  net/                    HTTP client, remote file server, web relay server
+  net/                    HTTP client, remote file server
   auth/                   Microsoft / Minecraft auth
   ui/                     Launcher UI, auth screen, launcher mouse, UI globals
   mods/                   Modrinth browser, defaults, mod types
@@ -40,7 +40,7 @@ MC.Xbox/
       cleanroom.*         Cleanroom launch provider for Forge 1.12.2
 ```
 
-`build.ps1` compiles sources from these folders with include paths for `.`, `common`, `net`, `auth`, `ui`, `mods`, `profiles`, `launch`, `launch/loaders`, and `mouse_support` for the relay mouse API.
+`build.ps1` compiles sources from these folders with include paths for `.`, `common`, `net`, `auth`, `ui`, `mods`, `profiles`, `launch`, and `launch/loaders`.
 
 ## Module Responsibilities
 
@@ -53,7 +53,7 @@ MC.Xbox/
 | `auth/minecraft_auth` | Device code sign in, token exchange, ownership verification, session state. |
 | `ui/launcher_ui` | Main menu rendering and interaction. |
 | `ui/auth_screen` | Sign in screen and QR/device code presentation. |
-| `ui/launcher_mouse` | Loads `mouse_support.dll` and drives the relay cursor in launcher menus and the mod browser. |
+| `ui/launcher_mouse` | Maps CoreWindow pointer input into launcher menu and mod browser coordinates. |
 | `mods/mods_browser` | Modrinth search, recommended list loading, version resolution, install into active profile. |
 | `mods/mod_defaults` | Launcher seeded mod compatibility defaults per target. |
 | `profiles/profiles` | Profile CRUD, per profile game dirs, selected launch target. |
@@ -61,7 +61,6 @@ MC.Xbox/
 | `net/update_check` | Looks up the newest release on the build's channel and the changelog on GitHub, keeps the answer in `LocalState\updates`, and turns changelog markdown into plain text for the What's new page and the new version notice. The channel comes from `-ReleaseChannel` on `build.ps1`, so local builds do not check. |
 | `net/remote_file_server` | Local network upload/download UI backend. |
 | `net/html_translate` | Translates a page the Remote Files server sends by looking up its text, titles and placeholders by their English text. |
-| `net/web_relay_server` | Browser mouse touchpad served on the local network, forwarded to the relay input port. |
 | `launch/runtime_manager` | Manifest verification, parallel downloads, version JSON resolution, native library prep. |
 | `launch/minecraft_launch` | Shared JVM embed path: classpath assembly, natives, game args, process local Java startup. |
 | `launch/launch_internal` | Low level Java invocation helpers used by loader specific prep. |
@@ -100,7 +99,7 @@ When version JSON needs loader specific fields, `ResolveVersionInfo()` delegates
 `launch/minecraft_launch.cpp` handles the common embed path:
 
 - Locates packaged JREs (`jre`, `jre21`, and `jre17` when packaged for Java 17 targets).
-- Syncs bundled loader mods from `runtime/version-mods/<target-id>/` into the active profile `mods/` folder for Forge and NeoForge launches.
+- Syncs bundled loader mods (the UWP compat mod and, for the default target, the Controlify bundle) from `runtime/version-mods/<target-id>/` into the active profile `mods/` folder for Forge and NeoForge launches.
 - Builds the base classpath from resolved version data.
 - Applies UWP native library paths and GLFW shim placement.
 - Calls loader hooks before adjusting classpath and JVM options.
@@ -140,6 +139,10 @@ Shared parsing helpers live in `launch/loaders/loader_common.*`.
 
 NeoForge generates patched client artifacts on first launch from downloaded official inputs. Do not commit or redistribute generated NeoForge client jars.
 
+The version used for Maven paths comes from the catalog row (`LaunchTarget.loaderVersion`), which is the version whose installer and artifacts were downloaded. `MC.Xbox/launch/loaders/neoforge_version.h` provides the pure resolver; it falls back to parsing the installer's `version.json` id only for legacy profiles without a catalog row, and accepts `neoforge-21.1.250`, `1.21.1-neoforge-21.1.250` and bare `21.1.250` ids. The same header is unit tested outside the UWP build in `tests/neoforge_version_test.cpp`.
+
+In this fork the default launch target is compiled from `scripts/config.ps1` (`DefaultLoader`, `DefaultLoaderVersion`, `DefaultLaunchVersion`, `DefaultJavaRuntime`, `DefaultControllerProvider`), and `build.ps1` uses those same values for `download_manifest.tsv`, the default per-target manifest and the default `runtime/version-mods/<id>` directory. Upstream hardcodes Fabric in all of those places.
+
 ### Forge
 
 `launch/loaders/forge.cpp` implements the experimental Forge provider. It follows the same loader hook pattern as NeoForge:
@@ -164,6 +167,7 @@ The target is pinned to Cleanroom `0.3.35-alpha`, which runs on Java 21 and LWJG
 - There is no install step beyond that. Cleanroom binpatches the vanilla client while classes load, like Forge did on 1.12, so the runtime jar goes on the classpath ahead of the client.
 - `CleanroomBeforeLaunch` seeds three config values the first time. The Forge loading splash is turned off, because it draws from a second thread on a shared GL context and the shim only has one. Forge's IME blocking is turned off, since it loads `imm32` through JNA and the UWP container refuses that. The patch-mod check is turned off, so the game does not stop at a "press any key" screen.
 - Chunk render buffers take about 10 MB each and 1.12 makes one per builder, so Cleanroom launches with `-Xmx2560M -XX:MaxDirectMemorySize=1G`.
+- All other targets use a 3.5 GiB heap (`-Xmx3584M -Xms512M -XX:MaxDirectMemorySize=512M`) sized for modded profiles. HotSpot rejects decimal `-Xmx` values, so the value is in whole MiB. `jvm_args.txt` is appended last and can override it; the ~5120 MB Series S app budget leaves little headroom once metaspace and the Mesa/D3D12 runtime are counted.
 - lwjglxx resets its idea of the window size after the first poll and would draw at 854x480. The GLFW shim re-sends the real window and framebuffer size on the first swap when it differs from what was asked for.
 - `patch/cleanroom/` builds `cleanroom-uwp-patch.jar` with no-op replacements for the dwmapi, ntdll and taskbar hooks in Cleanroom `0.4` and later. It is skipped for `0.3.35`, which has none of them.
 - Mod browsers search Forge mods for this target, and the launch screen labels it Forge.
@@ -174,12 +178,12 @@ To add another Forge target:
 
 1. Extend the provider logic in `launch/loaders/forge.cpp`.
 2. Add or update the target row in `config/versions.tsv`.
-3. Ensure `build.ps1` generates the matching manifest and any per target controller mod jar.
+3. Ensure `build.ps1` generates the matching manifest and the per-target UWP compatibility mod where required. The Bandit controller mod is no longer built.
 4. Confirm dispatch in `launch/loaders/loader.cpp` covers the new loader version.
 
-## Mouse Relay
+## Native mouse
 
-Xbox UWP does not expose a real mouse, so mouse input comes from an optional relay. `mouse_support.dll` (built from `mouse_support/`) is the single mouse source: it owns the UDP listener and exposes frames through a small C API. The GLFW shim links it for in game mouse input, and the launcher loads it through `ui/launcher_mouse` to drive the cursor in menus and the mod browser. Input can come from the native Bandit Mouse Relay app in `tools/mouse-relay/` (Windows and Android, UDP `7331`) or from `net/web_relay_server`, which serves a browser touchpad on port `6090` so any phone or PC can relay without installing an app.
+This branch packages as `Microsoft.MicrosoftEdge.BanditLauncher`. The Xbox shell is expected to deliver mouse input to that identity. The launcher reads CoreWindow pointer events. The GLFW shim reads pointer buttons and wheel events plus MouseDevice movement deltas for Minecraft. The system cursor is hidden and each UI draws its own cursor. Controller snap and free cursor modes remain available.
 
 ## Build Time vs Runtime Configuration
 
@@ -199,9 +203,8 @@ Changing the default target requires updating `scripts/config.ps1` and usually `
 | --- | --- |
 | `glfw_shim/` | Replaces desktop `glfw.dll` behavior for UWP windowing, input, and WGL. |
 | `compat_mod/` | Fabric compatibility mod: filesystem, graphics, and sandbox fixes per target. |
-| `controller_mod/` | Shared controller core plus loader-specific controller mods built into `runtime/version-mods/<target-id>/`. |
+| `controller_mod/` | Legacy Bandit Controller sources, kept for reference but no longer compiled or packaged. Controller support comes from the Controlify bundle in `config/controlify-bundle.json`. |
 | `patch/` | Supplies patched Fabric Loader classes and securejarhandler UWP changes packaged into the APPX. |
-| `mouse_support/` | Standalone DLL that owns relay mouse input; linked into the GLFW shim for in game use and loaded by the launcher for menu use. |
 | `mesa-runtime/` | Series console OpenGL translation runtime packaged under `graphics/`. |
 
 ## Where To Start For Common Tasks
@@ -209,16 +212,16 @@ Changing the default target requires updating `scripts/config.ps1` and usually `
 | Task | Start here |
 | --- | --- |
 | Add a Fabric target | `config/versions.tsv`, `scripts/config.ps1`, `launch/loaders/fabric.cpp`, [BUILDING.md](BUILDING.md) |
-| Add a NeoForge target | `config/versions.tsv`, manifest generation in `scripts/`, `launch/loaders/neoforge.cpp`, `controller_mod/neoforge/` if controller support is needed |
-| Add another Forge target | `launch/loaders/forge.cpp`, `config/versions.tsv`, `controller_mod/forge/` if controller support is needed |
-| Change bundled controller behavior | `controller_mod/`, `glfw_shim/glfw_uwp.cpp`, `mods/mod_defaults.cpp` |
+| Add a NeoForge target | `config/versions.tsv`, manifest generation in `scripts/`, `launch/loaders/neoforge.cpp` (install Controlify from the Mods browser for controller support) |
+| Add another Forge target | `launch/loaders/forge.cpp`, `config/versions.tsv` |
+| Change bundled controller behavior | `config/controlify-bundle.json`, `build.ps1`, `mods/mod_defaults.cpp` |
 | Change sign in or ownership checks | `auth/minecraft_auth.cpp` |
 | Change main menu or auth UI | `ui/launcher_ui.cpp`, `ui/auth_screen` |
 | Change downloads or repair behavior | `launch/runtime_manager.cpp` |
 | Change Modrinth install behavior | `mods/mods_browser.cpp` |
 | Change recommended mods | `config/recommended-mods.json` |
 | Change remote uploads | `net/remote_file_server.cpp` |
-| Change relay mouse behavior | `mouse_support/`, `glfw_shim/glfw_uwp.cpp`, `ui/launcher_mouse.cpp`, `net/web_relay_server.cpp` |
+| Change native mouse behavior | `MC.Xbox/App.cpp`, `glfw_shim/glfw_uwp.cpp`, `ui/launcher_mouse.cpp` |
 
 ## Auth Boundary
 

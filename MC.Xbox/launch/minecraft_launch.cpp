@@ -9,6 +9,7 @@
 #include "launch_diagnostics.h"
 #include "neoforge.h"
 #include "launcher_common.h"
+#include "win32_long_path.h"
 #include "mod_defaults.h"
 #include "mods_browser.h"
 #include "profiles.h"
@@ -27,6 +28,7 @@
 #include <chrono>
 #include <fstream>
 #include <functional>
+#include <initializer_list>
 #include <map>
 #include <mutex>
 #include <sstream>
@@ -425,7 +427,7 @@ void CollectManifestLibraryJars(
         const std::wstring libraryRelative = e.relativePath.substr(wcslen(L"game\\libraries\\"));
         const std::wstring packagedOverride = packageDir + L"\\runtime\\libraries\\" + libraryRelative;
         const std::wstring abs =
-            GetFileAttributesW(packagedOverride.c_str()) != INVALID_FILE_ATTRIBUTES
+            GetFileAttributesW(javauwp::ToSafeFilePath(packagedOverride).c_str()) != INVALID_FILE_ATTRIBUTES
                 ? packagedOverride
                 : JoinRuntimeRelativePath(runtimeRoot, e.relativePath);
         if (!abs.empty()) jars.push_back(abs);
@@ -577,6 +579,32 @@ static bool PreloadJvm(
     const std::wstring path = jreBin + L";" + jreServer + L";" + exeDir + L";" + nativesDir + L";" + GetEnvVarString(L"PATH");
     SetEnvironmentVariableW(L"PATH", path.c_str());
     SetEnvironmentVariableW(L"JAVA_HOME", jreDir.c_str());
+
+    // Native libraries resolve ole32.lib / oleaut32.lib imports by the bare DLL
+    // name. JNA loads the packaged COM shim as "Ole32.dll" by absolute path
+    // during OSHI/WMI hardware probes, which puts a module with that base name
+    // in the process before LWJGL loads OpenAL.dll. Windows can then bind
+    // OpenAL.dll's COM imports to the shim instead of the system DLL, and a
+    // missing export aborts the load with ERROR_PROC_NOT_FOUND (error 127).
+    // Preload the real OS COM DLLs first, before the JVM exists, so native
+    // audio binds to the OS implementation and keeps its WASAPI backend.
+    // Use plain LoadLibraryW (already used by the packaged glfw shim): a bare
+    // KnownDLL name is accepted here, while JNA's LoadLibraryExW with
+    // LOAD_WITH_ALTERED_SEARCH_PATH is what the app container rejects.
+    const std::wstring systemRoot = GetEnvVarString(L"SystemRoot");
+    for (const wchar_t* comDll : {L"ole32.dll", L"oleaut32.dll"}) {
+        HMODULE realCom = LoadLibraryW(comDll);
+        if (!realCom && !systemRoot.empty()) {
+            realCom = LoadLibraryW((systemRoot + L"\\System32\\" + comDll).c_str());
+        }
+        if (realCom) {
+            WriteLogF(L"System COM DLL preloaded: %s", comDll);
+            // Intentionally NOT FreeLibrary'd: the handle must stay resident
+            // for the whole lifetime of the JVM.
+        } else {
+            WriteLogF(L"System COM DLL preload failed: %s err=%u", comDll, GetLastError());
+        }
+    }
 
     const std::wstring packagedPrefix = packagedJreRelativeDir.empty() ? L"jre" : packagedJreRelativeDir;
     auto loadPackaged = [&](const std::wstring& relativePath, const wchar_t* label) -> HMODULE {
@@ -849,7 +877,10 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
     std::wstring mainClassPath = effectiveMainClass;
     std::replace(mainClassPath.begin(), mainClassPath.end(), L'.', L'/');
     const std::wstring libraryDir = exeDir + L"\\game\\libraries";
-    const std::wstring neoForgeVersionForLaunch = NeoForgeVersionFromLaunchVersion(launchVersion);
+    // The catalog row is the version whose installer and patched client were
+    // downloaded; only fall back to parsing the installer's version id for
+    // legacy profiles that have no catalog loader version.
+    const std::wstring neoForgeVersionForLaunch = ResolveNeoForgeLoaderVersion(launchVersion, loaderVersion);
     std::wstring neoFormVersionForLaunch = !neoFormVersion.empty()
         ? neoFormVersion
         : FirstArgValue(extraGameArgs, L"--fml.neoFormVersion");
@@ -998,8 +1029,12 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
 
     std::vector<std::string> vmOptionStorage;
     vmOptionStorage.reserve(64);
-    // 5120 MB app budget on series s dev mode, so a 3G heap that never resizes fits
-    vmOptionStorage.push_back("-Xmx3G");
+    // 5120 MB app budget on Series S dev mode. 3584M = 3.5 GiB for modded
+    // profiles; Java rejects decimal -Xmx values, so it must be spelled in MiB.
+    // Together with 512M direct buffers, metaspace and the Mesa/D3D12 runtime
+    // this is close to the budget: jvm_args.txt can lower it again if the app
+    // is killed for memory on a smaller console.
+    vmOptionStorage.push_back("-Xmx3584M");
     vmOptionStorage.push_back("-Xms512M");
     vmOptionStorage.push_back("-XX:MaxDirectMemorySize=512M");
 
@@ -1014,7 +1049,7 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
     vmOptionStorage.push_back("-XX:G1HeapRegionSize=32M");
     // hsperfdata is mmapped and rewritten every collection, on console storage that is a frame hitch
     vmOptionStorage.push_back("-XX:+PerfDisableSharedMem");
-    WriteLog(L"JVM heap: -Xmx3G -Xms512M -XX:MaxDirectMemorySize=512M, G1 at 50ms pause target");
+    WriteLog(L"JVM heap: -Xmx3584M (3.5 GiB) -Xms512M -XX:MaxDirectMemorySize=512M, G1 at 50ms pause target");
     vmOptionStorage.push_back("--enable-native-access=ALL-UNNAMED");
     vmOptionStorage.push_back("--add-opens=jdk.zipfs/jdk.nio.zipfs=ALL-UNNAMED");
     const std::wstring selectedJavaBasePatchName =
@@ -1085,6 +1120,33 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
     vmOptionStorage.push_back("-Djna.nounpack=true");
     vmOptionStorage.push_back("-Djna.boot.library.name=jnidispatch");
     vmOptionStorage.push_back("-Djna.boot.library.path=" + w2a(fwd(nativesDir)));
+    // JNA calls LoadLibraryExW("Ole32.dll", NULL, LOAD_WITH_ALTERED_SEARCH_PATH)
+    // with a bare name; the app container rejects that with ERROR_INVALID_PARAMETER
+    // ("El parametro no es correcto"). OSHI 6.2.2 reaches it from
+    // WmiQueryHandler.initCOM() while probing Win32_VideoController, and Forge
+    // mods such as Embeddium 0.3.x probe the GPU during mixin plugin onLoad(),
+    // so the UnsatisfiedLinkError escapes as "crashed while loading mods".
+    // Give JNA an absolute path to the packaged COM shims (Ole32.dll and
+    // OleAut32.dll); their entry points return E_FAIL / a null BSTR, which
+    // WmiQueryHandler.queryWMI() catches and turns into an empty WmiResult
+    // instead of aborting mod loading.
+    const std::wstring ole32ShimDir =
+        GetFileAttributesW((nativesDir + L"\\Ole32.dll").c_str()) != INVALID_FILE_ATTRIBUTES
+            ? nativesDir
+            : packagedNativesDir;
+    if (GetFileAttributesW((ole32ShimDir + L"\\Ole32.dll").c_str()) != INVALID_FILE_ATTRIBUTES) {
+        // Keep the per-target natives directory in the search path too: some
+        // targets deploy their own copies of JNA-dependent libraries there.
+        std::string jnaLibraryPath = w2a(fwd(ole32ShimDir));
+        if (ole32ShimDir != nativesDir) {
+            jnaLibraryPath += ";";
+            jnaLibraryPath += w2a(fwd(nativesDir));
+        }
+        vmOptionStorage.push_back("-Djna.library.path=" + jnaLibraryPath);
+        WriteLogF(L"JNA COM shim enabled: %s", (ole32ShimDir + L"\\Ole32.dll").c_str());
+    } else {
+        WriteLog(L"JNA COM shim missing: OSHI/WMI hardware probes can still crash mod loading");
+    }
     vmOptionStorage.push_back("-Djava.library.path=" + w2a(fwd(lwjglNativeDir)));
     vmOptionStorage.push_back("-Dorg.lwjgl.librarypath=" + w2a(fwd(lwjglNativeDir)));
     if (VerboseLoggingEnabled()) {
@@ -1134,7 +1196,7 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
             L"#\n"
             L"# These are appended after the launcher's own options, so anything set here\n"
             L"# overrides the built in value. The built ins are:\n"
-            L"#   -Xmx3G -Xms512M -XX:MaxDirectMemorySize=512M\n"
+            L"#   -Xmx3584M (3.5 GiB) -Xms512M -XX:MaxDirectMemorySize=512M\n"
             L"#   -XX:+UseG1GC -XX:+PerfDisableSharedMem\n"
             L"#   -XX:MaxGCPauseMillis=50 -XX:G1NewSizePercent=20\n"
             L"#   -XX:G1ReservePercent=20 -XX:G1HeapRegionSize=32M\n"
@@ -1142,6 +1204,10 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
             L"# Unrecognised options are ignored rather than failing the launch, so a typo\n"
             L"# here will not stop the game starting. Check mc_launch.log for lines reading\n"
             L"# \"jvm_args.txt applying:\" to confirm what was actually picked up.\n"
+            L"\n"
+            L"# Series S has a ~5120 MB app budget. If the app is killed for memory\n"
+            L"# with a large modpack, uncomment this to return to the old 3 GiB heap.\n"
+            L"#-Xmx3G\n"
             L"\n"
             L"# Write a garbage collection log next to the other logs.\n"
             L"#-Xlog:gc:file=" + gcLogPath + L":time,uptime\n"

@@ -47,6 +47,23 @@ constexpr float  kSurfaceA  = 0.80f;
 constexpr float  kPanelA    = 0.96f;
 }
 
+// Shared geometry for the dashboard-style screens. Layout numbers used to be
+// repeated per screen (and per button), so headers, rows and footers drifted
+// apart. Screens should only pick values from here.
+namespace layout {
+constexpr float kInset       = 36.0f;   // inner padding of the title-safe frame
+constexpr float kHeaderH     = 64.0f;
+constexpr float kFooterH     = 56.0f;
+constexpr float kRowH        = 64.0f;
+constexpr float kRowGap      = 10.0f;
+constexpr float kSectionH    = 26.0f;
+constexpr float kSectionGap  = 18.0f;
+constexpr float kHeroH       = 132.0f;
+constexpr float kCorner      = 14.0f;
+constexpr float kColumnRatio = 0.36f;   // menu column width / frame width
+constexpr float kColumnGap   = 28.0f;
+}
+
 class AuthScreenRenderer {
 public:
     bool Initialize(ICoreWindow* window) {
@@ -240,16 +257,22 @@ public:
 
         auto finishDraw = [&]() {
             if (cursorVisible_) {
+                // A 28px crosshair disappeared on a TV at couch distance and
+                // vanished over bright screenshots. Outline + halo + a dot in
+                // the accent colour keep it visible on both backgrounds.
                 const float cx = cursorX_;
                 const float cy = cursorY_;
-                const float arm = 14.0f;
-                const float thick = 2.0f;
-                const float box = 5.0f;
-                black->SetOpacity(0.4f);
-                d2dContext_->FillRectangle(D2D1::RectF(cx - box, cy - box, cx + box, cy + box), black.Get());
+                const float arm = 18.0f;
+                const float outline = 4.0f;
+                const float core = 2.0f;
+                black->SetOpacity(0.45f);
+                d2dContext_->FillEllipse(D2D1::Ellipse(D2D1::Point2F(cx, cy), 21.0f, 21.0f), black.Get());
                 black->SetOpacity(1.0f);
-                d2dContext_->FillRectangle(D2D1::RectF(cx - arm, cy - thick, cx + arm, cy + thick), white.Get());
-                d2dContext_->FillRectangle(D2D1::RectF(cx - thick, cy - arm, cx + thick, cy + arm), white.Get());
+                d2dContext_->FillRectangle(D2D1::RectF(cx - arm, cy - outline, cx + arm, cy + outline), black.Get());
+                d2dContext_->FillRectangle(D2D1::RectF(cx - outline, cy - arm, cx + outline, cy + arm), black.Get());
+                d2dContext_->FillRectangle(D2D1::RectF(cx - arm, cy - core, cx + arm, cy + core), white.Get());
+                d2dContext_->FillRectangle(D2D1::RectF(cx - core, cy - arm, cx + core, cy + arm), white.Get());
+                d2dContext_->FillEllipse(D2D1::Ellipse(D2D1::Point2F(cx, cy), 3.5f, 3.5f), accent.Get());
             }
             HRESULT hr = d2dContext_->EndDraw();
             if (FAILED(hr)) {
@@ -411,12 +434,12 @@ public:
                     const bool controllerFocus = state.modsProfileFocus == 5;
                     if (controllerFocus) GlowSelect(controllerBtn, 12.0f);
                     FillRound(controllerBtn, surfaceFill.Get(), 12.0f);
-                    StrokeRound(controllerBtn, state.modsProfileControllerModEnabled ? accent.Get() : muted.Get(), 12.0f, controllerFocus ? 3.0f : 2.0f);
+                    StrokeRound(controllerBtn, accent.Get(), 12.0f, controllerFocus ? 3.0f : 2.0f);
                     DrawIcon(L"\uE7FC", D2D1::RectF(controllerBtn.left + 12.0f, controllerBtn.top, controllerBtn.left + 36.0f, controllerBtn.bottom),
-                        state.modsProfileControllerModEnabled ? accent.Get() : muted.Get());
-                    DrawText(state.modsProfileControllerModEnabled ? Tr(L"Bandit On") : Tr(L"Bandit Off"), smallMid_.Get(),
+                        accent.Get());
+                    DrawText(Tr(L"Controlify"), smallMid_.Get(),
                         D2D1::RectF(controllerBtn.left + 38.0f, controllerBtn.top, controllerBtn.right - 6.0f, controllerBtn.bottom),
-                        state.modsProfileControllerModEnabled ? accent.Get() : muted.Get());
+                        accent.Get());
 
                     const D2D1_RECT_F exportBtn = D2D1::RectF(right - btnW * 3.0f - btnGap * 2.0f, top, right - btnW * 2.0f - btnGap * 2.0f, top + btnH);
                     RegisterHit(launchhit::kProfileExport, exportBtn);
@@ -457,7 +480,7 @@ public:
                 } else if (!state.modsProfileBuiltin) {
                     if (gridFocus) profileHint = Tr(L"B  Back      X  Remove mod      Y  Rename");
                     else if (state.modsProfileFocus == 4) profileHint = Tr(L"B  Back      A  Export .mrpack for PC");
-                    else if (state.modsProfileFocus == 5) profileHint = Tr(L"B  Back      A  Toggle Bandit controller mod      Y Rename");
+                    else if (state.modsProfileFocus == 5) profileHint = Tr(L"B  Back      A  Clean legacy controller mods      Y Rename");
                     else profileHint = Tr(L"B  Back      A select      X Delete      Y Rename");
                 }
                 DrawText(profileHint.c_str(),
@@ -867,148 +890,81 @@ public:
         }
 
         if (state.showSettings) {
-            const float left = frame.left + 54.0f;
-            const float right = frame.right - 54.0f;
+            const float left = frame.left + layout::kInset;
+            const float right = frame.right - layout::kInset;
             const float top = frame.top + 58.0f;
 
             const D2D1_RECT_F back = DrawBackChip(left, top + 6.0f, surfaceFill.Get(), softEdge.Get(), muted.Get());
             DrawText(Tr(L"Settings"), titleFormat_.Get(),
                 D2D1::RectF(back.right + 16.0f, top, right, top + 58.0f), white.Get());
 
-            const float rowH = 84.0f;
-            float rowY = top + 96.0f;
-
-            {
+            const float rowH = layout::kRowH;
+            float rowY = top + 78.0f;
+            auto drawSection = [&](const wchar_t* label) {
+                rowY += 6.0f;
+                DrawSectionLabel(label, left, right, rowY, muted.Get(), accent.Get());
+                rowY += layout::kSectionH;
+            };
+            auto drawSettingsRow = [&](int index, const wchar_t* title, const wchar_t* detail, const wchar_t* value, float valueWidth = 140.0f) {
                 const D2D1_RECT_F row = D2D1::RectF(left, rowY, right, rowY + rowH);
-                const bool sel = state.settingsSelected == 0;
-                if (sel) GlowSelect(row, 12.0f);
-                FillRound(row, sel ? accentSoft.Get() : surfaceFill.Get(), 12.0f);
-                StrokeRound(row, sel ? accent.Get() : softEdge.Get(), 12.0f, sel ? 3.0f : 1.0f);
-                DrawText(Tr(L"Send crash reports and usage stats"), bodyMid_.Get(),
-                    D2D1::RectF(row.left + 22.0f, row.top + 10.0f, right - 160.0f, row.top + 44.0f),
-                    sel ? accent.Get() : white.Get());
-                DrawText(
-                    Tr(L"Crash reports and basic launch counts use the same setting."),
-                    smallFormat_.Get(),
-                    D2D1::RectF(row.left + 22.0f, row.top + 44.0f, right - 160.0f, row.bottom - 8.0f),
+                const bool selected = state.settingsSelected == index;
+                if (selected) GlowSelect(row, 12.0f);
+                FillRound(row, selected ? accentSoft.Get() : surfaceFill.Get(), 12.0f);
+                StrokeRound(row, selected ? accent.Get() : softEdge.Get(), 12.0f, selected ? 3.0f : 1.0f);
+                const float textRight = value ? right - (valueWidth + 50.0f) : right - 22.0f;
+                DrawText(Tr(title), bodyMid_.Get(),
+                    D2D1::RectF(row.left + 22.0f, row.top + 2.0f, textRight, row.top + 34.0f),
+                    selected ? accent.Get() : white.Get());
+                DrawText(Tr(detail), smallFormat_.Get(),
+                    D2D1::RectF(row.left + 22.0f, row.top + 36.0f, textRight, row.bottom - 2.0f),
                     muted.Get());
+                if (value) {
+                    const D2D1_RECT_F pill = D2D1::RectF(right - (valueWidth + 22.0f), row.top + 10.0f, right - 22.0f, row.bottom - 10.0f);
+                    FillRound(pill, selected ? accent.Get() : panel.Get(), 10.0f);
+                    StrokeRound(pill, selected ? accent.Get() : softEdge.Get(), 10.0f, 1.5f);
+                    DrawText(Tr(value), pillFormat_.Get(), pill, selected ? black.Get() : muted.Get());
+                }
+                RegisterHit(launchhit::kSettingsRowBase + index, row);
+                rowY = row.bottom + layout::kRowGap;
+            };
 
-                const D2D1_RECT_F pill = D2D1::RectF(right - 132.0f, row.top + 22.0f, right - 22.0f, row.bottom - 22.0f);
-                FillRound(pill, state.settingsReportingOn ? accent.Get() : panel.Get(), 10.0f);
-                StrokeRound(pill, state.settingsReportingOn ? accent.Get() : softEdge.Get(), 10.0f, 1.5f);
-                DrawText(state.settingsReportingOn ? Tr(L"On") : Tr(L"Off"), pillFormat_.Get(), pill,
-                    state.settingsReportingOn ? black.Get() : muted.Get());
+            const std::wstring menuSpeed = std::to_wstring(state.settingsMenuMouseSpeed) + L"%";
+            const std::wstring gameSpeed = std::to_wstring(state.settingsGameMouseSpeed) + L"%";
+            drawSection(TR_NOOP(L"Controls"));
+            drawSettingsRow(0, TR_NOOP(L"Menu mouse sensitivity"), TR_NOOP(L"Launcher and Minecraft menus. Left/right to adjust."), menuSpeed.c_str());
+            drawSettingsRow(1, TR_NOOP(L"Game mouse sensitivity"), TR_NOOP(L"Mouse look in game. Minecraft sensitivity still applies."), gameSpeed.c_str());
+            drawSection(TR_NOOP(L"Privacy & diagnostics"));
+            drawSettingsRow(2, TR_NOOP(L"Send crash reports and usage stats"),
+                TR_NOOP(L"Crash reports and basic launch counts use the same setting."),
+                state.settingsReportingOn ? TR_NOOP(L"On") : TR_NOOP(L"Off"));
+            drawSettingsRow(3, TR_NOOP(L"Reset the reporting id"), state.settingsInstallId.c_str(), nullptr);
+            const bool curseForge = state.settingsModSource == ModSource::CurseForge;
+            const std::wstring sourceDetail = curseForge
+                ? (state.settingsCurseForgeKeyHint.empty()
+                    ? std::wstring(Tr(L"No API key set. Add one in Remote Files or CurseForge stays empty."))
+                    : TrFormat(L"API key saved ({0}).", { state.settingsCurseForgeKeyHint }))
+                : std::wstring(Tr(L"Modrinth needs no key. Switch to CurseForge to browse there instead."));
+            drawSection(TR_NOOP(L"Content & updates"));
+            drawSettingsRow(4, TR_NOOP(L"Mod download source"), sourceDetail.c_str(), curseForge ? L"CurseForge" : L"Modrinth");
 
-                RegisterHit(launchhit::kSettingsRowBase + 0, row);
-                rowY = row.bottom + 18.0f;
-            }
-
-            {
-                const D2D1_RECT_F row = D2D1::RectF(left, rowY, right, rowY + rowH);
-                const bool sel = state.settingsSelected == 1;
-                if (sel) GlowSelect(row, 12.0f);
-                FillRound(row, sel ? accentSoft.Get() : surfaceFill.Get(), 12.0f);
-                StrokeRound(row, sel ? accent.Get() : softEdge.Get(), 12.0f, sel ? 3.0f : 1.0f);
-                DrawText(Tr(L"Reset the reporting id"), bodyMid_.Get(),
-                    D2D1::RectF(row.left + 22.0f, row.top + 10.0f, right - 22.0f, row.top + 44.0f),
-                    sel ? accent.Get() : white.Get());
-                DrawText(state.settingsInstallId.c_str(), smallFormat_.Get(),
-                    D2D1::RectF(row.left + 22.0f, row.top + 44.0f, right - 22.0f, row.bottom - 8.0f),
-                    muted.Get());
-                RegisterHit(launchhit::kSettingsRowBase + 1, row);
-                rowY = row.bottom + 18.0f;
-            }
-
-            {
-                const D2D1_RECT_F row = D2D1::RectF(left, rowY, right, rowY + rowH);
-                const bool sel = state.settingsSelected == 2;
-                if (sel) GlowSelect(row, 12.0f);
-                FillRound(row, sel ? accentSoft.Get() : surfaceFill.Get(), 12.0f);
-                StrokeRound(row, sel ? accent.Get() : softEdge.Get(), 12.0f, sel ? 3.0f : 1.0f);
-                DrawText(Tr(L"Mod download source"), bodyMid_.Get(),
-                    D2D1::RectF(row.left + 22.0f, row.top + 10.0f, right - 170.0f, row.top + 44.0f),
-                    sel ? accent.Get() : white.Get());
-                const bool curseForge = state.settingsModSource == ModSource::CurseForge;
-                const std::wstring sub = curseForge
-                    ? (state.settingsCurseForgeKeyHint.empty()
-                        ? std::wstring(Tr(L"No API key set. Add one in Remote Files or CurseForge stays empty."))
-                        : TrFormat(L"API key saved ({0}).", { state.settingsCurseForgeKeyHint }))
-                    : std::wstring(Tr(L"Modrinth needs no key. Switch to CurseForge to browse there instead."));
-                DrawText(sub.c_str(), smallFormat_.Get(),
-                    D2D1::RectF(row.left + 22.0f, row.top + 44.0f, right - 170.0f, row.bottom - 8.0f),
-                    muted.Get());
-
-                const D2D1_RECT_F pill = D2D1::RectF(right - 152.0f, row.top + 22.0f, right - 22.0f, row.bottom - 22.0f);
-                FillRound(pill, curseForge ? accent.Get() : panel.Get(), 10.0f);
-                StrokeRound(pill, curseForge ? accent.Get() : softEdge.Get(), 10.0f, 1.5f);
-                DrawText(curseForge ? L"CurseForge" : L"Modrinth", pillFormat_.Get(), pill,
-                    curseForge ? black.Get() : white.Get());
-
-                RegisterHit(launchhit::kSettingsRowBase + 2, row);
-                rowY = row.bottom + 18.0f;
-            }
-
-            {
-                const D2D1_RECT_F row = D2D1::RectF(left, rowY, right, rowY + rowH);
-                const bool sel = state.settingsSelected == 3;
-                if (sel) GlowSelect(row, 12.0f);
-                FillRound(row, sel ? accentSoft.Get() : surfaceFill.Get(), 12.0f);
-                StrokeRound(row, sel ? accent.Get() : softEdge.Get(), 12.0f, sel ? 3.0f : 1.0f);
-                DrawText(Tr(L"Check for new versions"), bodyMid_.Get(),
-                    D2D1::RectF(row.left + 22.0f, row.top + 10.0f, right - 160.0f, row.top + 44.0f),
-                    sel ? accent.Get() : white.Get());
-                DrawText(
-                    Tr(L"Asks GitHub which version is newest when the launcher opens. Nothing about you is sent."),
-                    smallFormat_.Get(),
-                    D2D1::RectF(row.left + 22.0f, row.top + 44.0f, right - 160.0f, row.bottom - 8.0f),
-                    muted.Get());
-
-                const D2D1_RECT_F pill = D2D1::RectF(right - 132.0f, row.top + 22.0f, right - 22.0f, row.bottom - 22.0f);
-                FillRound(pill, state.settingsUpdateCheckOn ? accent.Get() : panel.Get(), 10.0f);
-                StrokeRound(pill, state.settingsUpdateCheckOn ? accent.Get() : softEdge.Get(), 10.0f, 1.5f);
-                DrawText(state.settingsUpdateCheckOn ? Tr(L"On") : Tr(L"Off"), pillFormat_.Get(), pill,
-                    state.settingsUpdateCheckOn ? black.Get() : muted.Get());
-
-                RegisterHit(launchhit::kSettingsRowBase + 3, row);
-                rowY = row.bottom + 18.0f;
-            }
-
-            {
-                const D2D1_RECT_F row = D2D1::RectF(left, rowY, right, rowY + rowH);
-                const bool sel = state.settingsSelected == 4;
-                if (sel) GlowSelect(row, 12.0f);
-                FillRound(row, sel ? accentSoft.Get() : surfaceFill.Get(), 12.0f);
-                StrokeRound(row, sel ? accent.Get() : softEdge.Get(), 12.0f, sel ? 3.0f : 1.0f);
-                DrawText(Tr(L"Language"), bodyMid_.Get(),
-                    D2D1::RectF(row.left + 22.0f, row.top + 10.0f, right - 290.0f, row.top + 44.0f),
-                    sel ? accent.Get() : white.Get());
-                DrawText(
-                    Tr(L"Anything that is not translated yet stays in English."),
-                    smallFormat_.Get(),
-                    D2D1::RectF(row.left + 22.0f, row.top + 44.0f, right - 290.0f, row.bottom - 8.0f),
-                    muted.Get());
-
-                const D2D1_RECT_F pill = D2D1::RectF(right - 262.0f, row.top + 22.0f, right - 22.0f, row.bottom - 22.0f);
-                FillRound(pill, panel.Get(), 10.0f);
-                StrokeRound(pill, softEdge.Get(), 10.0f, 1.5f);
-                DrawText(state.settingsLanguageName.c_str(), pillFormat_.Get(), pill, white.Get());
-
-                RegisterHit(launchhit::kSettingsRowBase + 4, row);
-                rowY = row.bottom + 18.0f;
-            }
+            drawSettingsRow(5, TR_NOOP(L"Check for new versions"),
+                TR_NOOP(L"Asks GitHub which version is newest when the launcher opens. Nothing about you is sent."),
+                state.settingsUpdateCheckOn ? TR_NOOP(L"On") : TR_NOOP(L"Off"));
+            drawSettingsRow(6, TR_NOOP(L"Language"), TR_NOOP(L"Anything that is not translated yet stays in English."),
+                state.settingsLanguageName.c_str(), 240.0f);
 
             DrawText(
                 state.settingsConfigured
                     ? Tr(L"Reports use a random id and include launcher and Minecraft versions, loader details, launch stage, memory totals and a mod list hash. Mod jar names and project ids can be sent when a crash needs them. A crash trace can include exception text and Java class names. The launcher does not add your account, gamertag, worlds or access token. Common user and app storage paths are scrubbed. The id stays the same until it is reset.")
                     : Tr(L"No reporting server is configured on this install, so nothing can be sent either way."),
-                smallFormat_.Get(), D2D1::RectF(left, rowY + 6.0f, right, rowY + 110.0f), muted.Get());
+                captionFormat_.Get(), D2D1::RectF(left, rowY + 8.0f, right, frame.bottom - 100.0f), muted.Get());
 
             if (!state.settingsNote.empty()) {
                 DrawText(state.settingsNote.c_str(), smallFormat_.Get(),
-                    D2D1::RectF(left, frame.bottom - 92.0f, right, frame.bottom - 56.0f), accent.Get());
+                    D2D1::RectF(left, frame.bottom - 100.0f, right, frame.bottom - 64.0f), accent.Get());
             }
-            DrawText(Tr(L"Press B or select Back to return to the launcher."), smallFormat_.Get(),
-                D2D1::RectF(left, frame.bottom - 50.0f, right, frame.bottom - 18.0f), muted.Get());
+            DrawFooterBar(frame, Tr(L"Up/Down to choose   Left/Right to adjust   B to go back"),
+                muted.Get(), softEdge.Get());
 
             finishDraw();
             return;
@@ -1090,50 +1046,157 @@ public:
         }
 
         if (state.showMainMenu) {
-            const float left = frame.left + 36.0f;
-            const float menuRight = frame.left + (frame.right - frame.left) * 0.34f;
-            const float previewLeft = menuRight + 34.0f;
-            const float previewRight = frame.right - 36.0f;
-            const float top = frame.top + 34.0f;
-            const float buttonH = 56.0f;
-            const float buttonGap = 14.0f;
+            const float left = frame.left + layout::kInset;
+            const float right = frame.right - layout::kInset;
+            const float headerTop = frame.top + 28.0f;
+            const float contentTop = headerTop + layout::kHeaderH + 12.0f;
+            const float footerLine = frame.bottom - layout::kFooterH;
+            const float contentBottom = footerLine - 22.0f;
+            const float menuRight = left + (right - left) * layout::kColumnRatio;
+            const float previewLeft = menuRight + layout::kColumnGap;
+            const float previewRight = right;
+
+            // Header: identity and account live on the dark panel, never on top
+            // of a bright screenshot where muted text disappears.
+            DrawText(title.c_str(), titleFormat_.Get(),
+                D2D1::RectF(left, headerTop, menuRight, headerTop + 52.0f), white.Get());
+            if (!state.mainMenu.account.empty()) {
+                const D2D1_RECT_F account = D2D1::RectF(right - 340.0f, headerTop + 6.0f, right, headerTop + 46.0f);
+                FillRound(account, surfaceFill.Get(), 10.0f);
+                StrokeRound(account, softEdge.Get(), 10.0f, 1.0f);
+                DrawIcon(L"\uE77B",
+                    D2D1::RectF(account.left + 12.0f, account.top, account.left + 44.0f, account.bottom), accent.Get());
+                DrawText(state.mainMenu.account.c_str(), smallMid_.Get(),
+                    D2D1::RectF(account.left + 48.0f, account.top, account.right - 12.0f, account.bottom), white.Get());
+            }
+            d2dContext_->DrawLine(
+                D2D1::Point2F(left, headerTop + layout::kHeaderH),
+                D2D1::Point2F(right, headerTop + layout::kHeaderH), softEdge.Get(), 1.0f);
+
             const wchar_t* labels[] = {
                 Tr(L"Play"), Tr(L"Mods"), Tr(L"Remote Files"), Tr(L"Settings"),
                 state.updateAvailable ? Tr(L"Update available") : Tr(L"What's new"),
                 Tr(L"Repair downloads"), Tr(L"Sign out") };
+            const wchar_t* menuIcons[] = {
+                L"\uE768", L"\uE74C", L"\uE838", L"\uE713", L"\uE946", L"\uE72C", L"\uE7E8" };
 
-            DrawText(title.c_str(), titleFormat_.Get(), D2D1::RectF(left, top, menuRight, top + 48.0f), white.Get());
-
-            const wchar_t* menuIcons[] = { L"\uE768", L"\uE74C", L"\uE838", L"\uE713", L"\uE946", L"\uE72C", L"\uE7E8" };
-            for (int i = 0; i < kMainMenuItems; ++i) {
-                const float y = top + 76.0f + i * (buttonH + buttonGap);
-                const D2D1_RECT_F button = D2D1::RectF(left, y, menuRight, y + buttonH);
-                mainMenuRects_[i] = button;
-                const bool sel = i == state.selectedMenuIndex;
-                if (sel) GlowSelect(button, 14.0f);
-                FillRound(button, sel ? accentSoft.Get() : surfaceFill.Get(), 14.0f);
-                StrokeRound(button, sel ? accent.Get() : softEdge.Get(), 14.0f, sel ? 3.0f : 1.0f);
-                DrawIcon(menuIcons[i], D2D1::RectF(button.left + 16.0f, button.top, button.left + 50.0f, button.bottom), sel ? accent.Get() : white.Get());
-                const D2D1_RECT_F textRect = D2D1::RectF(button.left + 56.0f, button.top, button.right - 12.0f, button.bottom);
-                DrawText(labels[i], bodyMid_.Get(), textRect, sel ? accent.Get() : white.Get());
+            // Primary action: one large accent hero instead of seven equal rows.
+            const D2D1_RECT_F hero = D2D1::RectF(left, contentTop, menuRight, contentTop + layout::kHeroH);
+            mainMenuRects_[0] = hero;
+            const bool playSelected = state.selectedMenuIndex == 0;
+            if (playSelected) GlowSelect(hero, 16.0f);
+            FillRound(hero, accent.Get(), 16.0f);
+            StrokeRound(hero, playSelected ? white.Get() : accent.Get(), 16.0f, playSelected ? 3.0f : 1.0f);
+            DrawIcon(L"\uE768",
+                D2D1::RectF(hero.left + 22.0f, hero.top + 16.0f, hero.left + 86.0f, hero.top + 80.0f),
+                black.Get(), true);
+            DrawText(labels[0], titleFormat_.Get(),
+                D2D1::RectF(hero.left + 96.0f, hero.top + 12.0f, hero.right - 16.0f, hero.top + 66.0f), black.Get());
+            std::wstring heroSub;
+            if (!state.mainMenu.profileName.empty() || !state.mainMenu.targetText.empty()) {
+                heroSub = state.mainMenu.profileName;
+                if (!heroSub.empty() && !state.mainMenu.targetText.empty()) heroSub += L"  -  ";
+                heroSub += state.mainMenu.targetText;
+            } else {
+                heroSub = state.detail;
             }
+            if (!heroSub.empty()) {
+                DrawText(heroSub.c_str(), captionFormat_.Get(),
+                    D2D1::RectF(hero.left + 26.0f, hero.top + 78.0f, hero.right - 20.0f, hero.bottom - 8.0f),
+                    black.Get());
+            }
+
+            // Secondary actions grouped by intent, with a visible section rule.
+            auto drawRow = [&](int i, float rowY) {
+                const D2D1_RECT_F row = D2D1::RectF(left, rowY, menuRight, rowY + layout::kRowH - 8.0f);
+                mainMenuRects_[i] = row;
+                const bool sel = i == state.selectedMenuIndex;
+                const bool destructive = i == 6;
+                if (sel) GlowSelect(row, layout::kCorner);
+                FillRound(row, sel ? accentSoft.Get() : surfaceFill.Get(), layout::kCorner);
+                StrokeRound(row, sel ? (destructive ? danger.Get() : accent.Get()) : softEdge.Get(),
+                    layout::kCorner, sel ? 3.0f : 1.0f);
+                ID2D1Brush* ink = sel && destructive ? danger.Get() : (sel ? accent.Get() : white.Get());
+                DrawIcon(menuIcons[i],
+                    D2D1::RectF(row.left + 16.0f, row.top, row.left + 50.0f, row.bottom), ink);
+                DrawText(labels[i], bodyMid_.Get(),
+                    D2D1::RectF(row.left + 56.0f, row.top, row.right - 12.0f, row.bottom), ink);
+                if (destructive && state.signOutConfirm) {
+                    ComPtr<ID2D1SolidColorBrush> confirmFill;
+                    d2dContext_->CreateSolidColorBrush(D2D1::ColorF(theme::kDanger, 0.18f), confirmFill.GetAddressOf());
+                    const D2D1_RECT_F pill = D2D1::RectF(row.right - 244.0f, row.top + 8.0f, row.right - 10.0f, row.bottom - 8.0f);
+                    FillRound(pill, confirmFill.Get(), 8.0f);
+                    DrawText(Tr(L"Press A again to sign out"), captionFormat_.Get(), pill, white.Get());
+                } else if (i == 4 && state.updateAvailable) {
+                    DrawIcon(L"\uE946",
+                        D2D1::RectF(row.right - 46.0f, row.top, row.right - 12.0f, row.bottom), accent.Get());
+                }
+            };
+            float y = hero.bottom + layout::kSectionGap;
+            DrawSectionLabel(Tr(L"Library"), left, menuRight, y, muted.Get(), accent.Get());
+            y += layout::kSectionH;
+            drawRow(1, y); y += layout::kRowH;
+            drawRow(2, y); y += layout::kRowH;
+            y += layout::kSectionGap - layout::kRowGap;
+            DrawSectionLabel(Tr(L"Launcher"), left, menuRight, y, muted.Get(), accent.Get());
+            y += layout::kSectionH;
+            for (int i = 3; i < kMainMenuItems; ++i) { drawRow(i, y); y += layout::kRowH; }
             mainMenuRectCount_ = kMainMenuItems;
 
+            // Status has its own place above the footer instead of competing
+            // with the buttons or sitting on the screenshot.
             if (!state.status.empty()) {
-                const D2D1_RECT_F statusRect = D2D1::RectF(left, frame.bottom - 88.0f, menuRight, frame.bottom - 28.0f);
-                DrawText(state.status.c_str(), smallFormat_.Get(), statusRect, state.isError ? danger.Get() : muted.Get());
+                const float statusY = contentBottom - 40.0f;
+                const D2D1_ELLIPSE dot = D2D1::Ellipse(D2D1::Point2F(left + 8.0f, statusY + 15.0f), 5.0f, 5.0f);
+                d2dContext_->FillEllipse(dot, state.isError ? danger.Get() : accent.Get());
+                DrawText(state.status.c_str(), smallFormat_.Get(),
+                    D2D1::RectF(left + 26.0f, statusY, menuRight, statusY + 34.0f),
+                    state.isError ? danger.Get() : muted.Get());
             }
 
-            const D2D1_RECT_F preview = D2D1::RectF(previewLeft, top, previewRight, frame.bottom - 34.0f);
+            const D2D1_RECT_F preview = D2D1::RectF(previewLeft, contentTop, previewRight, contentBottom);
             FillRound(preview, black.Get(), 16.0f);
             DrawScreenshots(preview, 16.0f);
             StrokeRound(preview, softEdge.Get(), 16.0f, 1.0f);
 
-            if (!state.detail.empty()) {
-                const D2D1_RECT_F detailRect = D2D1::RectF(preview.left + 26.0f, preview.bottom - 82.0f, preview.right - 26.0f, preview.bottom - 24.0f);
-                DrawText(state.detail.c_str(), smallFormat_.Get(), detailRect, muted.Get());
+            if (state.updateAvailable) {
+                const D2D1_RECT_F badge = D2D1::RectF(preview.right - 268.0f, preview.top + 20.0f,
+                    preview.right - 20.0f, preview.top + 64.0f);
+                FillRound(badge, panel.Get(), 10.0f);
+                StrokeRound(badge, accent.Get(), 10.0f, 2.0f);
+                DrawIcon(L"\uE946",
+                    D2D1::RectF(badge.left + 12.0f, badge.top, badge.left + 46.0f, badge.bottom), accent.Get());
+                DrawText(Tr(L"Update available"), smallMid_.Get(),
+                    D2D1::RectF(badge.left + 48.0f, badge.top, badge.right - 10.0f, badge.bottom), white.Get());
             }
 
+            // A real card with a dark backing: profile and target stay legible
+            // whatever screenshot is on rotation.
+            const float cardH = 146.0f;
+            const D2D1_RECT_F card = D2D1::RectF(preview.left + 22.0f, preview.bottom - cardH - 22.0f,
+                preview.right - 22.0f, preview.bottom - 22.0f);
+            ComPtr<ID2D1SolidColorBrush> cardFill;
+            d2dContext_->CreateSolidColorBrush(D2D1::ColorF(0x0B0C0E, 0.88f), cardFill.GetAddressOf());
+            FillRound(card, cardFill.Get(), 14.0f);
+            StrokeRound(card, softEdge.Get(), 14.0f, 1.0f);
+            DrawText(Tr(L"Active profile"), captionFormat_.Get(),
+                D2D1::RectF(card.left + 20.0f, card.top + 10.0f, card.right - 20.0f, card.top + 34.0f), accent.Get());
+            const std::wstring profileLine = !state.mainMenu.profileName.empty()
+                ? state.mainMenu.profileName : state.detail;
+            DrawText(profileLine.c_str(), bodyMid_.Get(),
+                D2D1::RectF(card.left + 20.0f, card.top + 36.0f, card.right - 20.0f, card.top + 74.0f), white.Get());
+            if (!state.mainMenu.targetText.empty()) {
+                DrawText(state.mainMenu.targetText.c_str(), captionFormat_.Get(),
+                    D2D1::RectF(card.left + 20.0f, card.top + 76.0f, card.right - 20.0f, card.top + 104.0f), muted.Get());
+            }
+            if (!state.status.empty()) {
+                DrawText(state.status.c_str(), captionFormat_.Get(),
+                    D2D1::RectF(card.left + 20.0f, card.top + 106.0f, card.right - 20.0f, card.bottom - 8.0f), muted.Get());
+            }
+
+            DrawFooterBar(frame,
+                state.signOutConfirm ? Tr(L"Press A again to sign out") : Tr(L"A or click to select   Up/Down to navigate"),
+                state.signOutConfirm ? danger.Get() : muted.Get(), softEdge.Get());
             finishDraw();
             return;
         }
@@ -1671,6 +1734,31 @@ private:
         DrawIcon(L"\uE72B", chip, glyph);
         RegisterHit(launchhit::kBack, chip);
         return chip;
+    }
+
+    // A small uppercase-style section rule. Shared by the main menu and
+    // Settings so grouped lists read the same way everywhere.
+    void DrawSectionLabel(const wchar_t* label, float left, float right, float y,
+        ID2D1Brush* brush, ID2D1Brush* marker) {
+        // A short accent bar reads as a category without adding another full
+        // width rule to a screen that already has row borders.
+        d2dContext_->FillRectangle(
+            D2D1::RectF(left, y + 4.0f, left + 4.0f, y + 20.0f), marker);
+        DrawText(label, captionFormat_.Get(),
+            D2D1::RectF(left + 16.0f, y, right, y + layout::kSectionH), brush);
+    }
+
+    // Persistent control hint, separated from the content by a hairline.
+    // Screens used to invent their own bottom text (and several did not have
+    // one at all), which is why navigation hints were inconsistent.
+    void DrawFooterBar(const D2D1_RECT_F& frame, const wchar_t* hint,
+        ID2D1Brush* brush, ID2D1Brush* edge) {
+        const float left = frame.left + layout::kInset;
+        const float right = frame.right - layout::kInset;
+        const float lineY = frame.bottom - layout::kFooterH;
+        d2dContext_->DrawLine(D2D1::Point2F(left, lineY), D2D1::Point2F(right, lineY), edge, 1.0f);
+        DrawText(hint, smallFormat_.Get(),
+            D2D1::RectF(left, lineY + 8.0f, right - 8.0f, frame.bottom - 10.0f), brush);
     }
 
     float CompatBannerBottom(

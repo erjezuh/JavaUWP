@@ -747,3 +747,78 @@ function Save-RemoteFile {
         }
     } finally { Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue }
 }
+
+# Resolve the loader version pinned by the version catalog. Helper scripts used
+# to hardcode a NeoForge version (21.1.233) while config/versions.tsv had
+# already moved on (21.1.250), which produced artifacts for the wrong target.
+function Resolve-CatalogLoaderVersion {
+    param(
+        [Parameter(Mandatory = $true)][string]$MinecraftVersion,
+        [string]$Loader = "neoforge"
+    )
+
+    $catalogPath = Join-Path (Resolve-RepoRoot) $ProjectConfig.VersionCatalog
+    if (-not (Test-Path -LiteralPath $catalogPath)) {
+        throw "Version catalog not found at $catalogPath"
+    }
+    $rows = @(Import-Csv -LiteralPath $catalogPath -Delimiter "`t" | Where-Object {
+        $_.minecraftVersion -eq $MinecraftVersion -and
+        $_.loader -eq $Loader -and
+        $_.loaderVersion -and
+        $_.loaderVersion -ne "none"
+    })
+    if ($rows.Count -eq 0) {
+        throw "No $Loader target for Minecraft $MinecraftVersion in $catalogPath"
+    }
+    return [string]$rows[0].loaderVersion
+}
+
+# The NeoForm coordinate is published inside the official installer profiles,
+# not in the catalog. Accept every shape NeoForge has used so far.
+function Resolve-InstallerNeoFormVersion {
+    param([Parameter(Mandatory = $true)][string]$NeoForgeVersion)
+
+    $installer = Join-Path (Get-LoaderInstallerCacheDir) "neoforge-$NeoForgeVersion-installer.jar"
+    if (-not (Test-Path -LiteralPath $installer)) {
+        $url = "https://maven.neoforged.net/releases/net/neoforged/neoforge/$NeoForgeVersion/neoforge-$NeoForgeVersion-installer.jar"
+        Save-RemoteFile -Uri $url -Path $installer
+    }
+
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $zip = [System.IO.Compression.ZipFile]::OpenRead($installer)
+    try {
+        foreach ($entryName in @("version.json", "install_profile.json")) {
+            $entry = $zip.GetEntry($entryName)
+            if (-not $entry) { continue }
+            $reader = [System.IO.StreamReader]::new($entry.Open())
+            try {
+                $profile = $reader.ReadToEnd() | ConvertFrom-Json
+            } finally {
+                $reader.Dispose()
+            }
+
+            if ($profile.arguments -and $profile.arguments.game) {
+                $arguments = @($profile.arguments.game)
+                for ($i = 0; $i -lt $arguments.Count - 1; $i++) {
+                    if ([string]$arguments[$i] -eq "--fml.neoFormVersion") {
+                        return [string]$arguments[$i + 1]
+                    }
+                }
+            }
+            if ($profile.minecraftArguments -match '--fml\.neoFormVersion\s+([^\s"]+)') {
+                return $Matches[1]
+            }
+            if ($profile.data) {
+                foreach ($property in $profile.data.PSObject.Properties) {
+                    if (@("NEOFORM_VERSION", "NEO_FORM_VERSION", "MCP_VERSION") -contains $property.Name) {
+                        $value = [string]$property.Value
+                        if ($value -match '^[0-9][0-9A-Za-z.\-_]*$') { return $value }
+                    }
+                }
+            }
+        }
+    } finally {
+        $zip.Dispose()
+    }
+    throw "NeoForm version missing from the NeoForge $NeoForgeVersion installer"
+}

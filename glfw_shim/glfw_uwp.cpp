@@ -1,6 +1,3 @@
-// glfw_uwp.cpp - GLFW WinRT/EGL shim for Minecraft Java UWP (Xbox Series S)
-// Replaces glfw.dll inside lwjgl-glfw-3.3.3-natives-windows.jar.
-
 #define WIN32_LEAN_AND_MEAN
 #include <winsock2.h>
 #include <windows.h>
@@ -25,6 +22,7 @@
 #include <algorithm>
 #include <atomic>
 #include <climits>
+#include <cwchar>
 #include <mutex>
 #include <string>
 #include <string_view>
@@ -33,7 +31,7 @@
 #include <windows.devices.input.h>
 #include <windows.ui.input.h>
 #include <windows.applicationmodel.datatransfer.h>
-#include "mouse_support_api.h"
+#include "perf_cache.h"
 #pragma comment(lib, "ws2_32.lib")
 
 using namespace Microsoft::WRL;
@@ -47,9 +45,6 @@ using namespace ABI::Windows::UI::Core;
 using namespace ABI::Windows::UI::Input;
 using namespace ABI::Windows::ApplicationModel::DataTransfer;
 
-// ---------------------------------------------------------------------------
-// Minimal GLFW 3.3.x types
-// ---------------------------------------------------------------------------
 typedef struct GLFWwindow_  GLFWwindow;
 typedef struct GLFWmonitor_ GLFWmonitor;
 typedef struct GLFWcursor_  GLFWcursor;
@@ -252,25 +247,83 @@ typedef struct { unsigned char buttons[15]; float axes[6]; } GLFWgamepadstate;
 #define GL_RENDERER 0x1F01
 #define GL_VERSION  0x1F02
 
-// ---------------------------------------------------------------------------
-// Minimal EGL types and constants
-// ---------------------------------------------------------------------------
+typedef void* EGLDisplay;
+typedef void* EGLSurface;
+typedef void* EGLContext;
+typedef void* EGLConfig;
+typedef void* EGLNativeDisplayType;
+typedef IInspectable* EGLNativeWindowType;
+typedef int32_t EGLint;
+typedef int32_t EGLBoolean;
+typedef uint32_t EGLenum;
+
+#define EGL_FALSE 0
+#define EGL_TRUE 1
+#define EGL_DEFAULT_DISPLAY ((EGLNativeDisplayType)0)
+#define EGL_NO_DISPLAY ((EGLDisplay)0)
+#define EGL_NO_SURFACE ((EGLSurface)0)
+#define EGL_NO_CONTEXT ((EGLContext)0)
+#define EGL_NONE 0x3038
+#define EGL_RED_SIZE 0x3024
+#define EGL_GREEN_SIZE 0x3023
+#define EGL_BLUE_SIZE 0x3022
+#define EGL_ALPHA_SIZE 0x3021
+#define EGL_DEPTH_SIZE 0x3025
+#define EGL_STENCIL_SIZE 0x3026
+#define EGL_SURFACE_TYPE 0x3033
+#define EGL_RENDERABLE_TYPE 0x3040
+#define EGL_WINDOW_BIT 0x0004
+#define EGL_OPENGL_BIT 0x0008
+#define EGL_OPENGL_ES2_BIT 0x0004
+#define EGL_OPENGL_ES3_BIT_KHR 0x00000040
+#define EGL_OPENGL_API 0x30A2
+#define EGL_OPENGL_ES_API 0x30A0
+#define EGL_VENDOR 0x3053
+#define EGL_VERSION 0x3054
+#define EGL_CONTEXT_CLIENT_VERSION 0x3098
+#define EGL_CONTEXT_MAJOR_VERSION_KHR 0x3098
+#define EGL_CONTEXT_MINOR_VERSION_KHR 0x30FB
+#define EGL_CONTEXT_OPENGL_PROFILE_MASK_KHR 0x30FD
+#define EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT_KHR 0x00000001
+#define EGL_CONTEXT_OPENGL_COMPATIBILITY_PROFILE_BIT_KHR 0x00000002
+
+typedef EGLDisplay (WINAPI* PFN_eglGetDisplay)(EGLNativeDisplayType);
+typedef EGLDisplay (WINAPI* PFN_eglGetPlatformDisplay)(EGLenum, void*, const EGLint*);
+typedef EGLBoolean (WINAPI* PFN_eglInitialize)(EGLDisplay, EGLint*, EGLint*);
+typedef EGLBoolean (WINAPI* PFN_eglTerminate)(EGLDisplay);
+typedef EGLBoolean (WINAPI* PFN_eglBindAPI)(EGLenum);
+typedef EGLBoolean (WINAPI* PFN_eglChooseConfig)(EGLDisplay, const EGLint*, EGLConfig*, EGLint, EGLint*);
+typedef EGLSurface (WINAPI* PFN_eglCreateWindowSurface)(EGLDisplay, EGLConfig, EGLNativeWindowType, const EGLint*);
+typedef EGLSurface (WINAPI* PFN_eglCreatePlatformWindowSurface)(EGLDisplay, EGLConfig, void*, const EGLint*);
+typedef EGLContext (WINAPI* PFN_eglCreateContext)(EGLDisplay, EGLConfig, EGLContext, const EGLint*);
+typedef EGLBoolean (WINAPI* PFN_eglDestroyContext)(EGLDisplay, EGLContext);
+typedef EGLBoolean (WINAPI* PFN_eglDestroySurface)(EGLDisplay, EGLSurface);
+typedef EGLBoolean (WINAPI* PFN_eglMakeCurrent)(EGLDisplay, EGLSurface, EGLSurface, EGLContext);
+typedef EGLBoolean (WINAPI* PFN_eglSwapBuffers)(EGLDisplay, EGLSurface);
+typedef EGLBoolean (WINAPI* PFN_eglSwapInterval)(EGLDisplay, EGLint);
+typedef const char* (WINAPI* PFN_eglQueryString)(EGLDisplay, EGLint);
+typedef void* (WINAPI* PFN_eglGetProcAddress)(const char*);
+typedef EGLint (WINAPI* PFN_eglGetError)(void);
+typedef EGLBoolean (WINAPI* PFN_eglGetConfigAttrib)(EGLDisplay, EGLConfig, EGLint, EGLint*);
 typedef const unsigned char* (APIENTRY* PFN_glGetString)(unsigned int);
 typedef void (*PFN_proc_init)(void);
 
-// ---------------------------------------------------------------------------
-// Global state
-// ---------------------------------------------------------------------------
-
 static constexpr wchar_t kEGLNativeWindowTypeProperty[] = L"EGLNativeWindowTypeProperty";
-static DWORD g_contextThreadId = 0;
+static constexpr wchar_t kEGLRenderSurfaceSizeProperty[] = L"EGLRenderSurfaceSizeProperty";
+
+static EGLDisplay g_eglDisplay = EGL_NO_DISPLAY;
+static EGLSurface g_eglSurface = EGL_NO_SURFACE;
+static EGLContext g_eglContext = EGL_NO_CONTEXT;
+static EGLConfig  g_eglConfig = nullptr;
+static DWORD g_eglContextThreadId = 0;
+static HMODULE g_libEGL = NULL;
 static HMODULE g_opengl32 = NULL;
+static HMODULE g_libGLESv2 = NULL;
 static BOOL g_graphicsRuntimeUsesGles = FALSE;
 static BOOL g_initialised = FALSE;
 static BOOL g_should_close = FALSE;
 static int g_window_width = 1920;
 static int g_window_height = 1080;
-static bool g_window_size_notification_pending = false;
 // the size the app asked glfwCreateWindow for, which the console never gives it
 static int g_created_width = 0;
 static int g_created_height = 0;
@@ -299,6 +352,24 @@ static int g_current_context_log_count = 0;
 static int g_window_attrib_log_count = 0;
 static int g_extension_log_count = 0;
 
+static PFN_eglGetDisplay p_eglGetDisplay = nullptr;
+static PFN_eglGetPlatformDisplay p_eglGetPlatformDisplay = nullptr;
+static PFN_eglInitialize p_eglInitialize = nullptr;
+static PFN_eglTerminate p_eglTerminate = nullptr;
+static PFN_eglBindAPI p_eglBindAPI = nullptr;
+static PFN_eglChooseConfig p_eglChooseConfig = nullptr;
+static PFN_eglCreateWindowSurface p_eglCreateWindowSurface = nullptr;
+static PFN_eglCreatePlatformWindowSurface p_eglCreatePlatformWindowSurface = nullptr;
+static PFN_eglCreateContext p_eglCreateContext = nullptr;
+static PFN_eglDestroyContext p_eglDestroyContext = nullptr;
+static PFN_eglDestroySurface p_eglDestroySurface = nullptr;
+static PFN_eglMakeCurrent p_eglMakeCurrent = nullptr;
+static PFN_eglSwapBuffers p_eglSwapBuffers = nullptr;
+static PFN_eglSwapInterval p_eglSwapInterval = nullptr;
+static PFN_eglQueryString p_eglQueryString = nullptr;
+static PFN_eglGetProcAddress p_eglGetProcAddress = nullptr;
+static PFN_eglGetError p_eglGetError = nullptr;
+static PFN_eglGetConfigAttrib p_eglGetConfigAttrib = nullptr;
 
 static GLFWerrorfun           g_error_cb       = NULL;
 static GLFWframebuffersizefun g_fbsize_cb      = NULL;
@@ -358,6 +429,7 @@ static void* g_joystick_user_pointer = NULL;
 
 static ComPtr<ICoreWindow> g_coreWindow;
 static ComPtr<ICoreDispatcher> g_dispatcher;
+static ComPtr<IInspectable> g_nativeWindowPropertySet;
 
 enum PointerDispatchKind {
     PointerDispatchMove,
@@ -368,12 +440,11 @@ enum PointerDispatchKind {
     PointerDispatchExit,
     PointerDispatchCaptureLost
 };
-static constexpr double kProtocolWidth = 1920.0;
-static constexpr double kProtocolHeight = 1080.0;
 
 using CoreWindowPointerHandler = ABI::Windows::Foundation::__FITypedEventHandler_2_Windows__CUI__CCore__CCoreWindow_Windows__CUI__CCore__CPointerEventArgs_t;
 using MouseDeviceMovedHandler = ABI::Windows::Foundation::__FITypedEventHandler_2_Windows__CDevices__CInput__CMouseDevice_Windows__CDevices__CInput__CMouseEventArgs_t;
 static char g_clipboard_buf[65536] = {};
+static float g_content_scale = 1.f;
 static bool g_controller_lb_down = false;
 static unsigned char g_controller_mouse_state[8] = {};
 static bool g_controller_rb_down = false;
@@ -386,9 +457,7 @@ static int g_cursorMode = GLFW_CURSOR_DISABLED;
 static bool g_cursor_inside = false;
 static double g_cursor_x = 960.0;
 static double g_cursor_y = 540.0;
-static int g_gameinput_log_count = 0;
-static bool g_haveGameInputMouseState = false;
-static GameInputMouseState g_lastGameInputMouseState = {};
+static int g_height = 1080;
 static double g_menu_abs_x = 960.0;
 static double g_menu_abs_y = 540.0;
 static ComPtr<ABI::Windows::Devices::Input::IMouseDevice> g_mouseDevice;
@@ -396,7 +465,6 @@ static bool g_mouseDeviceHooksInstalled = false;
 static ComPtr<MouseDeviceMovedHandler> g_mouseMovedHandler;
 static EventRegistrationToken g_mouseMovedToken = {};
 static int g_mouse_log_count = 0;
-static int g_menu_abs_log_count = 0;
 static unsigned char g_mouse_state[8] = {};
 static ComPtr<CoreWindowPointerHandler> g_pointerCaptureLostHandler;
 static EventRegistrationToken g_pointerCaptureLostToken = {};
@@ -414,17 +482,17 @@ static EventRegistrationToken g_pointerReleasedToken = {};
 static ComPtr<CoreWindowPointerHandler> g_pointerWheelHandler;
 static EventRegistrationToken g_pointerWheelToken = {};
 static bool g_raw_mouse_motion = false;
-static bool g_mouse_active_latched = false;
-static const DWORD kMouseCompanionTimeoutMs = 3000;
 static const ULONGLONG kDisplayScaleCacheMs = 500;
+static int g_width = 1920;
 static volatile LONG g_processing_events = 0;
 static int g_process_events_error_log_count = 0;
 static int g_nested_process_log_count = 0;
 static int g_process_events_offthread_log_count = 0;
+static bool g_controller_bridge_enabled = false;
 
 enum CursorInputOwner : LONG {
     CursorInputOwnerNone = 0,
-    CursorInputOwnerRelay = 1,
+    CursorInputOwnerMouse = 1,
     CursorInputOwnerController = 2,
 };
 static volatile LONG g_cursor_input_owner = CursorInputOwnerNone;
@@ -437,29 +505,16 @@ static void DispatchCursorPos(double x, double y);
 static double ClampDouble(double value, double minValue, double maxValue);
 static double CursorMaxX();
 static double CursorMaxY();
-static double ProtocolToWindowX(double x);
-static double ProtocolToWindowY(double y);
-static double WindowToProtocolX(double x);
-static double WindowToProtocolY(double y);
-static void SendCursorOverlayState();
-static void SendMouseRelayCursorSync(double x, double y);
+static double MenuInputToWindowX(double x);
+static double MenuInputToWindowY(double y);
 static void DispatchMouseDelta(double dx, double dy);
-static void DispatchMouseAbsolute(double x, double y);
-static void DispatchMouseWindowAbsolute(double x, double y);
-static void FireRemoteMouseButtonCallback(int button, int action);
-static void SetRemoteMouseButtonState(int button, int action);
 static void SetMouseButtonState(int button, int action, bool fireCallback);
 static bool AnyMouseButtonDown();
-static void DrainRemoteMouseInput();
-static void PushMouseHostState();
-static bool MouseCompanionActive();
-static void FlushMouseButtonsForDeactivate();
 static int SyntheticScancodeForKey(int key);
 static void SetControllerKeyState(int key, bool down);
 static void ReleaseControllerKeys();
 static void SetControllerMouseButtonState(int button, bool down);
 static void ReleaseControllerMouseButtons();
-static int ClampInt64ToInt(int64_t value);
 static bool SyncMouseButtonsFromProperties(ABI::Windows::UI::Input::IPointerPointProperties* props, bool fireCallbacks);
 static bool ButtonActionFromUpdateKind(
     ABI::Windows::UI::Input::PointerUpdateKind kind,
@@ -472,9 +527,6 @@ static bool ReadPointerEvent(
     ComPtr<ABI::Windows::UI::Input::IPointerPointProperties>* propsOut);
 static void HandlePointerEvent(IPointerEventArgs* args, PointerDispatchKind kind);
 static void HandleMouseDeviceMoved(ABI::Windows::Devices::Input::IMouseEventArgs* args);
-static void PollCoreWindowPointerPosition();
-static void SyncGameInputMouseButtons(GameInputMouseButtons buttons);
-static void PollGameInputMouse();
 static float ApplyDeadzone(float value, float deadzone);
 static bool IsGamepadButtonDown(const GameInputGamepadState& state, GameInputGamepadButtons button);
 static void UpdateControllerBridge(const GameInputGamepadState& state);
@@ -483,21 +535,18 @@ static void RemoveMouseDeviceHooks();
 static bool InstallMouseDeviceHooks();
 static void RemovePointerHooks();
 static bool InstallPointerHooks();
-namespace bandit_cursor { static void Reset(); }
 static IClipboardStatics* GetClipboardStatics();
 
 struct FakeWindow {
     DWORD magic;
     int width;
     int height;
+    BOOL should_close;
     void* user_pointer;
 };
 static FakeWindow g_fake_window;
 static GLFWvidmode g_vidmode = {1920,1080,8,8,8,60};
 
-// ---------------------------------------------------------------------------
-// Logging
-// ---------------------------------------------------------------------------
 static wchar_t g_log_path[MAX_PATH];
 
 static void ShimLog(const char* fmt, ...) {
@@ -557,20 +606,14 @@ static bool EnvFlagEnabled(const wchar_t* name) {
     wchar_t value[32] = {};
     DWORD len = GetEnvironmentVariableW(name, value, ARRAYSIZE(value));
     if (len == 0 || len >= ARRAYSIZE(value)) return false;
-    return _wcsicmp(value, L"1") == 0 ||
-        _wcsicmp(value, L"true") == 0 ||
-        _wcsicmp(value, L"yes") == 0 ||
-        _wcsicmp(value, L"on") == 0;
+    return bandit_perf::EnvFlagEnabledValue(value);
 }
 
 static bool EnvFlagDisabled(const wchar_t* name) {
     wchar_t value[32] = {};
     DWORD len = GetEnvironmentVariableW(name, value, ARRAYSIZE(value));
     if (len == 0 || len >= ARRAYSIZE(value)) return false;
-    return _wcsicmp(value, L"0") == 0 ||
-        _wcsicmp(value, L"false") == 0 ||
-        _wcsicmp(value, L"no") == 0 ||
-        _wcsicmp(value, L"off") == 0;
+    return bandit_perf::EnvFlagDisabledValue(value);
 }
 
 static bool DirectoryExists(const wchar_t* path) {
@@ -679,7 +722,10 @@ static FARPROC ResolveProc(HMODULE module, const char* name) {
     return proc;
 }
 
-
+static void ReportEglError(const char* label) {
+    const EGLint err = p_eglGetError ? p_eglGetError() : 0;
+    ShimLog("%s failed eglError=0x%04X", label, err);
+}
 
 static int MapVirtualKeyToGlfw(VirtualKey key) {
     // the oem punctuation keys have no VirtualKey names, so the switch runs on the raw value
@@ -894,9 +940,6 @@ static void DispatchCharEvent(unsigned int codepoint) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Native Xbox text input
-// ---------------------------------------------------------------------------
 static constexpr int BANDIT_KEYBOARD_MULTILINE = 1;
 static constexpr int BANDIT_KEYBOARD_SUBMIT = 1;
 static constexpr int BANDIT_KEYBOARD_CLOSED = 2;
@@ -1406,14 +1449,17 @@ static void SetCursorInputOwner(CursorInputOwner owner) {
     const LONG previous = InterlockedExchange(&g_cursor_input_owner, owner);
     if (previous == owner) return;
 
-    const char* name = owner == CursorInputOwnerRelay
-        ? "relay"
+    const char* name = owner == CursorInputOwnerMouse
+        ? "mouse"
         : (owner == CursorInputOwnerController ? "controller" : "none");
     ShimLog("Cursor input owner: %s", name);
 }
 
 static bool LegacyControllerModMode() {
-    const bool enabled = EnvFlagEnabled(L"MC_LEGACY_CONTROLLER_MOD");
+    // Set once by ConfigureKnownModDefaults() before the JVM starts. Reading
+    // the environment here used to cost four GetEnvironmentVariableW calls per
+    // frame (one per stick axis in ConvertGameInputGamepadState).
+    static const bool enabled = EnvFlagEnabled(L"MC_LEGACY_CONTROLLER_MOD");
     if (!g_legacyControllerModModeLogged || enabled != g_lastLegacyControllerModMode) {
         g_legacyControllerModModeLogged = true;
         g_lastLegacyControllerModMode = enabled;
@@ -1515,13 +1561,14 @@ static bool PollGameInputGamepad(bool fireCallbacks) {
     }
 
     ConvertGameInputGamepadState(state);
-    if (g_cursorMode != GLFW_CURSOR_DISABLED && CurrentCursorInputOwner() == CursorInputOwnerRelay) {
+    if (g_cursorMode != GLFW_CURSOR_DISABLED && CurrentCursorInputOwner() == CursorInputOwnerMouse) {
         if (GamepadHasMenuCursorIntent(state)) {
             SetCursorInputOwner(CursorInputOwnerController);
-            SendCursorOverlayState();
         }
     }
-
+    if (fireCallbacks) {
+        UpdateControllerBridge(state);
+    }
 
     if (!g_haveGameInputGamepadState) {
         g_haveGameInputGamepadState = true;
@@ -1682,9 +1729,6 @@ static void InstallCoreWindowLifecycleHooks() {
     ShimLog("CoreWindow lifecycle hooks installed");
 }
 
-// ---------------------------------------------------------------------------
-// CoreWindow access
-// ---------------------------------------------------------------------------
 static bool AcquireCoreWindow() {
     if (g_coreWindow) return true;
 
@@ -1738,10 +1782,6 @@ static bool AcquireCoreWindow() {
     InstallKeyboardHooks();
     InstallPointerHooks();
     InstallMouseDeviceHooks();
-    if (!MouseSupport_IsRunning()) {
-        MouseSupport_Init();
-    }
-    PushMouseHostState();
     return true;
 }
 
@@ -1753,7 +1793,11 @@ static int ScaleDimensionToPixels(FLOAT value, double scale, int fallback) {
 }
 
 static bool UseRawScaledFramebuffer() {
-    return !EnvFlagDisabled(L"MC_USE_RAW_SCALED_FRAMEBUFFER");
+    // mesa_env.txt / the launcher decide this before boot; it cannot change
+    // while the window is alive. RefreshWindowMetrics() is called from several
+    // per-frame paths, so cache the lookup instead of repeating it.
+    static const bool enabled = !EnvFlagDisabled(L"MC_USE_RAW_SCALED_FRAMEBUFFER");
+    return enabled;
 }
 
 static void QueryDisplayScale(double& scaleX, double& scaleY) {
@@ -1810,7 +1854,7 @@ static void GetDisplayScale(double& scaleX, double& scaleY) {
     static ULONGLONG lastQuery = 0;
 
     const ULONGLONG now = GetTickCount64();
-    if (lastQuery == 0 || (now - lastQuery) >= kDisplayScaleCacheMs) {
+    if (bandit_perf::CacheExpired(now, lastQuery, kDisplayScaleCacheMs, false)) {
         QueryDisplayScale(cachedX, cachedY);
         lastQuery = now;
     }
@@ -1849,15 +1893,19 @@ static void RefreshWindowMetrics(bool fireCallbacks) {
         newFramebufferHeight == g_framebuffer_height &&
         newContentScaleX == g_content_scale_x &&
         newContentScaleY == g_content_scale_y) {
-        if (fireCallbacks && g_window_size_notification_pending && g_winsize_cb) {
-            g_window_size_notification_pending = false;
-            g_winsize_cb((GLFWwindow*)&g_fake_window, g_window_width, g_window_height);
-        }
         return;
     }
 
     g_window_width = newWindowWidth;
     g_window_height = newWindowHeight;
+    // Minecraft compares glfwGetCursorPos against glfwGetFramebufferSize, and
+    // bandit_cursor::Draw() draws the crosshair in framebuffer coordinates.
+    // The menu cursor space therefore has to be the CURRENT framebuffer size,
+    // not the previous one. main-native kept g_framebuffer_width (the stale
+    // value) when main was merged, so after glfwCreateWindow(854,480) the game
+    // was told the mouse lived in an 854x480 space while the crosshair was
+    // drawn on a 1920x1080 (or 3840x2160) surface: tooltips and clicks landed
+    // towards the top left and the crosshair sat far to the bottom right.
     g_menu_window_width = newFramebufferWidth;
     g_menu_window_height = newFramebufferHeight;
     g_framebuffer_width = newFramebufferWidth;
@@ -1868,31 +1916,187 @@ static void RefreshWindowMetrics(bool fireCallbacks) {
     g_vidmode.height = g_framebuffer_height;
     g_fake_window.width = g_window_width;
     g_fake_window.height = g_window_height;
-    g_window_size_notification_pending = true;
-    ShimLog("Window size %dx%d, framebuffer %dx%d, scale %.3fx%.3f%s",
+    ShimLog("Window size %dx%d, framebuffer %dx%d, cursor space %dx%d, scale %.3fx%.3f%s",
         g_window_width, g_window_height,
         g_framebuffer_width, g_framebuffer_height,
+        g_menu_window_width, g_menu_window_height,
         g_content_scale_x, g_content_scale_y,
         rawScaledFramebuffer ? " raw-scaled" : "");
 
     if (fireCallbacks) {
-        if (g_winsize_cb) {
-            g_window_size_notification_pending = false;
-            g_winsize_cb((GLFWwindow*)&g_fake_window, g_window_width, g_window_height);
-        }
+        if (g_winsize_cb) g_winsize_cb((GLFWwindow*)&g_fake_window, g_window_width, g_window_height);
         if (g_fbsize_cb) g_fbsize_cb((GLFWwindow*)&g_fake_window, g_framebuffer_width, g_framebuffer_height);
         if (g_contentscale_cb) g_contentscale_cb((GLFWwindow*)&g_fake_window, g_content_scale_x, g_content_scale_y);
     }
 }
 
+static bool BuildNativeWindowPropertySet() {
+    if (g_nativeWindowPropertySet) return true;
+    if (!AcquireCoreWindow()) return false;
 
+    ComPtr<IActivationFactory> propSetFactory;
+    HRESULT hr = GetActivationFactory(
+        HStringReference(RuntimeClass_Windows_Foundation_Collections_PropertySet).Get(),
+        &propSetFactory);
+    if (FAILED(hr)) {
+        ShimLog("PropertySet factory failed hr=0x%08X", hr);
+        return false;
+    }
+
+    ComPtr<IInspectable> propertySetInspectable;
+    hr = propSetFactory->ActivateInstance(propertySetInspectable.GetAddressOf());
+    if (FAILED(hr)) {
+        ShimLog("PropertySet ActivateInstance failed hr=0x%08X", hr);
+        return false;
+    }
+
+    ComPtr<IPropertySet> propertySet;
+    hr = propertySetInspectable.As(&propertySet);
+    if (FAILED(hr)) {
+        ShimLog("PropertySet As(IPropertySet) failed hr=0x%08X", hr);
+        return false;
+    }
+
+    ComPtr<IMap<HSTRING, IInspectable*>> propMap;
+    hr = propertySet.As(&propMap);
+    if (FAILED(hr)) {
+        ShimLog("PropertySet As(IMap) failed hr=0x%08X", hr);
+        return false;
+    }
+
+    RefreshWindowMetrics(false);
+
+    boolean replaced = false;
+    hr = propMap->Insert(HStringReference(kEGLNativeWindowTypeProperty).Get(), g_coreWindow.Get(), &replaced);
+    if (FAILED(hr)) {
+        ShimLog("Insert(EGLNativeWindowTypeProperty) failed hr=0x%08X", hr);
+        return false;
+    }
+
+    ComPtr<IPropertyValueStatics> propertyValueStatics;
+    hr = GetActivationFactory(
+        HStringReference(RuntimeClass_Windows_Foundation_PropertyValue).Get(),
+        &propertyValueStatics);
+    if (FAILED(hr)) {
+        ShimLog("PropertyValue factory failed hr=0x%08X", hr);
+        return false;
+    }
+
+    Size size = {};
+    size.Width = (FLOAT)g_framebuffer_width;
+    size.Height = (FLOAT)g_framebuffer_height;
+
+    ComPtr<IInspectable> sizeInspectable;
+    hr = propertyValueStatics->CreateSize(size, sizeInspectable.GetAddressOf());
+    if (FAILED(hr)) {
+        ShimLog("CreateSize failed hr=0x%08X", hr);
+        return false;
+    }
+
+    hr = propMap->Insert(HStringReference(kEGLRenderSurfaceSizeProperty).Get(), sizeInspectable.Get(), &replaced);
+    if (FAILED(hr)) {
+        ShimLog("Insert(EGLRenderSurfaceSizeProperty) failed hr=0x%08X", hr);
+        return false;
+    }
+
+    propertySet.As(&g_nativeWindowPropertySet);
+    ShimLog("Created EGL PropertySet surface descriptor (%dx%d)",
+        g_framebuffer_width, g_framebuffer_height);
+    return true;
+}
 
 #include "wgl_backend.h"
 
-// ---------------------------------------------------------------------------
-// Graphics runtime loader
-// ---------------------------------------------------------------------------
+static bool LoadMesaEGL() {
+    if (g_libEGL && g_opengl32) return true;
 
+    wchar_t runtimeDir[MAX_PATH];
+    wchar_t packagePrefix[MAX_PATH];
+    SelectGraphicsRuntimeDir(runtimeDir, MAX_PATH, packagePrefix, MAX_PATH);
+
+    struct RuntimeDll {
+        const wchar_t* file;
+        const char* label;
+        bool required;
+    };
+
+    const RuntimeDll siblings[] = {
+        { L"libglapi.dll", "libglapi.dll", false },
+        { L"z-1.dll", "z-1.dll", false },
+        { L"libgallium_wgl.dll", "libgallium_wgl.dll", false },
+        { L"libGLESv2.dll", "libGLESv2.dll", false },
+        { L"libGLESv1_CM.dll", "libGLESv1_CM.dll", false },
+        { L"glu32.dll", "glu32.dll", false },
+        { L"dxil.dll", "dxil.dll", false },
+    };
+
+    for (const RuntimeDll& dll : siblings) {
+        wchar_t absolutePath[MAX_PATH];
+        wchar_t packagedPath[MAX_PATH];
+        RuntimeDllPath(runtimeDir, packagePrefix, dll.file,
+            absolutePath, MAX_PATH, packagedPath, MAX_PATH);
+        if (GetFileAttributesW(absolutePath) != INVALID_FILE_ATTRIBUTES) {
+            HMODULE loaded = LoadPackagedOrFile(packagedPath, absolutePath, dll.label);
+            if (_wcsicmp(dll.file, L"libGLESv2.dll") == 0) {
+                g_libGLESv2 = loaded;
+            }
+        }
+    }
+
+    wchar_t glPath[MAX_PATH];
+    wchar_t glPackaged[MAX_PATH];
+    wchar_t eglPath[MAX_PATH];
+    wchar_t eglPackaged[MAX_PATH];
+    RuntimeDllPath(runtimeDir, packagePrefix, L"opengl32.dll", glPath, MAX_PATH, glPackaged, MAX_PATH);
+    RuntimeDllPath(runtimeDir, packagePrefix, L"libEGL.dll", eglPath, MAX_PATH, eglPackaged, MAX_PATH);
+
+    ShimLog("libEGL=%S", eglPath);
+    ShimLog("opengl32=%S", glPath);
+
+    g_opengl32 = LoadPackagedOrFile(glPackaged, glPath, "opengl32.dll");
+    g_libEGL = LoadPackagedOrFile(eglPackaged, eglPath, "libEGL.dll");
+    if (!g_opengl32 || !g_libEGL) {
+        ShimLog("Graphics loader failed gl=%p egl=%p err=%u", g_opengl32, g_libEGL, GetLastError());
+        return false;
+    }
+
+    PFN_proc_init procInit = (PFN_proc_init)GetProcAddress(g_opengl32, "proc_init");
+    if (procInit) {
+        ShimLog("Calling opengl32!proc_init");
+        procInit();
+        ShimLog("opengl32!proc_init returned");
+    } else if (g_graphicsRuntimeUsesGles) {
+        ShimLog("opengl32!proc_init not exported");
+    }
+
+    p_eglGetDisplay = (PFN_eglGetDisplay)ResolveProc(g_libEGL, "eglGetDisplay");
+    p_eglGetPlatformDisplay = (PFN_eglGetPlatformDisplay)ResolveProc(g_libEGL, "eglGetPlatformDisplay");
+    p_eglInitialize = (PFN_eglInitialize)ResolveProc(g_libEGL, "eglInitialize");
+    p_eglTerminate = (PFN_eglTerminate)ResolveProc(g_libEGL, "eglTerminate");
+    p_eglBindAPI = (PFN_eglBindAPI)ResolveProc(g_libEGL, "eglBindAPI");
+    p_eglChooseConfig = (PFN_eglChooseConfig)ResolveProc(g_libEGL, "eglChooseConfig");
+    p_eglCreateWindowSurface = (PFN_eglCreateWindowSurface)ResolveProc(g_libEGL, "eglCreateWindowSurface");
+    p_eglCreatePlatformWindowSurface = (PFN_eglCreatePlatformWindowSurface)ResolveProc(g_libEGL, "eglCreatePlatformWindowSurface");
+    p_eglCreateContext = (PFN_eglCreateContext)ResolveProc(g_libEGL, "eglCreateContext");
+    p_eglDestroyContext = (PFN_eglDestroyContext)ResolveProc(g_libEGL, "eglDestroyContext");
+    p_eglDestroySurface = (PFN_eglDestroySurface)ResolveProc(g_libEGL, "eglDestroySurface");
+    p_eglMakeCurrent = (PFN_eglMakeCurrent)ResolveProc(g_libEGL, "eglMakeCurrent");
+    p_eglSwapBuffers = (PFN_eglSwapBuffers)ResolveProc(g_libEGL, "eglSwapBuffers");
+    p_eglSwapInterval = (PFN_eglSwapInterval)ResolveProc(g_libEGL, "eglSwapInterval");
+    p_eglQueryString = (PFN_eglQueryString)ResolveProc(g_libEGL, "eglQueryString");
+    p_eglGetProcAddress = (PFN_eglGetProcAddress)ResolveProc(g_libEGL, "eglGetProcAddress");
+    p_eglGetError = (PFN_eglGetError)ResolveProc(g_libEGL, "eglGetError");
+    p_eglGetConfigAttrib = (PFN_eglGetConfigAttrib)ResolveProc(g_libEGL, "eglGetConfigAttrib");
+
+    if (!p_eglGetDisplay || !p_eglInitialize || !p_eglBindAPI || !p_eglChooseConfig ||
+        !p_eglCreateWindowSurface || !p_eglCreateContext || !p_eglMakeCurrent ||
+        !p_eglSwapBuffers || !p_eglGetProcAddress) {
+        ShimLog("Critical EGL exports missing");
+        return false;
+    }
+
+    return true;
+}
 
 static void WglLogLine(const char* s) { ShimLog("%s", s); }
 
@@ -1909,7 +2113,7 @@ static HMODULE WglLoadDll(const wchar_t* name) {
     return LoadPackagedOrFile(packagedPath, absolutePath, label);
 }
 
-static bool CreateWglContext() {
+static bool CreateEglContext() {
     if (wglb::Active()) return true;
     if (!AcquireCoreWindow()) return false;
     if (!wglb::Load(WglLoadDll, WglLogLine)) return false;
@@ -1919,9 +2123,6 @@ static bool CreateWglContext() {
     return true;
 }
 
-// ---------------------------------------------------------------------------
-// DLL entry
-// ---------------------------------------------------------------------------
 BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID) {
     if (reason == DLL_PROCESS_ATTACH) {
         wchar_t dir[MAX_PATH];
@@ -1939,15 +2140,16 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID) {
     return TRUE;
 }
 
-// ===========================================================================
-// GLFW API
-// ===========================================================================
 extern "C" __declspec(dllexport) int glfwInit(void) {
     ShimLog("glfwInit");
     if (g_initialised) return GLFW_TRUE;
     if (!AcquireCoreWindow()) return GLFW_FALSE;
     RefreshWindowMetrics(false);
-    g_fake_window = {0x58574C47u, g_window_width, g_window_height, NULL};
+    // RefreshWindowMetrics returns early when the defaults already match the
+    // console, so keep the cursor space aligned even in that case.
+    g_menu_window_width = g_framebuffer_width;
+    g_menu_window_height = g_framebuffer_height;
+    g_fake_window = {0x58574C47u, g_window_width, g_window_height, FALSE, NULL};
     g_initialised = TRUE;
     ShimLog("glfwInit OK window %dx%d framebuffer %dx%d",
         g_window_width, g_window_height,
@@ -1972,7 +2174,7 @@ static double CurrentPointerScaleY() {
 static void DispatchCursorEnter(bool entered) {
     if (g_cursor_inside == entered) return;
     g_cursor_inside = entered;
-    if (g_cursorenter_cb && MouseCompanionActive()) {
+    if (g_cursorenter_cb && CurrentCursorInputOwner() == CursorInputOwnerMouse) {
         g_cursorenter_cb((GLFWwindow*)&g_fake_window, entered ? GLFW_TRUE : GLFW_FALSE);
     }
 }
@@ -1986,22 +2188,13 @@ static void DispatchCursorPosInternal(double x, double y, bool updateOverlayPosi
 
     g_cursor_x = x;
     g_cursor_y = y;
-
-
-
-
-
-
-
-
     if (g_cursorMode != GLFW_CURSOR_DISABLED && updateOverlayPosition) {
-        g_menu_abs_x = g_cursor_x;
-        g_menu_abs_y = g_cursor_y;
-        SendCursorOverlayState();
+        g_menu_abs_x = MenuInputToWindowX(g_cursor_x);
+        g_menu_abs_y = MenuInputToWindowY(g_cursor_y);
     }
 
     DispatchCursorEnter(true);
-    if (g_cursorpos_cb && MouseCompanionActive()) {
+    if (g_cursorpos_cb && CurrentCursorInputOwner() == CursorInputOwnerMouse) {
         g_cursorpos_cb((GLFWwindow*)&g_fake_window, g_cursor_x, g_cursor_y);
     }
 }
@@ -2036,28 +2229,14 @@ static double CursorMaxX() {
 static double CursorMaxY() {
     return g_window_height > 1 ? (double)(g_window_height - 1) : 0.0;
 }
-static double ProtocolToWindowX(double x) {
-    return g_window_width > 0 ? x * ((double)g_window_width / kProtocolWidth) : x;
-}
-static double ProtocolToWindowY(double y) {
-    return g_window_height > 0 ? y * ((double)g_window_height / kProtocolHeight) : y;
-}
-static double WindowToProtocolX(double x) {
-    return g_window_width > 0 ? x * (kProtocolWidth / (double)g_window_width) : x;
-}
-static double WindowToProtocolY(double y) {
-    return g_window_height > 0 ? y * (kProtocolHeight / (double)g_window_height) : y;
-}
-static void SendCursorOverlayState() {
-    const int visible = (g_cursorMode == GLFW_CURSOR_NORMAL &&
-        CurrentCursorInputOwner() == CursorInputOwnerRelay) ? 1 : 0;
-    MouseSupport_UpdateOverlay(g_menu_abs_x, g_menu_abs_y, visible);
-}
-static void SendMouseRelayCursorSync(double x, double y) {
-    MouseSupport_SendCursorSync(x, y);
-}
-static void SendMouseRelayWindowCursorSync(double x, double y) {
-    MouseSupport_SendWindowCursorSync(x, y);
+static double MouseSpeedFromEnvironment(const wchar_t* name) {
+    wchar_t text[16]{};
+    const DWORD length = GetEnvironmentVariableW(name, text, 16);
+    if (length == 0 || length >= 16) return 1.0;
+    wchar_t* end = nullptr;
+    const long percent = wcstol(text, &end, 10);
+    if (end == text || *end != 0 || percent < 25 || percent > 300) return 1.0;
+    return static_cast<double>(percent) / 100.0;
 }
 static void DispatchMouseDelta(double dx, double dy) {
     if (dx == 0.0 && dy == 0.0) return;
@@ -2076,58 +2255,14 @@ static void DispatchMouseDelta(double dx, double dy) {
             dx, dy, g_cursor_x, g_cursor_y, g_cursorMode);
     }
 }
-static void DispatchMouseAbsolute(double x, double y) {
-    g_menu_abs_x = ClampDouble(ProtocolToWindowX(x), 0.0, CursorMaxX());
-    g_menu_abs_y = ClampDouble(ProtocolToWindowY(y), 0.0, CursorMaxY());
-    const double inputX = WindowToMenuInputX(g_menu_abs_x);
-    const double inputY = WindowToMenuInputY(g_menu_abs_y);
-    DispatchCursorPosInternal(inputX, inputY, false);
-    SendCursorOverlayState();
-    if (g_menu_abs_log_count < 12) {
-        ++g_menu_abs_log_count;
-        ShimLog("RemoteMouse ABS protocol=%.1f,%.1f -> window=%.1f,%.1f input=%.1f,%.1f (win %dx%d menu %dx%d)",
-            x, y, g_menu_abs_x, g_menu_abs_y,
-            inputX, inputY,
-            g_window_width, g_window_height, g_menu_window_width, g_menu_window_height);
-    }
-}
-static void DispatchMouseWindowAbsolute(double x, double y) {
-    g_menu_abs_x = ClampDouble(x, 0.0, CursorMaxX());
-    g_menu_abs_y = ClampDouble(y, 0.0, CursorMaxY());
-    const double inputX = WindowToMenuInputX(g_menu_abs_x);
-    const double inputY = WindowToMenuInputY(g_menu_abs_y);
-    DispatchCursorPosInternal(inputX, inputY, false);
-    SendCursorOverlayState();
-    if (g_menu_abs_log_count < 12) {
-        ++g_menu_abs_log_count;
-        ShimLog("RemoteMouse ABSW window=%.1f,%.1f -> input=%.1f,%.1f (win %dx%d menu %dx%d)",
-            g_menu_abs_x, g_menu_abs_y,
-            inputX, inputY,
-            g_window_width, g_window_height, g_menu_window_width, g_menu_window_height);
-    }
-}
-static void FireRemoteMouseButtonCallback(int button, int action) {
-    if (g_mousebutton_cb && MouseCompanionActive()) {
-        const int mods = CurrentGlfwMods();
-        g_mousebutton_cb((GLFWwindow*)&g_fake_window, button, action, mods);
-    }
-}
-static void SetRemoteMouseButtonState(int button, int action) {
-    if (button < 0 || button >= (int)sizeof(g_mouse_state)) return;
-    const unsigned char state = action == GLFW_RELEASE ? GLFW_RELEASE : GLFW_PRESS;
-    if (g_mouse_state[button] == state) return;
-
-    g_mouse_state[button] = state;
-    FireRemoteMouseButtonCallback(button, action);
-}
 static void SetMouseButtonState(int button, int action, bool fireCallback) {
     if (button < 0 || button >= (int)sizeof(g_mouse_state)) return;
     const unsigned char state = action == GLFW_RELEASE ? GLFW_RELEASE : GLFW_PRESS;
     if (g_mouse_state[button] == state) return;
 
     g_mouse_state[button] = state;
-    if (fireCallback) {
-        FireRemoteMouseButtonCallback(button, state);
+    if (fireCallback && g_mousebutton_cb) {
+        g_mousebutton_cb((GLFWwindow*)&g_fake_window, button, state, CurrentGlfwMods());
     }
 }
 static bool AnyMouseButtonDown() {
@@ -2135,63 +2270,6 @@ static bool AnyMouseButtonDown() {
         if (g_mouse_state[i]) return true;
     }
     return false;
-}
-static bool MouseCompanionActive() {
-    const unsigned int last = MouseSupport_LastActivityTickMs();
-    if (last == 0) return false;
-    return (DWORD)(GetTickCount() - (DWORD)last) <= kMouseCompanionTimeoutMs;
-}
-static void FlushMouseButtonsForDeactivate() {
-    for (int i = 0; i < (int)sizeof(g_mouse_state); ++i) {
-        if (g_mouse_state[i]) {
-            g_mouse_state[i] = GLFW_RELEASE;
-            if (g_mousebutton_cb) {
-                g_mousebutton_cb((GLFWwindow*)&g_fake_window, i, GLFW_RELEASE, CurrentGlfwMods());
-            }
-        }
-    }
-}
-static void PushMouseHostState() {
-    MouseSupportHostState state;
-    state.windowWidth = g_window_width;
-    state.windowHeight = g_window_height;
-    state.menuWidth = g_menu_window_width;
-    state.menuHeight = g_menu_window_height;
-    state.cursorMode = g_cursorMode;
-    state.menuCursorX = g_menu_abs_x;
-    state.menuCursorY = g_menu_abs_y;
-    MouseSupport_SetHostState(&state);
-}
-static void DrainRemoteMouseInput() {
-    MouseSupportFrame frame;
-    if (!MouseSupport_PollFrame(&frame)) return;
-
-    bool activity = false;
-    if (frame.hasAbsolute) {
-        if (frame.absoluteWindow) {
-            DispatchMouseWindowAbsolute(frame.absX, frame.absY);
-        } else {
-            DispatchMouseAbsolute(frame.absX, frame.absY);
-        }
-        activity = true;
-    } else if (frame.dx != 0.0 || frame.dy != 0.0) {
-        DispatchMouseDelta(frame.dx, frame.dy);
-        activity = true;
-    }
-
-    if (frame.wheel != 0.0 && g_scroll_cb && MouseCompanionActive()) {
-        g_scroll_cb((GLFWwindow*)&g_fake_window, 0.0, frame.wheel);
-        activity = true;
-    }
-
-    for (int i = 0; i < frame.buttonCount; ++i) {
-        SetRemoteMouseButtonState(frame.buttons[i].button, frame.buttons[i].action);
-        activity = true;
-    }
-
-    if (activity) {
-        SetCursorInputOwner(CursorInputOwnerRelay);
-    }
 }
 static int SyntheticScancodeForKey(int key) {
     switch (key) {
@@ -2252,11 +2330,6 @@ static void ReleaseControllerMouseButtons() {
             SetControllerMouseButtonState(i, false);
         }
     }
-}
-static int ClampInt64ToInt(int64_t value) {
-    if (value > INT_MAX) return INT_MAX;
-    if (value < INT_MIN) return INT_MIN;
-    return (int)value;
 }
 static bool SyncMouseButtonsFromProperties(ABI::Windows::UI::Input::IPointerPointProperties* props, bool fireCallbacks) {
     if (!props) return false;
@@ -2339,17 +2412,13 @@ static void HandlePointerEvent(IPointerEventArgs* args, PointerDispatchKind kind
         return;
     }
 
+    SetCursorInputOwner(CursorInputOwnerMouse);
+
     double x = g_cursor_x;
     double y = g_cursor_y;
     ComPtr<ABI::Windows::UI::Input::IPointerPointProperties> props;
     const bool hasPoint = ReadPointerEvent(args, &x, &y, &props);
-    if (hasPoint) {
-        if (g_cursorDisabled) {
-            DispatchCursorPos(x, y);
-        } else {
-            DispatchMouseWindowAbsolute(x, y);
-        }
-    } else if (kind == PointerDispatchEnter) {
+    if (!hasPoint && kind == PointerDispatchEnter) {
         DispatchCursorEnter(true);
     }
 
@@ -2366,7 +2435,7 @@ static void HandlePointerEvent(IPointerEventArgs* args, PointerDispatchKind kind
             }
         }
 
-        if (kind == PointerDispatchWheel && g_scroll_cb && MouseCompanionActive()) {
+        if (kind == PointerDispatchWheel && g_scroll_cb) {
             INT32 wheelDelta = 0;
             boolean horizontal = false;
             props->get_IsHorizontalMouseWheel(&horizontal);
@@ -2403,110 +2472,19 @@ static void HandleMouseDeviceMoved(ABI::Windows::Devices::Input::IMouseEventArgs
 
     ABI::Windows::Devices::Input::MouseDelta delta = {};
     if (FAILED(args->get_MouseDelta(&delta))) return;
-    DispatchMouseDelta(delta.X, delta.Y);
-}
-static void PollCoreWindowPointerPosition() {
-    if (!g_coreWindow || g_cursorDisabled ||
-        MouseSupport_LastActivityTickMs() != 0) {
+    static const double menuSpeed = MouseSpeedFromEnvironment(L"MC_MOUSE_MENU_SPEED");
+    static const double gameSpeed = MouseSpeedFromEnvironment(L"MC_MOUSE_GAME_SPEED");
+    const double speed = g_cursorDisabled ? gameSpeed : menuSpeed;
+    SetCursorInputOwner(CursorInputOwnerMouse);
+    if (g_cursorDisabled) {
+        DispatchMouseDelta(delta.X * speed, delta.Y * speed);
         return;
     }
-
-    Point position = {};
-    if (FAILED(g_coreWindow->get_PointerPosition(&position))) return;
-
-    const double x = (double)position.X * CurrentPointerScaleX();
-    const double y = (double)position.Y * CurrentPointerScaleY();
-    if (x == g_cursor_x && y == g_cursor_y) return;
-
-    g_menu_abs_x = ClampDouble(x, 0.0, CursorMaxX());
-    g_menu_abs_y = ClampDouble(y, 0.0, CursorMaxY());
-    DispatchCursorPosInternal(WindowToMenuInputX(g_menu_abs_x), WindowToMenuInputY(g_menu_abs_y), false);
-    if (g_mouse_log_count < 24) {
-        ++g_mouse_log_count;
-        ShimLog("Pointer position poll cursor=%.1f,%.1f", g_cursor_x, g_cursor_y);
-    }
-}
-static unsigned int g_lastSyncedGameInputButtons = 0;
-static void SyncGameInputMouseButtons(GameInputMouseButtons buttons) {
-
-    const unsigned int now = (unsigned int)buttons;
-    const unsigned int changed = now ^ g_lastSyncedGameInputButtons;
-    g_lastSyncedGameInputButtons = now;
-    if (!changed) return;
-
-    if (changed & GameInputMouseLeftButton)
-        SetMouseButtonState(GLFW_MOUSE_BUTTON_LEFT,
-            (now & GameInputMouseLeftButton) ? GLFW_PRESS : GLFW_RELEASE, true);
-    if (changed & GameInputMouseRightButton)
-        SetMouseButtonState(GLFW_MOUSE_BUTTON_RIGHT,
-            (now & GameInputMouseRightButton) ? GLFW_PRESS : GLFW_RELEASE, true);
-    if (changed & GameInputMouseMiddleButton)
-        SetMouseButtonState(GLFW_MOUSE_BUTTON_MIDDLE,
-            (now & GameInputMouseMiddleButton) ? GLFW_PRESS : GLFW_RELEASE, true);
-    if (changed & GameInputMouseButton4)
-        SetMouseButtonState(GLFW_MOUSE_BUTTON_4,
-            (now & GameInputMouseButton4) ? GLFW_PRESS : GLFW_RELEASE, true);
-    if (changed & GameInputMouseButton5)
-        SetMouseButtonState(GLFW_MOUSE_BUTTON_5,
-            (now & GameInputMouseButton5) ? GLFW_PRESS : GLFW_RELEASE, true);
-}
-static void PollGameInputMouse() {
-    if (!EnsureGameInput()) return;
-
-    ComPtr<IGameInputReading> reading;
-    HRESULT hr = g_gameInput->GetCurrentReading(GameInputKindMouse, nullptr, reading.GetAddressOf());
-    if (FAILED(hr) || !reading) {
-        if (g_gameinput_log_count < 8) {
-            ++g_gameinput_log_count;
-            ShimLog("GameInput mouse reading unavailable hr=0x%08X", hr);
-        }
-        return;
-    }
-
-    GameInputMouseState state = {};
-    if (!reading->GetMouseState(&state)) {
-        if (g_gameinput_log_count < 8) {
-            ++g_gameinput_log_count;
-            ShimLog("GameInput GetMouseState returned false kind=0x%X", reading->GetInputKind());
-        }
-        return;
-    }
-
-    SyncGameInputMouseButtons(state.buttons);
-
-    if (!g_haveGameInputMouseState) {
-        g_lastGameInputMouseState = state;
-        g_haveGameInputMouseState = true;
-        if (g_gameinput_log_count < 16) {
-            ++g_gameinput_log_count;
-            ShimLog("GameInput mouse ready kind=0x%X buttons=0x%X pos=%lld,%lld wheel=%lld,%lld",
-                reading->GetInputKind(), (unsigned)state.buttons,
-                (long long)state.positionX, (long long)state.positionY,
-                (long long)state.wheelX, (long long)state.wheelY);
-        }
-        return;
-    }
-
-    const int64_t dx = state.positionX - g_lastGameInputMouseState.positionX;
-    const int64_t dy = state.positionY - g_lastGameInputMouseState.positionY;
-    const int64_t wheelX = state.wheelX - g_lastGameInputMouseState.wheelX;
-    const int64_t wheelY = state.wheelY - g_lastGameInputMouseState.wheelY;
-    g_lastGameInputMouseState = state;
-
-    if (dx || dy) {
-        DispatchMouseDelta(ClampInt64ToInt(dx), ClampInt64ToInt(dy));
-    }
-    if ((wheelX || wheelY) && g_scroll_cb && MouseCompanionActive()) {
-        g_scroll_cb((GLFWwindow*)&g_fake_window, (double)wheelX, (double)wheelY);
-    }
-
-    if (g_gameinput_log_count < 32 && (dx || dy || wheelX || wheelY || state.buttons)) {
-        ++g_gameinput_log_count;
-        ShimLog("GameInput mouse delta dx=%lld dy=%lld wheel=%lld,%lld buttons=0x%X cursor=%.1f,%.1f",
-            (long long)dx, (long long)dy,
-            (long long)wheelX, (long long)wheelY,
-            (unsigned)state.buttons, g_cursor_x, g_cursor_y);
-    }
+    const double windowX = ClampDouble(MenuInputToWindowX(g_cursor_x) + delta.X * speed, 0.0, CursorMaxX());
+    const double windowY = ClampDouble(MenuInputToWindowY(g_cursor_y) + delta.Y * speed, 0.0, CursorMaxY());
+    g_menu_abs_x = windowX;
+    g_menu_abs_y = windowY;
+    DispatchCursorPosInternal(WindowToMenuInputX(windowX), WindowToMenuInputY(windowY), false);
 }
 static float ApplyDeadzone(float value, float deadzone) {
     const float absValue = value < 0.0f ? -value : value;
@@ -2728,18 +2706,24 @@ extern "C" __declspec(dllexport) void glfwTerminate(void) {
     ZeroMemory(g_controller_key_state, sizeof(g_controller_key_state));
     g_haveGameInputPollCache = false;
     g_lastGameInputPollMs = 0;
-    if (!wglb::Destroy()) return;
-    g_contextThreadId = 0;
-    if (g_coreWindow) {
-        if (g_visibilityToken.value) g_coreWindow->remove_VisibilityChanged(g_visibilityToken);
-        if (g_activatedToken.value) g_coreWindow->remove_Activated(g_activatedToken);
+    if (p_eglMakeCurrent && g_eglDisplay != EGL_NO_DISPLAY) {
+        p_eglMakeCurrent(g_eglDisplay, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
     }
-    g_visibilityToken = {};
-    g_activatedToken = {};
-    g_visibilityHandler.Reset();
-    g_activatedHandler.Reset();
-    g_lifecycleHooksInstalled = false;
-    bandit_cursor::Reset();
+    g_eglContextThreadId = 0;
+    if (p_eglDestroyContext && g_eglDisplay != EGL_NO_DISPLAY && g_eglContext != EGL_NO_CONTEXT) {
+        p_eglDestroyContext(g_eglDisplay, g_eglContext);
+    }
+    if (p_eglDestroySurface && g_eglDisplay != EGL_NO_DISPLAY && g_eglSurface != EGL_NO_SURFACE) {
+        p_eglDestroySurface(g_eglDisplay, g_eglSurface);
+    }
+    if (p_eglTerminate && g_eglDisplay != EGL_NO_DISPLAY) {
+        p_eglTerminate(g_eglDisplay);
+    }
+    g_eglContext = EGL_NO_CONTEXT;
+    g_eglSurface = EGL_NO_SURFACE;
+    g_eglDisplay = EGL_NO_DISPLAY;
+    g_eglConfig = nullptr;
+    g_nativeWindowPropertySet.Reset();
     g_initialised = FALSE;
     ShimLog("glfwTerminate complete");
 }
@@ -2750,7 +2734,7 @@ extern "C" __declspec(dllexport) int  glfwPlatformSupported(int platform) {
     return platform == GLFW_ANY_PLATFORM || platform == GLFW_PLATFORM_WIN32;
 }
 extern "C" __declspec(dllexport) void glfwGetVersion(int*a,int*b,int*c) { if(a)*a=3; if(b)*b=3; if(c)*c=3; }
-extern "C" __declspec(dllexport) const char* glfwGetVersionString(void) { return "3.3.3 UWP-WGL"; }
+extern "C" __declspec(dllexport) const char* glfwGetVersionString(void) { return "3.3.3 UWP-EGL"; }
 extern "C" __declspec(dllexport) int  glfwGetError(const char**d) { if(d)*d=NULL; return GLFW_NO_ERROR; }
 extern "C" __declspec(dllexport) GLFWerrorfun glfwSetErrorCallback(GLFWerrorfun cb) {
     GLFWerrorfun p = g_error_cb;
@@ -2763,7 +2747,6 @@ extern "C" __declspec(dllexport) void glfwWindowHintString(int,const char*) {}
 
 extern "C" __declspec(dllexport)
 GLFWwindow* glfwCreateWindow(int w, int h, const char* title, GLFWmonitor*, GLFWwindow*) {
-    g_should_close = FALSE;
     ShimLog("glfwCreateWindow %dx%d '%s'", w, h, title ? title : "");
     if (!g_initialised && !glfwInit()) return NULL;
     g_created_width = w;
@@ -2785,8 +2768,11 @@ GLFWwindow* glfwCreateWindow(int w, int h, const char* title, GLFWmonitor*, GLFW
             : h;
     }
     RefreshWindowMetrics(false);
-    if (!CreateWglContext()) {
-        ShimLog("CreateWglContext FAILED");
+    // Do not leave the menu cursor space at the 854x480 Minecraft asked for.
+    g_menu_window_width = g_framebuffer_width;
+    g_menu_window_height = g_framebuffer_height;
+    if (!CreateEglContext()) {
+        ShimLog("CreateEglContext FAILED");
         return NULL;
     }
 
@@ -2812,16 +2798,19 @@ extern "C" __declspec(dllexport) const char* glfwGetWindowTitle(GLFWwindow*) { r
 extern "C" __declspec(dllexport) void glfwSetWindowIcon(GLFWwindow*, int, const GLFWimage*) {}
 extern "C" __declspec(dllexport) void glfwGetWindowPos(GLFWwindow*, int*x, int*y) { if(x)*x=0; if(y)*y=0; }
 extern "C" __declspec(dllexport) void glfwSetWindowPos(GLFWwindow*, int, int) {}
-extern "C" __declspec(dllexport) void glfwGetWindowSize(GLFWwindow*, int*w, int*h) { RefreshWindowMetrics(false); if(w)*w=g_window_width; if(h)*h=g_window_height; }
+// Size getters run on the render thread and Minecraft calls them every frame.
+// glfwPollEvents() already refreshes the metrics once per frame (and fires the
+// resize callbacks from ProcessEvents), so re-querying CoreWindow bounds here
+// only duplicates WinRT calls. Return the values published by that refresh.
+extern "C" __declspec(dllexport) void glfwGetWindowSize(GLFWwindow*, int*w, int*h) { if(w)*w=g_window_width; if(h)*h=g_window_height; }
 extern "C" __declspec(dllexport) void glfwSetWindowSizeLimits(GLFWwindow*, int, int, int, int) {}
 extern "C" __declspec(dllexport) void glfwSetWindowAspectRatio(GLFWwindow*, int, int) {}
 extern "C" __declspec(dllexport) void glfwSetWindowSize(GLFWwindow*, int, int) {}
-extern "C" __declspec(dllexport) void glfwGetFramebufferSize(GLFWwindow*, int*w, int*h) { RefreshWindowMetrics(false); if(w)*w=g_framebuffer_width; if(h)*h=g_framebuffer_height; }
+extern "C" __declspec(dllexport) void glfwGetFramebufferSize(GLFWwindow*, int*w, int*h) { if(w)*w=g_framebuffer_width; if(h)*h=g_framebuffer_height; }
 extern "C" __declspec(dllexport) void glfwGetWindowFrameSize(GLFWwindow*, int*l, int*t, int*r, int*b) {
     if(l)*l=0; if(t)*t=0; if(r)*r=0; if(b)*b=0;
 }
 extern "C" __declspec(dllexport) void glfwGetWindowContentScale(GLFWwindow*, float*x, float*y) {
-    RefreshWindowMetrics(false);
     if(x)*x=g_content_scale_x; if(y)*y=g_content_scale_y;
 }
 extern "C" __declspec(dllexport) float glfwGetWindowOpacity(GLFWwindow*) { return 1.f; }
@@ -2836,7 +2825,7 @@ extern "C" __declspec(dllexport) void glfwHideWindow(GLFWwindow*) {}
 extern "C" __declspec(dllexport) void glfwFocusWindow(GLFWwindow*) {}
 extern "C" __declspec(dllexport) void glfwRequestWindowAttention(GLFWwindow*) {}
 extern "C" __declspec(dllexport) GLFWmonitor* glfwGetWindowMonitor(GLFWwindow*) { return NULL; }
-extern "C" __declspec(dllexport) void glfwSetWindowMonitor(GLFWwindow*, GLFWmonitor*, int, int, int, int, int) { g_window_size_notification_pending = true; }
+extern "C" __declspec(dllexport) void glfwSetWindowMonitor(GLFWwindow*, GLFWmonitor*, int, int, int, int, int) {}
 extern "C" __declspec(dllexport) int glfwGetWindowAttrib(GLFWwindow*, int a) {
     if (g_window_attrib_log_count < 32) {
         ++g_window_attrib_log_count;
@@ -2859,7 +2848,7 @@ extern "C" __declspec(dllexport) int glfwGetWindowAttrib(GLFWwindow*, int a) {
     case GLFW_OPENGL_PROFILE:
         return EnvFlagEnabled(L"MC_LEGACY_OPENGL_CONTEXT") ? GLFW_OPENGL_COMPAT_PROFILE : GLFW_OPENGL_CORE_PROFILE;
     case GLFW_CONTEXT_CREATION_API:
-        return GLFW_NATIVE_CONTEXT_API;
+        return GLFW_EGL_CONTEXT_API;
     default:
         return 0;
     }
@@ -2985,21 +2974,8 @@ extern "C" __declspec(dllexport) void glfwPollEvents(void) {
             ShimLog("Skipping ProcessEvents off dispatcher thread hr=0x%08X access=%d", accessHr, hasDispatcherAccess ? 1 : 0);
         }
     }
-    PushMouseHostState();
-    const bool mouseCompanionActive = MouseCompanionActive();
-    if (!mouseCompanionActive && g_mouse_active_latched) {
-
-        FlushMouseButtonsForDeactivate();
-    }
-    g_mouse_active_latched = mouseCompanionActive;
-
-    if (mouseCompanionActive) {
-        DrainRemoteMouseInput();
-        PollGameInputMouse();
-    }
-    PollGameInputGamepad(true);
-    if (mouseCompanionActive && !g_gamepad_present) {
-        PollCoreWindowPointerPosition();
+    if (g_controller_bridge_enabled) {
+        PollGameInputGamepad(true);
     }
     RefreshWindowMetrics(true);
 }
@@ -3042,25 +3018,19 @@ extern "C" __declspec(dllexport) void glfwSetInputMode(GLFWwindow*, int mode, in
 
     g_cursorMode = value;
     g_cursorDisabled = (value == GLFW_CURSOR_DISABLED);
-    PushMouseHostState();
     if (!g_cursorDisabled) {
+        // Apply a position queued while the cursor was disabled.
+        double x = g_cursor_x;
+        double y = g_cursor_y;
         if (g_pending_cursor_valid) {
+            x = g_pending_cursor_x;
+            y = g_pending_cursor_y;
             g_pending_cursor_valid = false;
-            g_menu_abs_x = ClampDouble(MenuInputToWindowX(g_pending_cursor_x), 0.0, CursorMaxX());
-            g_menu_abs_y = ClampDouble(MenuInputToWindowY(g_pending_cursor_y), 0.0, CursorMaxY());
-        } else {
-            g_menu_abs_x = ClampDouble(MenuInputToWindowX(g_cursor_x), 0.0, CursorMaxX());
-            g_menu_abs_y = ClampDouble(MenuInputToWindowY(g_cursor_y), 0.0, CursorMaxY());
         }
-        DispatchCursorPosInternal(WindowToMenuInputX(g_menu_abs_x), WindowToMenuInputY(g_menu_abs_y), false);
+        g_menu_abs_x = ClampDouble(MenuInputToWindowX(x), 0.0, CursorMaxX());
+        g_menu_abs_y = ClampDouble(MenuInputToWindowY(y), 0.0, CursorMaxY());
+        DispatchCursorPosInternal(x, y, false);
     }
-    if (value == GLFW_CURSOR_NORMAL) {
-
-
-        SendMouseRelayCursorSync(WindowToProtocolX(g_menu_abs_x), WindowToProtocolY(g_menu_abs_y));
-        SendMouseRelayWindowCursorSync(g_menu_abs_x, g_menu_abs_y);
-    }
-    SendCursorOverlayState();
     ShimLog("Cursor mode %s", g_cursorDisabled ? "GAMEPLAY" : "MENU");
     if (!AcquireCoreWindow()) return;
 
@@ -3200,27 +3170,9 @@ extern "C" __declspec(dllexport) void glfwSetCursorPos(GLFWwindow*, double x, do
     }
 
     g_pending_cursor_valid = false;
-    if (CurrentCursorInputOwner() == CursorInputOwnerRelay) {
-        g_menu_abs_x = ClampDouble(MenuInputToWindowX(x), 0.0, CursorMaxX());
-        g_menu_abs_y = ClampDouble(MenuInputToWindowY(y), 0.0, CursorMaxY());
-        DispatchCursorPosInternal(x, y, false);
-    } else {
-        g_menu_abs_x = ClampDouble(MenuInputToWindowX(x), 0.0, CursorMaxX());
-        g_menu_abs_y = ClampDouble(MenuInputToWindowY(y), 0.0, CursorMaxY());
-        DispatchCursorPosInternal(x, y, true);
-    }
-    SendCursorOverlayState();
-
-    if (!AcquireCoreWindow()) return;
-    ComPtr<ICoreWindow2> coreWindow2;
-    if (SUCCEEDED(g_coreWindow.As(&coreWindow2)) && coreWindow2) {
-        Point position = {};
-        const double sx = CurrentPointerScaleX();
-        const double sy = CurrentPointerScaleY();
-        position.X = (FLOAT)(sx > 0.0 ? g_menu_abs_x / sx : g_menu_abs_x);
-        position.Y = (FLOAT)(sy > 0.0 ? g_menu_abs_y / sy : g_menu_abs_y);
-        coreWindow2->put_PointerPosition(position);
-    }
+    g_menu_abs_x = ClampDouble(MenuInputToWindowX(x), 0.0, CursorMaxX());
+    g_menu_abs_y = ClampDouble(MenuInputToWindowY(y), 0.0, CursorMaxY());
+    DispatchCursorPosInternal(x, y, false);
 }
 extern "C" __declspec(dllexport) GLFWcursor* glfwCreateCursor(const GLFWimage*, int, int) { return (GLFWcursor*)1; }
 extern "C" __declspec(dllexport) GLFWcursor* glfwCreateStandardCursor(int) { return (GLFWcursor*)1; }
@@ -3229,8 +3181,7 @@ extern "C" __declspec(dllexport) void glfwSetCursor(GLFWwindow*, GLFWcursor*) {}
 extern "C" __declspec(dllexport) const char* glfwGetClipboardString(GLFWwindow*) {
     g_clipboard_buf[0] = '\0';
 
-    ComPtr<IClipboardStatics> clip;
-    clip.Attach(GetClipboardStatics());
+    ComPtr<IClipboardStatics> clip(GetClipboardStatics());
     if (!clip) { ShimLog("Clipboard: IClipboardStatics unavailable (sandbox?)"); return g_clipboard_buf; }
 
     ComPtr<IDataPackageView> view;
@@ -3320,8 +3271,7 @@ extern "C" __declspec(dllexport) void glfwSetClipboardString(GLFWwindow*, const 
     if (FAILED(pkg->SetText(hstr))) { WindowsDeleteString(hstr); return; }
     WindowsDeleteString(hstr);
 
-    ComPtr<IClipboardStatics> clip;
-    clip.Attach(GetClipboardStatics());
+    ComPtr<IClipboardStatics> clip(GetClipboardStatics());
     if (!clip) return;
     if (FAILED(clip->SetContent(pkg.Get()))) {
         ShimLog("Clipboard: SetContent failed");
@@ -3359,48 +3309,59 @@ extern "C" __declspec(dllexport) uint64_t glfwGetTimerFrequency(void) {
     return (uint64_t)f.QuadPart;
 }
 
+// ShimLog() opens and closes the log file on every call. LWJGL and some mods
+// call glfwMakeContextCurrent repeatedly, so cap the two informational lines
+// (error paths below stay uncapped, as they are diagnostics).
+static int g_make_current_log_count = 0;
 extern "C" __declspec(dllexport) void glfwMakeContextCurrent(GLFWwindow* w) {
     const DWORD tid = GetCurrentThreadId();
-    ShimLog("MakeContextCurrent %p tid=%lu previousTid=%lu", (void*)w, tid, g_contextThreadId);
+    if (g_make_current_log_count < 12) {
+        ++g_make_current_log_count;
+        ShimLog("MakeContextCurrent %p tid=%lu previousTid=%lu", (void*)w, tid, g_eglContextThreadId);
+    }
     if (!w) {
-        if (g_contextThreadId != 0 && g_contextThreadId != tid) {
+        if (g_eglContextThreadId != 0 && g_eglContextThreadId != tid) {
             ShimLog("MakeContextCurrent(NULL) ignored: context owned by thread %u, caller %u",
-                (unsigned)g_contextThreadId, (unsigned)tid);
+                (unsigned)g_eglContextThreadId, (unsigned)tid);
             return;
         }
         if (wglb::Active()) {
             wglb::MakeCurrent(false);
-
+        } else if (p_eglMakeCurrent && g_eglDisplay != EGL_NO_DISPLAY) {
+            p_eglMakeCurrent(g_eglDisplay, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
         }
-        g_contextThreadId = 0;
+        g_eglContextThreadId = 0;
         return;
     }
-    if (!CreateWglContext()) return;
-    if (g_contextThreadId != 0 && g_contextThreadId != tid) {
-        ShimLog("WGL moving context from tid=%lu to tid=%lu", g_contextThreadId, tid);
+    if (!CreateEglContext()) return;
+    if (g_eglContextThreadId != 0 && g_eglContextThreadId != tid) {
+        ShimLog("eglMakeCurrent moving context from tid=%lu to tid=%lu", g_eglContextThreadId, tid);
     }
-    const bool madeCurrent = wglb::Active() && wglb::MakeCurrent(true);
+    const bool madeCurrent = wglb::Active()
+        ? wglb::MakeCurrent(true)
+        : (p_eglMakeCurrent(g_eglDisplay, g_eglSurface, g_eglSurface, g_eglContext) != 0);
     if (!madeCurrent) {
         if (wglb::Active()) ShimLog("wglMakeCurrent failed");
+        else ReportEglError("eglMakeCurrent");
         return;
     }
-    g_contextThreadId = tid;
-    ShimLog("makeContextCurrent OK tid=%lu", tid);
+    g_eglContextThreadId = tid;
+    if (g_make_current_log_count < 12) {
+        ++g_make_current_log_count;
+        ShimLog("makeContextCurrent OK tid=%lu", tid);
+    }
 }
 extern "C" __declspec(dllexport) GLFWwindow* glfwGetCurrentContext(void) {
     const DWORD tid = GetCurrentThreadId();
-    GLFWwindow* current = (wglb::Active() && g_contextThreadId == tid) ? (GLFWwindow*)&g_fake_window : NULL;
+    GLFWwindow* current = ((g_eglContext != EGL_NO_CONTEXT || wglb::Active()) && g_eglContextThreadId == tid) ? (GLFWwindow*)&g_fake_window : NULL;
     if (g_current_context_log_count < 16) {
         ++g_current_context_log_count;
         ShimLog("glfwGetCurrentContext #%d tid=%lu boundTid=%lu => %p",
-            g_current_context_log_count, tid, g_contextThreadId, (void*)current);
+            g_current_context_log_count, tid, g_eglContextThreadId, (void*)current);
     }
     return current;
 }
 
-// mouse cursor overlay drawn in the swap path, so it lands above whatever
-// minecraft rendered on any version or loader. saves and restores every bit
-// of gl state it touches so the game pipeline is unchanged after it returns.
 namespace bandit_cursor {
 
 typedef unsigned int GLenum;
@@ -3509,6 +3470,7 @@ static GLint g_locColor = -1;
 static void* Resolve(const char* name) {
     void* p = nullptr;
     if (wglb::Active()) p = wglb::GetProc(name);
+    if (!p && p_eglGetProcAddress) p = p_eglGetProcAddress(name);
     if (!p && g_opengl32) p = (void*)GetProcAddress(g_opengl32, name);
     return p;
 }
@@ -3608,9 +3570,6 @@ static bool Init() {
     g_locColor = p_getAttribLoc(g_prog, "aColor");
     if (g_locPos < 0 || g_locColor < 0) return false;
 
-    GLint previousVao = 0, previousArrayBuffer = 0;
-    p_getIntegerv(GL_C_VERTEX_ARRAY_BINDING, &previousVao);
-    p_getIntegerv(GL_C_ARRAY_BUFFER_BINDING, &previousArrayBuffer);
     p_genVao(1, &g_vao);
     p_genBuf(1, &g_vbo);
     p_bindVao(g_vao);
@@ -3620,8 +3579,7 @@ static bool Init() {
     p_vaPointer((GLuint)g_locPos, 2, GL_C_FLOAT, 0, stride, (const void*)0);
     p_enableVaa((GLuint)g_locColor);
     p_vaPointer((GLuint)g_locColor, 4, GL_C_FLOAT, 0, stride, (const void*)(2 * sizeof(GLfloat)));
-    p_bindVao((GLuint)previousVao);
-    p_bindBuf(GL_C_ARRAY_BUFFER, (GLuint)previousArrayBuffer);
+    p_bindVao(0);
     ShimLog("Mouse cursor overlay initialized (OpenGL 3.2 core)");
     return true;
 }
@@ -3651,10 +3609,11 @@ static void Draw() {
 
     const float fbw = (float)(g_framebuffer_width > 0 ? g_framebuffer_width : 1920);
     const float fbh = (float)(g_framebuffer_height > 0 ? g_framebuffer_height : 1080);
-    const float sx = g_window_width > 0 ? fbw / (float)g_window_width : 1.0f;
-    const float sy = g_window_height > 0 ? fbh / (float)g_window_height : 1.0f;
-    const float cx = (float)g_menu_abs_x * sx;
-    const float cy = (float)g_menu_abs_y * sy;
+    // Use the very same mapping that glfwGetCursorPos reports, so the drawn
+    // crosshair and the position Minecraft uses for hover/clicks cannot drift
+    // apart at any DPI scale (including after a resolution change).
+    const float cx = (float)WindowToMenuInputX(g_menu_abs_x);
+    const float cy = (float)WindowToMenuInputY(g_menu_abs_y);
 
     const float L = 14.0f, T = 2.0f, B = 5.0f;
     GLfloat buf[3 * 6 * 6];
@@ -3680,7 +3639,7 @@ static void Draw() {
     const GLboolean wasCull = p_isEnabled(GL_C_CULL_FACE);
     const GLboolean wasScissor = p_isEnabled(GL_C_SCISSOR_TEST);
 
-    p_bindFb(0x8CA9, 0);
+    p_bindFb(GL_C_FRAMEBUFFER, 0);
     p_viewport(0, 0, (GLsizei)fbw, (GLsizei)fbh);
     if (!wasBlend) p_enable(GL_C_BLEND);
     p_blendFunc(GL_C_SRC_ALPHA, GL_C_ONE_MINUS_SRC_ALPHA);
@@ -3697,7 +3656,7 @@ static void Draw() {
     p_bindVao((GLuint)prevVao);
     p_bindBuf(GL_C_ARRAY_BUFFER, (GLuint)prevArr);
     p_useProg((GLuint)prevProg);
-    p_bindFb(0x8CA9, (GLuint)prevFb);
+    p_bindFb(GL_C_FRAMEBUFFER, (GLuint)prevFb);
     p_viewport(prevVp[0], prevVp[1], (GLsizei)prevVp[2], (GLsizei)prevVp[3]);
     p_blendFuncSep((GLenum)bSrcRgb, (GLenum)bDstRgb, (GLenum)bSrcA, (GLenum)bDstA);
     if (!wasBlend) p_disable(GL_C_BLEND);
@@ -3705,8 +3664,6 @@ static void Draw() {
     if (wasCull) p_enable(GL_C_CULL_FACE);
     if (wasScissor) p_enable(GL_C_SCISSOR_TEST);
 }
-
-static void Reset() { g_ready = false; g_failed = false; g_prog = 0; g_vao = 0; g_vbo = 0; }
 
 } // namespace bandit_cursor
 
@@ -3724,20 +3681,26 @@ extern "C" __declspec(dllexport) void glfwSwapBuffers(GLFWwindow*) {
         g_winsize_cb((GLFWwindow*)&g_fake_window, g_window_width, g_window_height);
         if (g_fbsize_cb) g_fbsize_cb((GLFWwindow*)&g_fake_window, g_framebuffer_width, g_framebuffer_height);
     }
-    if (MouseCompanionActive() &&
-        g_cursorMode == GLFW_CURSOR_NORMAL &&
-        CurrentCursorInputOwner() == CursorInputOwnerRelay) {
+    if (g_cursorMode == GLFW_CURSOR_NORMAL &&
+        CurrentCursorInputOwner() == CursorInputOwnerMouse) {
         bandit_cursor::Draw();
     }
     if (wglb::Active()) {
         if (wglb::Swap()) g_presented_frames.fetch_add(1, std::memory_order_relaxed);
         return;
     }
-
+    if (!p_eglSwapBuffers || g_eglDisplay == EGL_NO_DISPLAY || g_eglSurface == EGL_NO_SURFACE) return;
+    if (!p_eglSwapBuffers(g_eglDisplay, g_eglSurface)) {
+        ReportEglError("eglSwapBuffers");
+    } else {
+        g_presented_frames.fetch_add(1, std::memory_order_relaxed);
+    }
 }
 extern "C" __declspec(dllexport) void glfwSwapInterval(int i) {
     if (wglb::Active()) { wglb::SetSwapInterval(i); return; }
-
+    if (p_eglSwapInterval && g_eglDisplay != EGL_NO_DISPLAY) {
+        p_eglSwapInterval(g_eglDisplay, i);
+    }
 }
 extern "C" __declspec(dllexport) int glfwExtensionSupported(const char* name) {
     if (g_extension_log_count < 32) {
@@ -3750,7 +3713,9 @@ extern "C" __declspec(dllexport) int glfwExtensionSupported(const char* name) {
 extern "C" __declspec(dllexport) void* glfwGetProcAddress(const char* name) {
     void* p = NULL;
     if (wglb::Active()) p = wglb::GetProc(name);
+    if (!p && p_eglGetProcAddress) p = p_eglGetProcAddress(name);
     if (!p && g_opengl32) p = (void*)GetProcAddress(g_opengl32, name);
+    if (!p && g_libEGL) p = (void*)GetProcAddress(g_libEGL, name);
     if (g_proc_log_count < 200) {
         ++g_proc_log_count;
         ShimLog("glfwGetProcAddress #%d %s => %p", g_proc_log_count, name ? name : "(null)", p);
@@ -3887,7 +3852,7 @@ extern "C" __declspec(dllexport) HWND  glfwGetWin32Window(GLFWwindow*) { return 
 // kills the whole class for any mod that touches it. there is no real hwnd to attach on uwp
 extern "C" __declspec(dllexport) GLFWwindow* glfwAttachWin32Window(HWND, GLFWwindow*) { return NULL; }
 
-extern "C" __declspec(dllexport) void* glfwGetWGLContext(GLFWwindow*) { return wglb::Context(); }
+extern "C" __declspec(dllexport) void* glfwGetWGLContext(GLFWwindow*) { return NULL; }
 
 typedef struct { void* allocate; void* reallocate; void* deallocate; void* user; } GLFWallocator;
 extern "C" __declspec(dllexport) void glfwInitAllocator(const GLFWallocator*) {}
@@ -3898,10 +3863,10 @@ extern "C" __declspec(dllexport) int   glfwGetPhysicalDevicePresentationSupport(
 extern "C" __declspec(dllexport) int   glfwCreateWindowSurface(void*, GLFWwindow*, const void*, void*) { return 1; }
 extern "C" __declspec(dllexport) const char** glfwGetRequiredInstanceExtensions(unsigned int* c) { if(c)*c=0; return NULL; }
 
-extern "C" __declspec(dllexport) void* glfwGetEGLDisplay(void) { return NULL; }
-extern "C" __declspec(dllexport) void* glfwGetEGLContext(GLFWwindow*) { return NULL; }
-extern "C" __declspec(dllexport) void* glfwGetEGLSurface(GLFWwindow*) { return NULL; }
-extern "C" __declspec(dllexport) void* glfwGetEGLConfig(GLFWwindow*) { return NULL; }
+extern "C" __declspec(dllexport) void* glfwGetEGLDisplay(void) { return g_eglDisplay; }
+extern "C" __declspec(dllexport) void* glfwGetEGLContext(GLFWwindow*) { return g_eglContext; }
+extern "C" __declspec(dllexport) void* glfwGetEGLSurface(GLFWwindow*) { return g_eglSurface; }
+extern "C" __declspec(dllexport) void* glfwGetEGLConfig(GLFWwindow*) { return g_eglConfig; }
 
 extern "C" __declspec(dllexport) int glfwGetOSMesaColorBuffer(GLFWwindow*, int*, int*, int*, void**) { return GLFW_FALSE; }
 extern "C" __declspec(dllexport) int glfwGetOSMesaDepthBuffer(GLFWwindow*, int*, int*, int*, void**) { return GLFW_FALSE; }

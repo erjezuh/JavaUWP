@@ -161,6 +161,8 @@ bool RunLaunchTaskWithLiveUi(
 
 static void ShowRemoteFilesPage(ICoreWindow* window, AuthScreenRenderer* renderer, AuthUiState& state, const std::wstring& runtimeRoot) {
     WriteLog(L"Remote files page opened");
+    const std::wstring previousStatus = state.status;
+    const std::wstring previousDetail = state.detail;
     StartRemoteFileServer(runtimeRoot);
 
     state.showMainMenu = false;
@@ -201,8 +203,8 @@ static void ShowRemoteFilesPage(ICoreWindow* window, AuthScreenRenderer* rendere
             state.showRemoteFiles = false;
             state.showMainMenu = true;
             state.isError = false;
-            state.status = Tr(L"Remote file manager stopped");
-            state.detail = L"";
+            state.status = previousStatus;
+            state.detail = previousDetail;
             WriteLog(L"Remote files page closed");
             return;
         }
@@ -255,6 +257,29 @@ static std::wstring CrashSuspectLine(const telemetry::CrashRecord& record) {
         }
         return TrFormat(L"A mod asked for {0}, which this console does not provide.",
             { a2w(record.detail.symbol.c_str()) });
+    }
+    // hs_err native crashes (EXCEPTION_ACCESS_VIOLATION, SIGSEGV, ...) have no
+    // Java exception and no symbol, so the main screen used to show only the
+    // bare signal name. ParseHsErr puts "# Problematic frame:" first in frames;
+    // surface it here too. On console users frequently only have a photo of
+    // this screen and cannot open "View details" or fetch the crash ZIP, so the
+    // failing DLL has to be visible without any extra navigation.
+    const bool nativeCrash =
+        record.exception.find(L"EXCEPTION_") != std::wstring::npos ||
+        record.exception.find(L"SIGSEGV") != std::wstring::npos ||
+        record.exception.find(L"SIGBUS") != std::wstring::npos ||
+        record.exception.find(L"SIGILL") != std::wstring::npos ||
+        record.exception.find(L"SIGFPE") != std::wstring::npos;
+    if (nativeCrash && !record.frames.empty()) {
+        std::wstring line = record.exception;
+        size_t shown = 0;
+        for (const std::wstring& frame : record.frames) {
+            if (shown >= 2 || frame.empty()) break;
+            line += L"\n" + frame;
+            ++shown;
+        }
+        line += L"\n" + std::wstring(Tr(L"Open Remote Files on the main menu to read it on a phone or PC."));
+        return line;
     }
     if (record.exception.find(L"heap_exhausted") != std::wstring::npos) {
         return TrFormat(L"This pack ran out of memory ({0}).\n"
@@ -601,8 +626,10 @@ static void ShowChangelogScreen(
 }
 
 static void ShowSettingsPage(ICoreWindow* window, AuthScreenRenderer* renderer, AuthUiState& state) {
-    constexpr int kSettingsRows = 5;
+    constexpr int kSettingsRows = 7;
     WriteLog(L"Settings page opened");
+    const std::wstring previousStatus = state.status;
+    const std::wstring previousDetail = state.detail;
 
     state.showMainMenu = false;
     state.showModsPage = false;
@@ -611,6 +638,9 @@ static void ShowSettingsPage(ICoreWindow* window, AuthScreenRenderer* renderer, 
     state.showSettings = true;
     state.settingsSelected = 0;
     state.settingsNote.clear();
+    const MouseSensitivity sensitivity = LoadMouseSensitivity();
+    state.settingsMenuMouseSpeed = sensitivity.menu;
+    state.settingsGameMouseSpeed = sensitivity.game;
     state.settingsConfigured = telemetry::Configured();
     state.settingsReportingOn = telemetry::ConsentGranted();
     state.settingsInstallId = telemetry::InstallIdText();
@@ -623,6 +653,8 @@ static void ShowSettingsPage(ICoreWindow* window, AuthScreenRenderer* renderer, 
 
     bool upWas = false;
     bool downWas = false;
+    bool leftWas = false;
+    bool rightWas = false;
     bool selectWas = false;
     bool backWas = false;
 
@@ -651,6 +683,16 @@ static void ShowSettingsPage(ICoreWindow* window, AuthScreenRenderer* renderer, 
             ABI::Windows::System::VirtualKey_GamepadDPadDown,
             ABI::Windows::System::VirtualKey_GamepadLeftThumbstickDown
         });
+        const bool leftDown = AnyVirtualKeyDown(window, {
+            ABI::Windows::System::VirtualKey_Left,
+            ABI::Windows::System::VirtualKey_GamepadDPadLeft,
+            ABI::Windows::System::VirtualKey_GamepadLeftThumbstickLeft
+        });
+        const bool rightDown = AnyVirtualKeyDown(window, {
+            ABI::Windows::System::VirtualKey_Right,
+            ABI::Windows::System::VirtualKey_GamepadDPadRight,
+            ABI::Windows::System::VirtualKey_GamepadLeftThumbstickRight
+        });
         const bool selectDown = AnyVirtualKeyDown(window, {
             ABI::Windows::System::VirtualKey_Enter,
             ABI::Windows::System::VirtualKey_Space,
@@ -671,7 +713,24 @@ static void ShowSettingsPage(ICoreWindow* window, AuthScreenRenderer* renderer, 
         if ((backDown && !backWas) || clickedBack) break;
 
         const int pressed = clicked >= 0 ? clicked : ((selectDown && !selectWas) ? state.settingsSelected : -1);
-        if (pressed == 0) {
+        const int speedRow = clicked >= 0 ? clicked : state.settingsSelected;
+        const int speedStep = leftDown && !leftWas ? -1 :
+            (rightDown && !rightWas ? 1 : (pressed == speedRow ? 1 : 0));
+        if (speedRow < 2 && speedStep != 0) {
+            MouseSensitivity next{state.settingsMenuMouseSpeed, state.settingsGameMouseSpeed};
+            int& percent = speedRow == 0 ? next.menu : next.game;
+            percent += speedStep * 25;
+            if (percent > 300) percent = 25;
+            if (percent < 25) percent = 300;
+            if (SaveMouseSensitivity(next)) {
+                state.settingsMenuMouseSpeed = next.menu;
+                state.settingsGameMouseSpeed = next.game;
+                ApplyMouseSensitivity(next);
+                state.settingsNote = Tr(L"Mouse sensitivity saved.");
+            } else {
+                state.settingsNote = Tr(L"Mouse sensitivity could not be saved.");
+            }
+        } else if (pressed == 2) {
             const bool turnOn = !state.settingsReportingOn;
             if (telemetry::SetConsent(turnOn ? telemetry::ConsentState::Always : telemetry::ConsentState::Never)) {
                 state.settingsReportingOn = turnOn;
@@ -687,14 +746,14 @@ static void ShowSettingsPage(ICoreWindow* window, AuthScreenRenderer* renderer, 
                     ? Tr(L"Reporting could not be turned on.")
                     : Tr(L"Reporting could not be turned off.");
             }
-        } else if (pressed == 1) {
+        } else if (pressed == 3) {
             if (telemetry::ResetInstallId()) {
                 state.settingsInstallId = telemetry::InstallIdText();
                 state.settingsNote = Tr(L"A new reporting id was created.");
             } else {
                 state.settingsNote = Tr(L"The reporting id could not be reset.");
             }
-        } else if (pressed == 2) {
+        } else if (pressed == 4) {
             const ModSource next = state.settingsModSource == ModSource::CurseForge
                 ? ModSource::Modrinth
                 : ModSource::CurseForge;
@@ -709,7 +768,7 @@ static void ShowSettingsPage(ICoreWindow* window, AuthScreenRenderer* renderer, 
             } else {
                 state.settingsNote = Tr(L"The mod source could not be changed.");
             }
-        } else if (pressed == 3) {
+        } else if (pressed == 5) {
             const bool turnOn = !state.settingsUpdateCheckOn;
             if (!updates::HasReleaseChannel()) {
                 state.settingsNote = Tr(L"This build is not published anywhere, so there is nothing to check.");
@@ -724,7 +783,7 @@ static void ShowSettingsPage(ICoreWindow* window, AuthScreenRenderer* renderer, 
             } else {
                 state.settingsNote = Tr(L"The update setting could not be saved.");
             }
-        } else if (pressed == 4) {
+        } else if (pressed == 6) {
             const std::vector<i18n::Language> languages = i18n::Languages();
             size_t next = 0;
             for (size_t i = 0; i < languages.size(); ++i) {
@@ -739,6 +798,8 @@ static void ShowSettingsPage(ICoreWindow* window, AuthScreenRenderer* renderer, 
 
         upWas = upDown;
         downWas = downDown;
+        leftWas = leftDown;
+        rightWas = rightDown;
         selectWas = selectDown;
         backWas = backDown;
         std::this_thread::sleep_for(std::chrono::milliseconds(16));
@@ -746,11 +807,25 @@ static void ShowSettingsPage(ICoreWindow* window, AuthScreenRenderer* renderer, 
 
     state.showSettings = false;
     state.showMainMenu = true;
-    state.status = telemetry::ConsentGranted()
-        ? Tr(L"Crash reporting is on")
-        : Tr(L"Crash reporting is off");
-    state.detail = L"";
+    state.status = previousStatus;
+    state.detail = previousDetail;
     WriteLog(L"Settings page closed");
+}
+
+// The header, the Play hero and the profile card all read typed facts instead
+// of the free-form status/detail strings, which navigation and sub-pages used
+// to overwrite. Called on entry and after the Mods page, where the active
+// profile can change.
+static void RefreshMainMenuSummary(AuthUiState& state, const LaunchAuthConfig& authConfig,
+    const std::wstring& runtimeRoot) {
+    EnsureProfilesInitialized(runtimeRoot);
+    const std::wstring activeId = GetActiveProfileId(runtimeRoot);
+    const Profile activeProfile = GetProfileById(runtimeRoot, activeId);
+    const LaunchTarget activeTarget = ResolveProfileTarget(runtimeRoot, activeProfile);
+    state.mainMenu.account = a2w(authConfig.username.c_str());
+    state.mainMenu.profileName = activeProfile.name;
+    state.mainMenu.targetText = TargetProfileText(activeTarget);
+    state.detail = TrFormat(L"Active profile: {0} - {1}", { activeProfile.name, state.mainMenu.targetText });
 }
 
 MainMenuAction ShowMainMenu(ICoreWindow* window, const LaunchAuthConfig& authConfig, const std::wstring& runtimeRoot) {
@@ -768,15 +843,10 @@ MainMenuAction ShowMainMenu(ICoreWindow* window, const LaunchAuthConfig& authCon
     state.showDeviceCode = false;
     state.showMainMenu = true;
     state.status = TrFormat(L"Signed in as {0}", { a2w(authConfig.username.c_str()) });
-    EnsureProfilesInitialized(runtimeRoot);
-    {
-        const std::wstring activeId = GetActiveProfileId(runtimeRoot);
-        const Profile activeProfile = GetProfileById(runtimeRoot, activeId);
-        const LaunchTarget activeTarget = ResolveProfileTarget(runtimeRoot, activeProfile);
-        state.detail = TrFormat(L"Active profile: {0} - {1}", { activeProfile.name, TargetProfileText(activeTarget) });
-    }
+    RefreshMainMenuSummary(state, authConfig, runtimeRoot);
 
     int selected = 0;
+    ULONGLONG signOutConfirmTick = 0;
     bool upWasDown = false;
     bool downWasDown = false;
     bool selectWasDown = false;
@@ -808,6 +878,10 @@ MainMenuAction ShowMainMenu(ICoreWindow* window, const LaunchAuthConfig& authCon
             }
         }
         state.selectedMenuIndex = selected;
+        if (selected != kMainMenuItems - 1 ||
+            (state.signOutConfirm && GetTickCount64() - signOutConfirmTick > 4000)) {
+            state.signOutConfirm = false;
+        }
         state.animation = static_cast<float>((GetTickCount64() % 100000) / 1000.0);
         {
             std::wstring newest;
@@ -838,11 +912,9 @@ MainMenuAction ShowMainMenu(ICoreWindow* window, const LaunchAuthConfig& authCon
 
         if (upDown && !upWasDown) {
             selected = (selected + kMainMenuItems - 1) % kMainMenuItems;
-            state.detail = L"";
         }
         if (downDown && !downWasDown) {
             selected = (selected + 1) % kMainMenuItems;
-            state.detail = L"";
         }
         if ((selectDown && !selectWasDown) || (mouseClicked && hovered >= 0)) {
             if (selected == 0) {
@@ -853,7 +925,9 @@ MainMenuAction ShowMainMenu(ICoreWindow* window, const LaunchAuthConfig& authCon
             if (selected == 1) {
                 WriteLog(L"Main menu: Mods selected");
                 ShowModsPage(window, renderer, state, runtimeRoot);
-                state.detail = Tr(L"Browse installed, popular, and latest Fabric mods.");
+                // Profiles can be created, renamed or activated there.
+                RefreshMainMenuSummary(state, authConfig, runtimeRoot);
+                state.status = TrFormat(L"Signed in as {0}", { a2w(authConfig.username.c_str()) });
             } else if (selected == 2) {
                 WriteLog(L"Main menu: Remote files selected");
                 ShowRemoteFilesPage(window, renderer, state, runtimeRoot);
@@ -872,13 +946,20 @@ MainMenuAction ShowMainMenu(ICoreWindow* window, const LaunchAuthConfig& authCon
                 SleepWithAuthUi(renderer, state, 350);
                 return MainMenuAction::RepairDownloads;
             } else {
-                WriteLog(L"Main menu: Sign out selected");
-                StopRemoteFileServer();
-                state.status = Tr(L"Signing out");
-                state.detail = Tr(L"Clearing saved Microsoft session");
-                RenderAuth(renderer, state);
-                SleepWithAuthUi(renderer, state, 350);
-                return MainMenuAction::SignOut;
+                if (!state.signOutConfirm) {
+                    state.signOutConfirm = true;
+                    signOutConfirmTick = GetTickCount64();
+                    WriteLog(L"Main menu: Sign out needs confirmation");
+                } else {
+                    state.signOutConfirm = false;
+                    WriteLog(L"Main menu: Sign out selected");
+                    StopRemoteFileServer();
+                    state.status = Tr(L"Signing out");
+                    state.detail = Tr(L"Clearing saved Microsoft session");
+                    RenderAuth(renderer, state);
+                    SleepWithAuthUi(renderer, state, 350);
+                    return MainMenuAction::SignOut;
+                }
             }
         }
 

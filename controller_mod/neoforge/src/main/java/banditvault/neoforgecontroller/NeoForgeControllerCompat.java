@@ -28,7 +28,7 @@ public final class NeoForgeControllerCompat {
     private static final int GAMEPAD_ID = GLFW.GLFW_JOYSTICK_1;
     private static final int LEFT_CLICK = 0;
     private static final int RIGHT_CLICK = 1;
-    private static final double RELAY_CURSOR_MOVE_EPSILON = 0.5;
+    private static final double MOUSE_CURSOR_MOVE_EPSILON = 0.5;
     private static final double CONTROLLER_CURSOR_TAKEOVER_THRESHOLD = 0.20;
 
     private static final GLFWGamepadState GLFW_STATE = GLFWGamepadState.create();
@@ -50,12 +50,12 @@ public final class NeoForgeControllerCompat {
     private static long renderFrameActiveNanos;
     private static boolean loggedLookApplied;
     private static Object lastCursorScreen;
-    private static Object lastRelayCursorScreen;
+    private static Object lastMouseCursorScreen;
+    private static double lastMouseCursorX = Double.NaN;
+    private static double lastMouseCursorY = Double.NaN;
+    private static boolean mouseOwnsCursor;
     private static Screen queuedCursorScreen;
     private static Object queuedCursorGraphics;
-    private static double lastRelayCursorX = Double.NaN;
-    private static double lastRelayCursorY = Double.NaN;
-    private static boolean relayOwnsCursor;
     private static boolean snapStickLatched;
     private static KeyMapping radialPressedKey;
     private static boolean radialPressedAsKeyboard;
@@ -184,8 +184,8 @@ public final class NeoForgeControllerCompat {
             return;
         }
         NeoForgeVersionApi.beginCursorLayer(graphics);
-        if (!relayOwnsCursor) renderControllerGuide(screen, graphics, client);
-        if (!relayOwnsCursor && cursorX >= 0.0 && cursorY >= 0.0) {
+        if (!mouseOwnsCursor) renderControllerGuide(screen, graphics, client);
+        if (!mouseOwnsCursor && cursorX >= 0.0 && cursorY >= 0.0) {
             NeoForgeVersionApi.renderCursor(graphics, (int) Math.round(cursorX), (int) Math.round(cursorY));
         }
     }
@@ -253,9 +253,9 @@ public final class NeoForgeControllerCompat {
         if (!active || screen == null || Minecraft.getInstance() == null || NeoForgeClientApi.screen(Minecraft.getInstance()) != screen) {
             return;
         }
-        observeRelayCursor(screen);
-        if (relayOwnsCursor) {
-            invokeScreenMouseMoved(screen, lastRelayCursorX, lastRelayCursorY);
+        observeMouseCursor(screen);
+        if (mouseOwnsCursor) {
+            invokeScreenMouseMoved(screen, lastMouseCursorX, lastMouseCursorY);
             return;
         }
         if (cursorMode == CursorMode.FREE) {
@@ -267,7 +267,7 @@ public final class NeoForgeControllerCompat {
 
     public static int screenMouseX(Screen screen, int fallback) {
         Minecraft client = Minecraft.getInstance();
-        if (!active || relayOwnsCursor || cursorX < 0.0 || client == null || NeoForgeClientApi.screen(client) != screen) {
+        if (!active || mouseOwnsCursor || cursorX < 0.0 || client == null || NeoForgeClientApi.screen(client) != screen) {
             return fallback;
         }
         return (int) Math.round(cursorX);
@@ -275,7 +275,7 @@ public final class NeoForgeControllerCompat {
 
     public static int screenMouseY(Screen screen, int fallback) {
         Minecraft client = Minecraft.getInstance();
-        if (!active || relayOwnsCursor || cursorY < 0.0 || client == null || NeoForgeClientApi.screen(client) != screen) {
+        if (!active || mouseOwnsCursor || cursorY < 0.0 || client == null || NeoForgeClientApi.screen(client) != screen) {
             return fallback;
         }
         return (int) Math.round(cursorY);
@@ -452,7 +452,7 @@ public final class NeoForgeControllerCompat {
         ensureScreenCursor(screen);
         float ry = axis(GLFW.GLFW_GAMEPAD_AXIS_RIGHT_Y);
 
-        if (cursorMode == CursorMode.SNAP && !relayOwnsCursor) {
+        if (cursorMode == CursorMode.SNAP && !mouseOwnsCursor) {
             applySnapTarget(screen, MENU_NAVIGATION.synchronize(screen, cursorX, cursorY));
         }
 
@@ -598,7 +598,7 @@ public final class NeoForgeControllerCompat {
     }
 
     private static void takeControllerCursor() {
-        relayOwnsCursor = false;
+        mouseOwnsCursor = false;
     }
 
     private static void updateScreenCursor(Minecraft client, Screen screen, boolean frameTimed) {
@@ -610,7 +610,7 @@ public final class NeoForgeControllerCompat {
         NeoForgeControllerSettings settings = NeoForgeControllerSettings.get();
         float rawX = axis(GLFW.GLFW_GAMEPAD_AXIS_LEFT_X);
         float rawY = axis(GLFW.GLFW_GAMEPAD_AXIS_LEFT_Y);
-        if (relayOwnsCursor) {
+        if (mouseOwnsCursor) {
             double takeoverMagnitude = Math.max(Math.abs(rawX), Math.abs(rawY));
             if (takeoverMagnitude < CONTROLLER_CURSOR_TAKEOVER_THRESHOLD) {
                 lastScreenCursorNanos = System.nanoTime();
@@ -644,7 +644,7 @@ public final class NeoForgeControllerCompat {
         }
     }
 
-    private static void observeRelayCursor(Screen screen) {
+    private static void observeMouseCursor(Screen screen) {
         Minecraft client = Minecraft.getInstance();
         if (client == null || client.mouseHandler == null) {
             return;
@@ -655,22 +655,22 @@ public final class NeoForgeControllerCompat {
             mouseX = client.mouseHandler.xpos() * screen.width / Math.max(1.0, client.getWindow().getScreenWidth());
             mouseY = client.mouseHandler.ypos() * screen.height / Math.max(1.0, client.getWindow().getScreenHeight());
         }
-        if (screen != lastRelayCursorScreen || Double.isNaN(lastRelayCursorX) || Double.isNaN(lastRelayCursorY)) {
-            lastRelayCursorScreen = screen;
-            lastRelayCursorX = mouseX;
-            lastRelayCursorY = mouseY;
+        if (screen != lastMouseCursorScreen || Double.isNaN(lastMouseCursorX) || Double.isNaN(lastMouseCursorY)) {
+            lastMouseCursorScreen = screen;
+            lastMouseCursorX = mouseX;
+            lastMouseCursorY = mouseY;
             return;
         }
 
-        if (Math.abs(mouseX - lastRelayCursorX) > RELAY_CURSOR_MOVE_EPSILON ||
-            Math.abs(mouseY - lastRelayCursorY) > RELAY_CURSOR_MOVE_EPSILON) {
-            if (!relayOwnsCursor) {
+        if (Math.abs(mouseX - lastMouseCursorX) > MOUSE_CURSOR_MOVE_EPSILON ||
+            Math.abs(mouseY - lastMouseCursorY) > MOUSE_CURSOR_MOVE_EPSILON) {
+            if (!mouseOwnsCursor) {
                 screen.clearFocus();
             }
-            relayOwnsCursor = true;
+            mouseOwnsCursor = true;
         }
-        lastRelayCursorX = mouseX;
-        lastRelayCursorY = mouseY;
+        lastMouseCursorX = mouseX;
+        lastMouseCursorY = mouseY;
     }
 
     private static void applyLook(LocalPlayer player, float rx, float ry, float seconds, NeoForgeControllerSettings settings) {

@@ -19,8 +19,10 @@ $sdkVer = $sdk.Version
 $jreSrc = Resolve-JavaHome
 
 $mcBuildDir = Join-Path $root "staging\build\MC.Xbox"
-if (-not (Test-Path (Join-Path $mcBuildDir "runtime_config.h"))) {
-    throw "staging\build\MC.Xbox\runtime_config.h is missing, run build.ps1 once to generate it"
+$runtimeConfigHeader = Join-Path $mcBuildDir "runtime_config.h"
+if (-not (Test-Path $runtimeConfigHeader)) {
+    # preview builds do not need a full APPX build, just the generated header
+    & (Join-Path $root "scripts\gen-runtime-config.ps1") -OutputPath $runtimeConfigHeader
 }
 $work = Join-Path $root "staging\build\ui-preview"
 Ensure-Dir $work
@@ -38,7 +40,7 @@ try {
     & $tools.ClExe /nologo `
         ..\tools\ui-preview\ui_preview.cpp common\launcher_common.cpp common\i18n.cpp profiles\profiles.cpp ui\mods_ui_globals.cpp third_party\miniz\miniz.c `
         /std:c++17 /EHsc /W3 /D_UNICODE /DUNICODE /D_WIN32_WINNT=0x0A00 /D_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS /DMINIZ_NO_STDIO /DMINIZ_NO_TIME `
-        /I. /Icommon /Inet /Iauth /Iui /Imods /Iprofiles /Ilaunch /Ilaunch\loaders /Itelemetry /I..\mouse_support `
+        /I. /Icommon /Inet /Iauth /Iui /Imods /Iprofiles /Ilaunch /Ilaunch\loaders /Itelemetry `
         /Fo"$work\\" /Fe"$work\ui_preview.exe" `
         /link d2d1.lib dwrite.lib d3d11.lib dxgi.lib windowscodecs.lib ole32.lib shell32.lib runtimeobject.lib windowsapp.lib
     if ($LASTEXITCODE -ne 0) { throw "ui preview build failed" }

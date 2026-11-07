@@ -2,6 +2,415 @@
 
 Notable changes to Bandit Launcher. Nightly packages are numbered by build revision rather than by release, so entries here are dated.
 
+## 2026-11-02 — Heap de 3,5 GiB para perfiles con mods
+
+### Changed
+
+A petición del usuario, el heap máximo de la JVM pasa de **3 GiB a 3,5 GiB**
+en `MC.Xbox/launch/minecraft_launch.cpp`. Es el cambio de RAM que se usa para
+perfiles cargados de mods; no afecta a ningún ajuste gráfico.
+
+- `-Xmx3G` → **`-Xmx3584M`**. Java **no admite decimales** en `-Xmx`: escribir
+  el equivalente con punto haría que la JVM rechazara el arranque antes de
+  cargar el juego. 3584 MiB = 3,5 GiB. Se mantiene `-Xms512M`,
+  `-XX:MaxDirectMemorySize=512M` y toda la configuración G1
+  (`MaxGCPauseMillis=50`, `G1NewSizePercent=20`, `G1ReservePercent=20`,
+  `G1HeapRegionSize=32M`).
+- `mc_launch.log` y la plantilla sembrada de `jvm_args.txt` reflejan el valor
+  nuevo. La plantilla añade una línea comentada `#-Xmx3G` con la vía de vuelta
+  por si la app se cierra por memoria.
+- Comprobación 18 de `scripts/validate-fork-targets.py`: exige el valor en
+  código, log y plantilla, prohíbe cualquier `-Xmx` decimal en código y
+  documentación, y verifica que **Cleanroom/1.12.2 sigue en `-Xmx2560M`** (no
+  se tocan otros targets).
+
+> **Presupuesto de memoria:** el propio código documenta ~5120 MB de límite de
+> app en Series S en modo dev. Con 3584 MiB de heap, 512 MiB de buffers
+> directos, metaspace/code cache y el runtime Mesa/D3D12 se queda cerca del
+> límite. Si aparecen cierres por falta de memoria con un modpack grande,
+> descomentar `#-Xmx3G` en `jvm_args.txt` (se aplica al final y gana al valor
+> incorporado) o bajar `-XX:MaxDirectMemorySize`. Sin verificación en consola
+> todavía; tampoco hay garantía de más FPS: esto reduce presión de GC, no
+> cambia el techo gráfico.
+
+## 2026-11-02 — Menos trabajo por frame en el shim GLFW (sin tocar ajustes gráficos)
+
+### Changed
+
+Revisión del camino caliente que se ejecuta en **cada fotograma**. No se cambia
+ninguna opción gráfica: ni resolución, ni VSync (`glfwSwapInterval` sigue
+aplicando lo que pide el juego), ni `mesa_env.txt`, ni `options.txt`, ni
+`embeddium-options.json`, ni `jvm_args.txt`.
+
+Carencias encontradas:
+
+- `RefreshWindowMetrics()` se llamaba desde `glfwPollEvents()` **y** desde
+  `glfwGetWindowSize()`, `glfwGetFramebufferSize()` y
+  `glfwGetWindowContentScale()`. Cada llamada hacía una consulta WinRT
+  `ICoreWindow::get_Bounds` (2–4 por frame, y Minecraft consulta el tamaño del
+  framebuffer en cada frame). Ahora los getters devuelven los valores ya
+  publicados y **`glfwPollEvents()` sigue siendo el único punto de refresco**,
+  una vez por frame. No hay retardo nuevo: los callbacks de resize se disparan
+  desde `ProcessEvents()` dentro de ese mismo `glfwPollEvents()`, así que el
+  mapeo del cursor/cruceta se actualiza exactamente igual que antes.
+- `MC_LEGACY_CONTROLLER_MOD` y `MC_USE_RAW_SCALED_FRAMEBUFFER` se releían con
+  `GetEnvironmentVariableW()` en cada frame (el primero hasta 4 veces, una por
+  eje del stick). El launcher fija esas variables antes de arrancar la JVM y
+  nunca las cambia: se evalúan una sola vez en un `static const bool`.
+- `glfwMakeContextCurrent()` escribía dos líneas informativas en el log **sin
+  límite**; `ShimLog()` abre y cierra el fichero en cada llamada. Se acotan a
+  12 (los mensajes de error siguen sin límite, son diagnóstico).
+
+Nuevo `glfw_shim/perf_cache.h`: helpers portables y sin `windows.h` para el
+parseo de flags y la política de caché (`CacheExpired`, que además sobrevive al
+wrap de `GetTickCount64`). `GetDisplayScale()` usa ahora ese helper en lugar de
+su comparación ad-hoc. Cubierto por `tests/perf_cache_test.cpp` y por la
+comprobación 17 de `scripts/validate-fork-targets.py`, que también exige que
+los getters no vuelvan a consultar WinRT y que `glfwPollEvents()` conserve el
+refresco.
+
+> **Alcance honesto:** esto libera tiempo de CPU del hilo de render (que en la
+> ruta Mesa/D3D12 compite con la traducción de shaders y los draw calls), pero
+> **no garantiza un aumento de FPS medible sin perfilado en consola**. El techo
+> lo marcan VSync, la resolución del framebuffer y la capa Mesa→D3D12; subirlo
+> exigiría tocar ajustes gráficos o el juego, que quedan fuera de este cambio.
+> No se tocan `java21`, `OpenAL.dll`, el shim COM, el catálogo de mods ni otros
+> targets. La caché de shaders de Mesa (`MESA_SHADER_CACHE_DIR`) y
+> `mesa_glthread` ya estaban activos; el servidor de Remote Files usa
+> `select()` con 250 ms y no hace busy-wait.
+
+## 2026-11-02 — Embeddium/Rubidium se apartan en 1.20.1 Forge (AV de renderizado)
+
+### Changed
+
+Confirmado en consola: con los frentes de OSHI, `OpenAL.dll` y COM ya cerrados,
+el `EXCEPTION_ACCESS_VIOLATION` que aparece a los pocos segundos de **entrar al
+mundo** es de renderizado y viene de **Embeddium**. Ocurre en cualquier mundo,
+incluso uno nuevo, y con sólo los mods recomendados.
+
+Revisando la rama `20.1/forge` de `FiniteReality/embeddium` se confirma que
+**no hay forma de desactivar su chunk renderer por configuración**: no existe
+`use_chunk_multidraw` en `SodiumGameOptions` (la clave que el launcher escribía
+para versiones < 1.17 es ignorada por Gson), y `DefaultChunkRenderer` llama
+siempre a `glMultiDrawElementsBaseVertex` con UBOs y buffers
+inmutables/persistentes. Mesa WGL/llvmpipe en UWP anuncia esas extensiones pero
+revienta al ejecutarlas. Los defaults conservadores que ya se sembraban
+(`use_advanced_staging_buffers=false`, `cpu_render_ahead_limit=1`,
+`always_defer_chunk_updates_v2=true`) no pueden evitarlo.
+
+Cambios, limitados a Minecraft **1.20.1**:
+
+- `config/recommended-mods.json`: `forge."1.20.1"` deja de recomendar
+  `embeddium` (y sigue sin recomendar Rubidium/Sodium). Los otros diez mods de
+  optimización se mantienen.
+- `MC.Xbox/mods/sodium_family.h`: nueva regla portable
+  `SodiumFamilyRendererUnsupportedOnUwp()` → `embeddium`/`rubidium` en 1.20.1
+  (acepta también ids tipo `1.20.1-forge-47.4.20`, sin confundir `1.20.10`).
+  `sodium` de Fabric y el resto de versiones quedan fuera.
+- `MC.Xbox/mods/mod_defaults.cpp`: `DisableUwpUnsupportedRenderers()` aparta
+  esos jars como `*.jar.disabled` antes del lanzamiento (**no los borra**) y lo
+  registra en `mc_launch.log`. El perfil arranca con el renderizador de
+  Minecraft. **Opt-in**: crear `config/bandit-keep-forge-renderer.txt` en el
+  perfil para conservar el renderer y experimentar.
+- `tests/sodium_family_test.cpp` cubre la regla (1.20.1/forge, Fabric Sodium,
+  1.18.2, 1.21.1, ids decorados); check 13 de
+  `scripts/validate-fork-targets.py` exige que el catálogo no recomiende
+  ningún renderer de la familia en `forge.1.20.1` y que exista la regla.
+- FAQ, README, guía en español y `docs/COMPATIBLE-MODS.md` documentan el
+  motivo y el procedimiento inmediato (renombrar el jar a `.jar.disabled`).
+
+> Sin verificación en consola de este build todavía. No se tocan `java21`,
+> GL/Mesa, `mods_browser.cpp` ni otros targets.
+
+## 2026-11-02 — `EXCEPTION_ACCESS_VIOLATION` al entrar al mundo: limpieza de VARIANT y diagnóstico en pantalla
+
+### Fixed
+
+Con `1.0.19.0` el perfil `1.20.1 / Forge / 47.4.20` **ya entra al mundo** (el
+`OpenAL.dll (error code = 127)` quedó atrás), pero a los pocos segundos la JVM
+escribe un `hs_err_pid*.log` con `EXCEPTION_ACCESS_VIOLATION` (`0xc0000005`).
+Sin Xaero's, sin modpack, con sólo los mods recomendados y en **cualquier mundo,
+incluso uno nuevo**: no son los datos del mundo ni un mod concreto, sino la
+ruta nativa que se inicializa al arrancar el audio/render.
+
+Revisando `alc/backends/wasapi.cpp` de OpenAL Soft apareció un **bug real en el
+shim de `1.0.19.0`**:
+
+```cpp
+auto pvprop = PropVariant{};                       // PropVariantInit
+ps->GetValue(DEVPKEY_Device_FriendlyName, pvprop.get());
+pvprop.clear();                                    // PropVariantClear
+ps->GetValue(PKEY_AudioEndpoint_GUID, pvprop.get());   // MISMA estructura
+```
+
+El `PropVariantClear` del sistema libera `pwszVal`, pone `vt = VT_EMPTY` y
+devuelve `S_OK`. Nuestro stub se limitaba a devolver `E_FAIL` sin tocar la
+estructura, dejando un `VT_LPWSTR` y un puntero colgante que el siguiente
+`GetValue` / el destructor puede desreferenciar → `EXCEPTION_ACCESS_VIOLATION`
+justo cuando el juego empieza a enumerar dispositivos de audio. Lo mismo vale
+para `VariantClear` (`WbemcliUtil` / JNA).
+
+Cambios:
+
+- `shims/ole32_uwp.cpp`: `PropVariantInit`/`Clear` y `VariantInit`/`Clear`
+  **ponen a cero** `vt`, las palabras reservadas y el puntero/valor de la unión
+  (16 bytes, sin CRT) y devuelven `S_OK`, igual que el SO. `VariantCopy`,
+  `VariantCopyInd` y `VariantChangeType` dejan el destino vacío. Sólo
+  `CoInitializeEx` / `CoCreateInstance` y compañía siguen devolviendo `E_FAIL`:
+  el contrato con OSHI (`WmiQueryHandler.queryWMI()` captura la `COMException`)
+  **no cambia**, porque JNA ignora el retorno de las funciones de limpieza.
+- `tests/ole32_shim_test.cpp` comprueba ahora el reset byte a byte de un
+  `PROPVARIANT`/`VARIANT` lleno de `0xAA`, el `S_OK` y el puntero nulo.
+- `MC.Xbox/ui/launcher_ui.cpp`: para señales nativas (`EXCEPTION_ACCESS_VIOLATION`,
+  `SIGSEGV`, …) la **pantalla principal de crasheo muestra ya el primer frame
+  nativo** (`C  [opengl32.dll+0x…]`, `OpenAL.dll`, `glfw.dll`, …) y el recordatorio
+  de *Remote Files*. Antes sólo se veía el nombre de la señal y había que abrir
+  «Ver detalles»; en consola a veces sólo se puede enviar una foto de esa pantalla.
+- `scripts/validate-fork-targets.py` añade la comprobación 15 (contrato de
+  limpieza, test y frame en pantalla).
+- FAQ, guía en español y README documentan el síntoma y cómo obtener el
+  `hs_err_pid*.log` / el ZIP.
+
+> Sigue sin verificación en consola de este build. **Actualización:** el AV que
+> quedaba tras este arreglo se confirmó que era el chunk renderer de Embeddium,
+> no la ruta COM/audio; véase la entrada más reciente. La pantalla de crasheo
+> con el frame sigue siendo útil para cualquier DLL que quede por aislar.
+
+También se alinea el orden de claves de `en.json`/`es-419.json` con el orden de
+`Tr()` en `launcher_ui.cpp` (el nuevo uso en `CrashSuspectLine` va antes que el
+de `CrashTraceText`), y `scripts/validate-fork-targets.py` añade la comprobación
+16 para detectar esa deriva sin depender de PowerShell/`-Check` en CI.
+
+## 2026-11-02 — Corregido `OpenAL.dll (error code = 127)` después del arreglo de OSHI
+
+### Fixed
+
+Con `1.0.17.0` el crasheo de `Ole32` **desapareció** (la captura ya llegaba más
+adelante en el arranque), pero `1.20.1 / Forge / 47.4.20` seguía diciendo
+«Minecraft crasheo mientras cargaba los mods» con:
+
+```
+Failed to load library: <pkg>\runtime\natives\1.20.1-forge-47.4.20\OpenAL.dll (error code = 127)
+  org.lwjgl.system.windows.WindowsLibrary.loadLibrary
+  org.lwjgl.system.Library.loadNativeFromLibraryPath
+  org.lwjgl.openal.ALC.create / ALC.<clinit>
+```
+
+El `127` es **`ERROR_PROC_NOT_FOUND`**, no «archivo no encontrado» (que sería
+`126`). Causa: `OpenAL.dll` es OpenAL Soft y su backend WASAPI está enlazado
+con `ole32.lib`, así que su tabla de importaciones pide, entre otros,
+`PropVariantClear`, `CoTaskMemAlloc`, `CoTaskMemFree`, `CoCreateInstance` y
+`CoInitializeEx` por el **nombre suelto** `ole32.dll`. Windows resuelve esas
+importaciones por nombre base: al cargar JNA nuestro shim empaquetado como
+`Ole32.dll` (durante la consulta OSHI/WMI de Embeddium, que ocurre *antes* de
+`ALC.<clinit>`), `OpenAL.dll` puede enlazarse contra él. El shim sólo exportaba
+los puntos de entrada que JNA llama desde Java y **no tenía
+`PropVariantClear`**, así que `LoadLibrary` abortaba con 127. En el target por
+defecto (1.21.1 NeoForge) no aparece porque allí no hay consulta OSHI temprana
+y el shim nunca se carga.
+
+Cambios:
+
+- `shims/ole32_uwp.cpp` exporta ahora también la superficie que consumen las
+  bibliotecas **nativas** de `ole32.lib` / `oleaut32.lib`:
+  `PropVariantInit`/`PropVariantClear`, `CoTaskMemAlloc`/`Realloc`/`CoGetMalloc`,
+  `StringFromIID`/`StringFromCLSID`, `CLSIDFromProgID`/`ProgIDFromCLSID`,
+  `CoGetClassObject`, `CoRegisterClassObject`, `CoRevokeClassObject`,
+  `CoMarshalInterface`/`CoUnmarshalInterface`/`CoReleaseMarshalData`,
+  `CoDisconnectObject`, `CoFreeUnusedLibraries`, `CoGetCurrentProcess`,
+  `CreateStreamOnHGlobal`/`GetHGlobalFromStream`, `OleRun`,
+  `SysAllocStringByteLen`/`SysStringByteLen`/`SysReAllocString`,
+  `VariantCopy`/`VariantCopyInd`, `SafeArrayCreate`/`Destroy`,
+  `LoadTypeLib`/`RegisterTypeLib`. Siguen siendo fallos/no-ops controlados:
+  el contrato con OSHI (`E_FAIL`) no cambia.
+- `MC.Xbox/launch/minecraft_launch.cpp` **precarga los `ole32.dll` y
+  `oleaut32.dll` reales del sistema antes de crear la JVM**
+  (`LoadLibraryW` con nombre KnownDLL y, si falla, ruta absoluta a
+  `%SystemRoot%\System32`), para que `OpenAL.dll` enlace contra la
+  implementación del SO y conserve su backend WASAPI. Queda registrado en `mc_launch.log` como
+  `System COM DLL preloaded: ole32.dll` / `oleaut32.dll`.
+- `tests/ole32_shim_test.cpp` enlaza y comprueba todas esas exportaciones (si
+  falta alguna, el test no compila); `scripts/validate-fork-targets.py`
+  (check 14) exige los símbolos y la precarga.
+
+> Sin verificación en consola todavía: se valida con la siguiente captura /
+> `mc_launch.log`. **Actualización:** este fix de contrato/carga de COM y
+> `OpenAL.dll` no era la causa del `EXCEPTION_ACCESS_VIOLATION` al entrar al
+> mundo; ese AV es de Embeddium (entrada más reciente). No se cambian `java21`,
+> GL/Mesa, el catálogo de mods ni los demás targets.
+
+## 2026-11-02 — Arreglado el crasheo de OSHI / JNA / WMI al cargar mods en 1.20.1 Forge
+
+### Fixed
+
+**Con el arreglo anterior ya instalado, `Profile 4 - 1.20.1` / `forge 1.20.1-47.4.20` seguía diciendo «Minecraft crasheo mientras cargaba los mods».** La captura enviada permitió identificar un fallo **distinto** del conflicto Embeddium ↔ Rubidium. El launcher ya lo clasificaba como *«Un mod solicitó detalles del hardware de Windows, cual está consola bloquea»*; la traza era:
+
+```
+java.lang.RuntimeException --> java.lang.UnsatisfiedLinkError
+Unable to load library 'Ole32': El parámetro no es correcto.
+Native library (win32-x86-64/Ole32.dll) not found in resource path
+  com.sun.jna@5.12.1  NativeLibrary.loadLibrary -> Native.load
+  com.sun.jna.platform.win32.Ole32.<clinit>
+  com.github.oshi@6.2.2  WmiQueryHandler.initCOM -> queryWMI
+```
+
+Causa real, confirmada leyendo el código de los mods y de las bibliotecas:
+
+- **Embeddium 0.3.x** llama a `GraphicsAdapterProbe.findAdapters()` desde `SodiumMixinPlugin.onLoad()`, es decir, **mientras se cargan los mods**. En Windows esa ruta usa `new SystemInfo().getHardware().getGraphicsCards()` → OSHI 6.2.2 → `Win32VideoController` → WMI/COM. (Rubidium 0.7.x, basado en Sodium 0.4, no hace esa consulta; por eso el problema aparece con Embeddium.) El mixin `SystemDetailsOshiBypassMixin` del mod de compatibilidad sólo cancela la consulta **propia de Minecraft** en Fabric, no la de un mod.
+- JNA 5.12.1 resuelve `Ole32` con `LoadLibraryExW("Ole32.dll", NULL, LOAD_WITH_ALTERED_SEARCH_PATH)` usando un **nombre suelto**. En el contenedor UWP eso devuelve `ERROR_INVALID_PARAMETER` («El parámetro no es correcto»), y el `UnsatisfiedLinkError` de `Ole32.<clinit>` **no** es capturado por `WmiQueryHandler.queryWMI()` (sólo captura `COMException` y `TimeoutException`). De ahí el crasheo. Las propiedades `oshi.properties` que ya escribía el launcher desactivan los contadores de rendimiento, pero **no** las consultas WMI, así que no podían evitarlo.
+
+Cambios:
+
+- `shims/ole32_uwp.cpp`: DLL empaquetada, sin dependencias de Windows ni de COM, que exporta los puntos de entrada de `Ole32` (`CoInitializeEx`, `CoCreateInstance`, …) devolviendo `E_FAIL` (`0x80004005`) y los de `OleAut32` (`SysAllocString`, `VariantClear`, …) devolviendo un BSTR nulo / fallo. `build.ps1` la compila con MSVC para `WINAPI_FAMILY_APP` y la deja **dos veces**: `natives/Ole32.dll` y `natives/OleAut32.dll`, porque JNA también carga `OleAut32` por nombre suelto en cuanto una consulta WMI pasa de la inicialización COM.
+- `MC.Xbox/launch/minecraft_launch.cpp` añade `-Djna.library.path=<dir de natives>` cuando el shim está presente (incluyendo además el dir de natives del target, separado por `;`). Eso da a JNA una **ruta absoluta** (el mismo mecanismo que ya usan `glfw.dll` y `opengl32.dll` empaquetados), así que `Native.load("Ole32", ...)` y `Native.load("OleAut32", ...)` dejan de fallar. Como todos los `HRESULT` son de fallo, `WmiQueryHandler.initCOM()` lanza una `COMException` que `queryWMI()` **sí** captura: devuelve un `WmiResult` vacío y cachea la clase WMI fallida. Los mods ven «no graphics cards found» y el arranque continúa, en vez de reventar.
+- El arreglo es **general**: cubre cualquier mod que consulte GPU/CPU/memoria por OSHI/JNA/COM, y también el `SystemReport` de Minecraft en targets Forge/NeoForge/Cleanroom, no sólo Embeddium. Antes del cambio, `Ole32` **nunca** podía cargarse en UWP, por lo que no hay ruta sana que se degrade.
+- `tests/ole32_shim_test.cpp` compila el shim en Linux y verifica el contrato de fallo; `scripts/validate-fork-targets.py` añade la comprobación 14 (shim, build, opción JVM, test y documentación). `build.ps1` falla si falta alguno de los dos DLL en `natives/`, y `scripts/validate-modern-version-matrix.ps1` los exige **dentro del APPX firmado** en cada build de CI.
+
+Para verificar en consola, buscar en `mc_launch.log` la línea `JNA COM shim enabled: ...\Ole32.dll`. Si aparece `JNA COM shim missing`, el paquete instalado no incluye el shim.
+
+### Limitaciones
+
+Sigue sin haber prueba en consola de este target: el DLL lo compila CI con MSVC y la lógica se valida con el test portable, pero el comportamiento real de `LoadLibraryExW` en el contenedor sólo puede confirmarlo un arranque en Xbox. `1.20.1 Forge` continúa como `experimental` y el parche UWP de `securejarhandler` sigue sin aplicarse a Forge `2.1.10`. El shim **no simula WMI**: los mods que dependan de detectar la GPU para aplicar workarounds simplemente no los aplicarán (en esta ruta Mesa/UWP es lo deseable). El aviso de la UI sigue existiendo como último recurso por si otro mod llama a una API nativa distinta.
+
+## 2026-11-02 — Arreglados los mods de render/optimización en 1.20.1 Forge (Embeddium / Rubidium)
+
+### Fixed
+
+**En `1.20.1 Forge` (`forge 47.4.20`) los mods tipo Embeddium / Rubidium no funcionaban.** La investigación encontró tres causas concatenadas:
+
+1. **La pestaña «Recomendados» ofrecía Rubidium y Embeddium a la vez.** Modrinth declara Rubidium (`4ZqxOvjD`) como `dependency_type: incompatible` en todas las versiones de Embeddium para 1.20.1. Los dos son puertos del mismo renderizador de Sodium, aplican los mismos mixins y no pueden coexistir: instalar ambos termina en un fallo de mixins / arranque abortado. Rubidium lleva sin mantenimiento desde 2023 y Embeddium nació precisamente para corregir sus «gamebreaking issues».
+2. **`ConfigureSodiumDefaults()` sólo reconocía Fabric.** Buscaba el id `sodium` en `fabric.mod.json` y escribía `config/sodium-options.json`. Los puertos de Forge se declaran en `META-INF/mods.toml` y guardan sus opciones en `embeddium-options.json` / `rubidium-options.json`, así que **1.20.1 Forge arrancaba con los valores de fábrica**: `arena_memory_allocator=ASYNC`, `use_advanced_staging_buffers=true`, `cpu_render_ahead_limit=3`, `always_defer_chunk_updates=false`. El propio comentario del launcher ya advertía de que esos ajustes se cuelgan en la ruta Mesa/UWP; en Fabric se corregían, en Forge no.
+3. **El reparador de `sodium-mixins.properties` usaba `< "1.20.1"`, excluyendo exactamente el target afectado**, de modo que un perfil que arrastrase las desactivaciones antiguas podía arrancar con el renderizador de chunks apagado.
+
+Cambios:
+
+- `MC.Xbox/mods/sodium_family.h` clasifica los jars de Sodium / Embeddium / Rubidium descartando explícitamente los addons (Sodium Extra, Embeddium Extra, Reese's Sodium Options, TexTrue's Embeddium Options, Indium, Oculus…). Si un perfil tiene más de un renderizador, se queda **Embeddium** y los demás se apartan como `.jar.disabled` (reversible, con log claro) en vez de dejar que el juego reviente.
+- `ConfigureSodiumFamilyDefaults()` siembra las claves seguras para UWP en el fichero de opciones de la familia detectada, incluida `always_defer_chunk_updates_v2` (el nombre que usa Embeddium 0.3.x) y la reparación de mixins también en 1.20.1.
+- Los helpers de JSON ahora usan `SetNamedValue` al sobrescribir claves que ya existen, porque `JsonObject::Insert` puede lanzar en ese caso.
+- `config/recommended-mods.json` deja de recomendar Rubidium en Forge 1.18.2 y 1.20.1; Embeddium encabeza la lista.
+- `scripts/validate-fork-targets.py` añade la comprobación 13 (catálogo sin renderizadores incompatibles + cobertura de las tres familias) y `tests/sodium_family_test.cpp` cubre la clasificación, los addons y el desempate. Se verificó que el check falla con el código anterior.
+
+### Limitaciones
+
+`1.20.1 Forge` sigue marcado como `experimental` en el catálogo y **no hay verificación en consola**. El parche UWP de `securejarhandler` continúa sin aplicarse a Forge 47 (`2.1.10`), porque el vendored está compilado contra NeoForge `3.0.8`; los mods con Jar-in-Jar complejo pueden seguir fallando. Para confirmar un arranque, buscar en `mc_launch.log` las líneas `UWP graphics defaults seeded in ...\embeddium-options.json` y `Disabled conflicting renderer ...`.
+
+## 2026-11-02 — Arreglado el desajuste entre la cruceta y la posición real del ratón
+
+### Fixed
+
+**En el juego, la cruceta se dibujaba en un sitio y los clics/tooltips caían hacia la esquina superior izquierda, en todas las versiones de Minecraft y en todas las resoluciones.** No era un fallo del ratón ni de la sensibilidad, sino de espacios de coordenadas dentro de `glfw_shim/glfw_uwp.cpp`. La cruceta (`bandit_cursor::Draw()`) se dibuja en coordenadas de **framebuffer** (píxeles reales), mientras que `glfwGetCursorPos` se entregaba a Minecraft en `g_menu_window_*`. En la rama `main-native` (merge `01ab727`) se conservó la línea `g_menu_window_width = g_framebuffer_width`, que usa el valor **anterior** del framebuffer; `main` ya la había corregido a `newFramebufferWidth` en `f707781`. Como `glfwCreateWindow(854, 480)` fija ese espacio al tamaño que pide Minecraft, el juego creía que el ratón vivía en 854×480 mientras la superficie era 1920×1080 (o 3840×2160 en 4K): de ahí el factor ~0,44 de desplazamiento hacia arriba a la izquierda.
+
+- `RefreshWindowMetrics` ahora usa `newFramebufferWidth` / `newFramebufferHeight` para el espacio del cursor; `glfwInit` y `glfwCreateWindow` lo resincronizan también cuando la lectura de métricas no cambia nada.
+- `bandit_cursor::Draw()` dibuja la cruceta con `WindowToMenuInputX/Y`, **la misma función** que produce `glfwGetCursorPos`, así que dibujo y coordenada notificada no pueden separarse a ningún DPI ni tras un cambio de resolución.
+- El log del shim ahora imprime `Window size ... framebuffer ... cursor space ... scale ...`, para poder verificar los tres tamaños en la consola.
+- `scripts/validate-fork-targets.py` añade la comprobación 12, que falla si un merge vuelve a introducir el valor obsoleto; se verificó que detecta el código anterior.
+
+## 2026-11-02 — Arreglado el error `0x80070005` al instalar el APPX en la Xbox
+
+### Fixed
+
+**Todas las Release publicadas hasta ahora llevaban la versión `1.0.0.0`.** `build.ps1` autoincrementa la revisión usando `.local\app_build.txt`, pero ese archivo no está en la caché de CI y cada runner empieza con un worktree limpio, así que el manifiesto siempre se sellaba con la versión base. Al intentar instalar una Release nueva sobre una ya registrada, el servicio de despliegue de la Xbox devolvía *`Error 0x80070005 en la operación de implementación de Add con el volumen D: ... Microsoft.MicrosoftEdge.BanditLauncher_1.0.0.0_x64_8wekyb3d8bbwe: Acceso denegado`*. Ahora, cuando no se pasa `-AppxVersion`, `build.ps1` usa `GITHUB_RUN_NUMBER` como tercer campo (`1.0.<n>.0`, cuatro campos en total), que crece monótonamente en este workflow, de modo que cada Release es una actualización válida. Se documenta además el procedimiento de despliegue (desinstalar la versión vieja, instalar primero el `.cer` de esa misma Release, Dev Mode activo, nombre de archivo sin espacios y espacio libre) en `docs/FAQ.md` y `docs/FORK-NATIVE-NEOFORGE.es.md`.
+
+## 2026-11-02 — Arreglada la firma del APPX en builds con caché caliente
+
+### Fixed
+
+**El primer build con caché caliente llegaba al empaquetado y fallaba con `No code signing certificate for 'CN=Microsoft Corporation...' in Cert:\CurrentUser\My`.** La caché de `actions/cache` restaura `staging\certs` (incluido el `.pfx`), pero el almacén personal de certificados de un runner nuevo está vacío; `build.ps1` sólo generaba el certificado cuando el archivo no existía, así que no había nada con que firmar. Ahora, si el `.pfx` está cacheado y no hay un certificado con esa misma entidad en el almacén, se importa con `Import-PfxCertificate` antes de buscar candidatos de firma. Esto conserva el mismo certificado entre builds (mejor para actualizar el APPX en la consola) en lugar de regenerarlo cada vez.
+
+## 2026-11-02 — Controlify sustituye al Bandit Controller y el APPX compila mucho más rápido
+
+### Changed
+
+**Ya no se compila el mod «Bandit Controller» para ningún target.** `build.ps1` generaba una variante distinta para 51 de las 56 filas del catálogo (18 Fabric + 16 Forge + 16 NeoForge + 1 Cleanroom); los de NeoForge ejecutan el *installer* completo por versión. Medido en el último build (`41446496020`), esa fase duró **1.633,7 s (27 min) de los 2.317,2 s (39 min)** totales, es decir el **70,5 %** del tiempo, y además fue el único paso que falló: `installer failed (1)` en el controller de `1.21.5-neoforge-21.5.98` dejó el paquete sin su JAR y `validate-modern-version-matrix.ps1` abortó antes de crear el APPX. Un build frío debería bajar ahora de ~39 min a ~11 min.
+
+**Controlify es el único mod de control que se entrega.** `config\controlify-bundle.json` fija las versiones de Modrinth para el target por defecto (`1.21.1 / neoforge / 21.1.250`): Controlify `3.0.1+lts` (`RqsNKKLK`) y su dependencia obligatoria YACL `3.8.2` (`7TVdVtxF`), con URL, SHA1 y tamaño verificados por `Save-RemoteFile`. Ambos JAR se empaquetan en `runtime\bundled-mods\` y en `runtime\version-mods\1.21.1-neoforge-21.1.250\`, de modo que `SeedLocalRuntime` y el sincronizado de `minecraft_launch.cpp` los dejan en `mods/` de cada instancia nueva. Se conserva `banditvault-xbox-compat-1.0.0.jar`, que es un parche de UWP y no un mod de control.
+
+- `config/versions.tsv`: `controllerProvider = none` en las 56 filas; `scripts/config.ps1`: `DefaultControllerProvider = none`.
+- `scripts/validate-modern-version-matrix.ps1` **prohíbe** cualquier `banditvault-*-controller-*.jar` en el APPX y **exige** los dos JAR de Controlify.
+- `MC.Xbox/App.cpp` elimina los JAR de Bandit que queden de instalaciones antiguas y nunca borra Controlify; `profiles.h` crea perfiles nuevos en modo Controlify.
+- La UI muestra «Controlify» en lugar del interruptor «Bandit On/Off»; pulsarlo sólo limpia mods antiguos.
+- `scripts/validate-fork-targets.py` verifica los hashes, el target y que ya no se compila ningún controller.
+
+## 2026-11-02 — Arreglado el bloqueo en 4020/4021 archivos
+
+### Fixed
+
+**El lanzamiento de NeoForge se quedaba en `4020/4021 files` y mostraba `game/libraries/com/google/guava/listenablefuture/9999.0-empty-to-avoid-conflict-with-guava/listenablefuture-9999.0-empty-...` con «Retrying in 10 seconds».** No era un problema de red: la URL responde `HTTP 200`, 2199 bytes y su SHA1 (`b421526c5f297295adef1c886e5246c39d4ac629`) coincide con el manifiesto. El culpable es la longitud de la ruta: ese nombre Maven mide 153 caracteres (el siguiente más largo, 123), y al anteponerle la carpeta `LocalState` de Xbox se supera el límite `MAX_PATH` de Win32, por lo que crear el `.download` y mover el archivo falla siempre.
+
+- `build.ps1` empaqueta ese JAR vacío de 2 KB en `runtime\libraries\...` con SHA1 verificado.
+- `MC.Xbox\launch\runtime_manager.cpp` ya no intenta descargar librerías que vienen en el paquete (`PackagedLibraryOverride`), usa un fichero temporal corto en `.download\<n>.part` y aplica rutas extendidas cuando la ruta completa se acerca a `MAX_PATH`.
+- `MC.Xbox\common\win32_long_path.h` aporta `ToExtendedPath` / `ToSafeFilePath`; `EnsureDirectoryTree` y `CollectManifestLibraryJars` también entienden rutas extendidas.
+- Test portátil nuevo: `tests\win32_long_path_test.cpp` (7 casos) en `tests\run-tests.sh`.
+
+## 2026-11-02 — Release garantizada y recuperable desde el artefacto
+
+### Fixed
+
+**El primer build completo terminó el APPX pero falló al publicarlo.** El log del paso mostró `HTTP 403: Resource not accessible by integration` al llamar `gh release create` con `GITHUB_TOKEN` para un tag que aún no existía. `scripts\publish-release.ps1` ya no pasa `--target` al editar una Release existente (mover el tag no es necesario y el token de Actions no puede hacerlo), y reintenta hasta tres veces la creación en frío de un tag nuevo. La Release y el tag `nightly-native` ya existen, así que los builds siguientes usan la ruta `edit` + `upload --clobber`, verificada en CI.
+
+### Added
+
+**Red de seguridad para «siempre hay un APPX descargable».** Si el paso de publicación falla, el propio build escribe su `run id` en `docs/ci/.publish-trigger`; eso dispara `.github/workflows/publish-appx-artifact.yml`, que descarga el artefacto `.appx` ya subido por ese mismo run y lo adjunta a la Release en ~40 s, sin recompilar nada. Se puede usar también a mano poniendo cualquier `run id` en ese archivo. El workflow guarda su transcripción en `docs/ci/publish-log.md` para poder diagnosticar fallos sin descargar logs desde el exterior.
+
+**Resultado:** <https://github.com/erjezuh/JavaUWP/releases/tag/nightly-native> con `BanditLauncherNative-neoforge.appx` (437 MB), su `.sha256` y el `.cer` correspondiente.
+
+## 2026-11-02 — Build de APPX más rápido en CI
+
+### Changed
+
+**`native-neoforge.yml` now persists the incremental build cache.** `build.ps1` and every per-target mod script already write content-hash stamps for their outputs, but a fresh Actions runner started with an empty `staging/` and `clean.ps1 -Apply` removed `staging/build` — so every run regenerated 56 download manifests and recompiled roughly fifty Java mods, which is where the ~20 minutes went. The workflow now restores `staging/cache`, `staging/build`, `staging/certs` and `staging/notes` from `actions/cache` after the clean, and saves a new cache after the build. `staging/package` is not cached. The first build seeds the cache; subsequent builds are mostly stamp hits.
+
+**Diagnostics.** `build.ps1` prints per-phase elapsed times via `Write-Phase`, so a slow build can be attributed instead of being one opaque step. `concurrency.cancel-in-progress` is now `false`, so a build about to publish a Release is no longer cancelled by the next push.
+
+### Added
+
+- `workflow_dispatch` input `fast_build` passes `-SkipVersionManifests -SkipVersionCompat` for a quick smoke build; such builds are never published as a Release.
+- A commit message containing `[skip appx]` skips the APPX job for docs/preview-only pushes.
+
+See `docs/BUILDING.md` for the full explanation.
+
+## 2026-11-02 — APPX descargable en cada build
+
+### Changed
+
+**Every `native-neoforge` workflow run now publishes a downloadable Release.** Previously the build only attached the package to the workflow run and publishing a Release was opt-in (`publish_release=false`); workflow artifacts are not reachable from every client. The Release at tag `nightly-native` is created/updated automatically on every push to this branch and on manual dispatches, with `BanditLauncherNative-neoforge.appx`, its `.sha256` and the matching signing `.cer`. `publish_release=false` on a manual dispatch still skips it. The run summary prints the download URL. README and `docs/FORK-NATIVE-NEOFORGE.es.md` now point at the fork's own Release.
+
+Note: the upstream license requires prior written permission from veroxsity / BanditVault to redistribute APPX packages. Publishing is done at the fork owner's explicit request and their responsibility.
+
+## 2026-11-02 — Ergonomía del dashboard (UI)
+
+### Changed
+
+**The main menu now has a hierarchy.** Play is a large accent hero showing the active profile and target; the remaining actions are grouped under `Library` (Mods, Remote Files) and `Launcher` (Settings, What's new, Repair downloads, Sign out). A persistent header shows the account, a dark profile card keeps the active profile/target readable over the screenshot panorama, and a footer bar shows the controls that actually work on that screen. See `docs/UI-ERGONOMICS.es.md` for the analysis and before/after renders in `docs/previews/`.
+
+**Settings is grouped** into Controls, Privacy & diagnostics and Content & updates; the privacy note uses the secondary type size so it no longer competes with the rows. Section labels and footer hints are shared renderer helpers (`DrawSectionLabel`, `DrawFooterBar`) driven by a new `layout` namespace of geometry constants.
+
+**Sign out now takes two presses.** The first `A` shows a red confirmation on the row and in the footer; only a second `A` within four seconds (without moving focus) signs out. This prevents a stray D-pad press from clearing the Microsoft session and its entitlement check.
+
+### Fixed
+
+**The main menu no longer loses its context.** Account, profile name and target are now typed fields in `MainMenuSummary` instead of being squeezed into the generic `status`/`detail` strings; they are refreshed when returning from Mods, where the active profile can change. Settings and Remote Files now restore the previous status on exit instead of leaving `"Crash reporting is off"` / `"Remote file manager stopped"` on the dashboard. Navigation no longer clears the profile summary, and the obsolete `"Browse installed, popular, and latest Fabric mods."` copy (wrong for a NeoForge default) is gone.
+
+**Cursor visibility.** The mouse crosshair now has a dark halo, a black outline and an accent centre dot, so it stays visible over both the dark dashboard and bright screenshots.
+
+### Infrastructure
+
+`scripts/gen-runtime-config.ps1` is the single source of `runtime_config.h` token substitution (`build.ps1` and the UI preview both call it). `.github/workflows/ui-preview.yml` renders every launcher screen to PNG on Windows, regenerates `MC.Xbox/lang/en.json` with the official translation script and commits a curated before/after set. `MC.Xbox/lang/es-419.json` was updated for the nine new strings.
+
+## 2026-11-02 — Fork «Native + NeoForge»
+
+### Added
+
+**This fork builds the native keyboard/mouse package with NeoForge 1.21.1 as the default target.** It is based on upstream's `main-native` branch (direct USB mouse and keyboard, separate app identity), and the compiled default, `download_manifest.tsv`, the default per-version manifest and new profiles now all point at `1.21.1 / neoforge / 21.1.250` with the Java 21 runtime. The default target is configurable from `scripts/config.ps1` or `-DefaultLoader` / `-DefaultLoaderVersion` / `-DefaultLaunchVersion`, so any catalog row can be the default. See `docs/FORK-NATIVE-NEOFORGE.es.md`.
+
+**Portable checks.** `tests/run-tests.sh` runs a C++ unit test for NeoForge version resolution and `scripts/validate-fork-targets.py`, which checks catalog/default consistency, `runtime_config.h` token substitution and NeoForge controller variant coverage. `.github/workflows/native-neoforge.yml` builds the native APPX from this branch and uploads it as a workflow artifact; publishing a Release is opt-in.
+
+### Fixed
+
+**NeoForge version resolution.** The launcher now uses the catalog's loader version (the one whose installer and artifacts were downloaded) and only falls back to parsing the installer's `version.json` id for legacy profiles. All known id shapes are accepted and Fabric/Forge ids are rejected instead of producing invalid Maven coordinates. `neoforge.cpp` now checks for the vanilla client jar, installer jar, installertools metadata and NeoForm archive up front and logs which input is missing.
+
+**NeoForge manifest generation is resilient.** Missing `.sha1` sidecars are computed from the artifact, a single unpublished installer artifact no longer aborts a whole target manifest, the NeoForm coordinate is resolved from `version.json`, `minecraftArguments` or `install_profile.json`, and tool versions are looked up across all Maven groups NeoForge has used. Helper scripts (`gen-neoforge-artifacts.ps1`, the NeoForge controller mod build) no longer hardcode `21.1.233` while the catalog uses `21.1.250`. The securejarhandler UWP patch is built against the version the default target resolves, with a `3.0.8` fallback.
+
 ## 2026-11-01
 
 ### Fixed
