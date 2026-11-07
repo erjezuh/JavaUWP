@@ -429,6 +429,26 @@ Pruebas rápidas si aun así crashea:
 > se confirmó que el AV al entrar al mundo era de Embeddium y no de esta ruta
 > COM/audio; mira la sección de renderizado más arriba.
 
+## Memoria para perfiles con mods (3,5 GiB)
+
+El heap máximo de la JVM es **3584 MiB = 3,5 GiB** (`-Xmx3584M`), antes era
+`-Xmx3G`. **Java no admite decimales en `-Xmx`**: escribir la cifra con punto
+haría que la JVM rechazara el arranque, así que hay que expresarla en MiB
+enteros. Siguen igual `-Xms512M`, `-XX:MaxDirectMemorySize=512M` y todos los
+ajustes G1. No es un ajuste gráfico.
+
+`jvm_args.txt` se aplica **al final** y gana a los valores incorporados: la
+plantilla incluye `#-Xmx3G` comentado para volver atrás. En `mc_launch.log`
+debe aparecer `JVM heap: -Xmx3584M (3.5 GiB) ...`.
+
+> **Ojo con el límite de la consola**: el código documenta ~5120 MB de
+> presupuesto de app en Series S en modo dev. Con 3584 MiB de heap más 512 MiB
+> de buffers directos, metaspace y el runtime Mesa/D3D12 se queda cerca. Si con
+> un modpack grande la app se cierra por memoria, descomenta `#-Xmx3G` o baja
+> `-XX:MaxDirectMemorySize`. Cleanroom / 1.12.2 mantiene su propio
+> `-Xmx2560M`; no se han tocado otros targets. Sin verificación en consola
+> todavía, y esto alivia la presión de GC, **no sube el techo de FPS**.
+
 ## Optimizaciones del camino caliente (sin cambiar ajustes gráficos)
 
 El techo de FPS en esta plataforma lo marcan **VSync, la resolución del

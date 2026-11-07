@@ -477,6 +477,37 @@ def main() -> int:
     if "p_eglSwapInterval(g_eglDisplay, i)" not in glfw_shim:
         errors.append("glfwSwapInterval no longer honours the value requested by the game")
 
+    # 18. Modded profiles get a 3.5 GiB heap. HotSpot rejects decimal -Xmx
+    # values ("-Xmx3.5G" stops the JVM before the game starts), so the value
+    # must be a whole number of MiB. Keep the log, the seeded jvm_args.txt
+    # template and the documented rollback in sync, and leave other targets
+    # (Cleanroom/1.12.2) alone.
+    launch_cpp = read("MC.Xbox/launch/minecraft_launch.cpp")
+    cleanroom_cpp = read("MC.Xbox/launch/loaders/cleanroom.cpp")
+    if 'vmOptionStorage.push_back("-Xmx3584M");' not in launch_cpp:
+        errors.append("minecraft_launch.cpp no longer sets the 3.5 GiB (-Xmx3584M) heap")
+    for needle in ("JVM heap: -Xmx3584M (3.5 GiB)", "#   -Xmx3584M (3.5 GiB)"):
+        if needle not in launch_cpp:
+            errors.append(f"minecraft_launch.cpp log/template is out of sync with the heap ({needle})")
+    if "#-Xmx3G" not in launch_cpp:
+        errors.append("jvm_args.txt template lost the documented rollback to 3 GiB")
+    for number, line in enumerate(launch_cpp.splitlines(), 1):
+        active = line.strip()
+        if active.startswith("//") or active.startswith('L"#') or active.startswith("#"):
+            continue
+        if "-Xmx3G" in active:
+            errors.append(f"minecraft_launch.cpp line {number} still has an active -Xmx3G reference")
+    for rel in ("MC.Xbox/launch/minecraft_launch.cpp",
+                "MC.Xbox/launch/loaders/cleanroom.cpp",
+                "CHANGELOG.md", "docs/FAQ.md", "docs/ARCHITECTURE.md",
+                "docs/FORK-NATIVE-NEOFORGE.es.md"):
+        for match in re.finditer(r"-Xmx\d+\.\d+[kKmMgG]?", read(rel)):
+            errors.append(
+                f"{rel} contains a decimal -Xmx value ({match.group(0)}); "
+                "Java only accepts a whole number")
+    if 'vmOptions.push_back("-Xmx2560M");' not in cleanroom_cpp:
+        errors.append("Cleanroom/1.12.2 heap changed; other targets must stay untouched")
+
     for warning in warnings:
         print(f"WARN  {warning}")
     for error in errors:

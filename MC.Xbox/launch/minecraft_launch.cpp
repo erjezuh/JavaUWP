@@ -1029,8 +1029,12 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
 
     std::vector<std::string> vmOptionStorage;
     vmOptionStorage.reserve(64);
-    // 5120 MB app budget on series s dev mode, so a 3G heap that never resizes fits
-    vmOptionStorage.push_back("-Xmx3G");
+    // 5120 MB app budget on Series S dev mode. 3584M = 3.5 GiB for modded
+    // profiles; Java rejects decimal -Xmx values, so it must be spelled in MiB.
+    // Together with 512M direct buffers, metaspace and the Mesa/D3D12 runtime
+    // this is close to the budget: jvm_args.txt can lower it again if the app
+    // is killed for memory on a smaller console.
+    vmOptionStorage.push_back("-Xmx3584M");
     vmOptionStorage.push_back("-Xms512M");
     vmOptionStorage.push_back("-XX:MaxDirectMemorySize=512M");
 
@@ -1045,7 +1049,7 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
     vmOptionStorage.push_back("-XX:G1HeapRegionSize=32M");
     // hsperfdata is mmapped and rewritten every collection, on console storage that is a frame hitch
     vmOptionStorage.push_back("-XX:+PerfDisableSharedMem");
-    WriteLog(L"JVM heap: -Xmx3G -Xms512M -XX:MaxDirectMemorySize=512M, G1 at 50ms pause target");
+    WriteLog(L"JVM heap: -Xmx3584M (3.5 GiB) -Xms512M -XX:MaxDirectMemorySize=512M, G1 at 50ms pause target");
     vmOptionStorage.push_back("--enable-native-access=ALL-UNNAMED");
     vmOptionStorage.push_back("--add-opens=jdk.zipfs/jdk.nio.zipfs=ALL-UNNAMED");
     const std::wstring selectedJavaBasePatchName =
@@ -1192,7 +1196,7 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
             L"#\n"
             L"# These are appended after the launcher's own options, so anything set here\n"
             L"# overrides the built in value. The built ins are:\n"
-            L"#   -Xmx3G -Xms512M -XX:MaxDirectMemorySize=512M\n"
+            L"#   -Xmx3584M (3.5 GiB) -Xms512M -XX:MaxDirectMemorySize=512M\n"
             L"#   -XX:+UseG1GC -XX:+PerfDisableSharedMem\n"
             L"#   -XX:MaxGCPauseMillis=50 -XX:G1NewSizePercent=20\n"
             L"#   -XX:G1ReservePercent=20 -XX:G1HeapRegionSize=32M\n"
@@ -1200,6 +1204,10 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
             L"# Unrecognised options are ignored rather than failing the launch, so a typo\n"
             L"# here will not stop the game starting. Check mc_launch.log for lines reading\n"
             L"# \"jvm_args.txt applying:\" to confirm what was actually picked up.\n"
+            L"\n"
+            L"# Series S has a ~5120 MB app budget. If the app is killed for memory\n"
+            L"# with a large modpack, uncomment this to return to the old 3 GiB heap.\n"
+            L"#-Xmx3G\n"
             L"\n"
             L"# Write a garbage collection log next to the other logs.\n"
             L"#-Xlog:gc:file=" + gcLogPath + L":time,uptime\n"

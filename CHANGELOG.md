@@ -2,6 +2,37 @@
 
 Notable changes to Bandit Launcher. Nightly packages are numbered by build revision rather than by release, so entries here are dated.
 
+## 2026-11-02 — Heap de 3,5 GiB para perfiles con mods
+
+### Changed
+
+A petición del usuario, el heap máximo de la JVM pasa de **3 GiB a 3,5 GiB**
+en `MC.Xbox/launch/minecraft_launch.cpp`. Es el cambio de RAM que se usa para
+perfiles cargados de mods; no afecta a ningún ajuste gráfico.
+
+- `-Xmx3G` → **`-Xmx3584M`**. Java **no admite decimales** en `-Xmx`: escribir
+  el equivalente con punto haría que la JVM rechazara el arranque antes de
+  cargar el juego. 3584 MiB = 3,5 GiB. Se mantiene `-Xms512M`,
+  `-XX:MaxDirectMemorySize=512M` y toda la configuración G1
+  (`MaxGCPauseMillis=50`, `G1NewSizePercent=20`, `G1ReservePercent=20`,
+  `G1HeapRegionSize=32M`).
+- `mc_launch.log` y la plantilla sembrada de `jvm_args.txt` reflejan el valor
+  nuevo. La plantilla añade una línea comentada `#-Xmx3G` con la vía de vuelta
+  por si la app se cierra por memoria.
+- Comprobación 18 de `scripts/validate-fork-targets.py`: exige el valor en
+  código, log y plantilla, prohíbe cualquier `-Xmx` decimal en código y
+  documentación, y verifica que **Cleanroom/1.12.2 sigue en `-Xmx2560M`** (no
+  se tocan otros targets).
+
+> **Presupuesto de memoria:** el propio código documenta ~5120 MB de límite de
+> app en Series S en modo dev. Con 3584 MiB de heap, 512 MiB de buffers
+> directos, metaspace/code cache y el runtime Mesa/D3D12 se queda cerca del
+> límite. Si aparecen cierres por falta de memoria con un modpack grande,
+> descomentar `#-Xmx3G` en `jvm_args.txt` (se aplica al final y gana al valor
+> incorporado) o bajar `-XX:MaxDirectMemorySize`. Sin verificación en consola
+> todavía; tampoco hay garantía de más FPS: esto reduce presión de GC, no
+> cambia el techo gráfico.
+
 ## 2026-11-02 — Menos trabajo por frame en el shim GLFW (sin tocar ajustes gráficos)
 
 ### Changed

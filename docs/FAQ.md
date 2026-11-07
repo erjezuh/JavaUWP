@@ -53,6 +53,22 @@ To apply it right now without reinstalling, rename
 vanilla renderer. The Spanish guide has the full diagnosis:
 [FORK-NATIVE-NEOFORGE.es.md](FORK-NATIVE-NEOFORGE.es.md).
 
+## How much RAM does the game get, and can I change it?
+
+The built-in maximum heap is **3584 MiB (3.5 GiB)**, up from 3 GiB, for
+modded profiles. Java does not accept decimal `-Xmx` values, so 3.5 GiB has to
+be written as `-Xmx3584M` — a decimal spelling would stop the JVM before the
+game starts. `-Xms512M`, `-XX:MaxDirectMemorySize=512M` and the G1 settings are
+unchanged. This is a memory change, **not a graphics setting**.
+
+Options in `jvm_args.txt` are appended last and override the built-ins. The
+seeded template includes a commented `#-Xmx3G` line to roll back if needed.
+Watch `mc_launch.log` for `JVM heap: -Xmx3584M ...`; if the app is killed for
+memory on Series S (roughly a 5120 MB app budget in dev mode), lower the heap
+or `MaxDirectMemorySize` again.
+
+Cleanroom / 1.12.2 has its own smaller heap and is deliberately left alone.
+
 ## Can the launcher code itself give me more FPS?
 
 Only a little, and honestly: the ceiling is set by VSync, the framebuffer
