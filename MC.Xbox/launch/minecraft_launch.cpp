@@ -404,7 +404,7 @@ static bool IsJvmMemoryOption(const std::wstring& arg) {
         lower.rfind(L"-xms", 0) == 0 ||
         lower.rfind(L"-xx:maxram", 0) == 0 ||
         lower.rfind(L"-xx:initialram", 0) == 0 ||
-        lower.rfind(L"-xx:heap", 0) == 0;
+        lower.rfind(L"-xx:heap", 0) == 0 ||\n        lower.rfind(L"-xx:maxdirectmemorysize", 0) == 0;
 }
 
 void CollectManifestLibraryJars(
@@ -999,7 +999,7 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
     std::vector<std::string> vmOptionStorage;
     vmOptionStorage.reserve(64);
     // 5120 MB app budget on series s dev mode, so a 3G heap that never resizes fits
-    vmOptionStorage.push_back("-Xmx3G");
+    vmOptionStorage.push_back("-Xmx3584M");
     vmOptionStorage.push_back("-Xms512M");
     vmOptionStorage.push_back("-XX:MaxDirectMemorySize=512M");
 
@@ -1011,10 +1011,10 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
     vmOptionStorage.push_back("-XX:MaxGCPauseMillis=50");
     vmOptionStorage.push_back("-XX:G1NewSizePercent=20");
     vmOptionStorage.push_back("-XX:G1ReservePercent=20");
-    vmOptionStorage.push_back("-XX:G1HeapRegionSize=32M");
+    // Let HotSpot choose the G1 region size for the configured heap.
     // hsperfdata is mmapped and rewritten every collection, on console storage that is a frame hitch
     vmOptionStorage.push_back("-XX:+PerfDisableSharedMem");
-    WriteLog(L"JVM heap: -Xmx3G -Xms512M -XX:MaxDirectMemorySize=512M, G1 at 50ms pause target");
+    WriteLog(L"JVM heap: -Xmx3584M -Xms512M -XX:MaxDirectMemorySize=512M, G1 at 50ms pause target");
     vmOptionStorage.push_back("--enable-native-access=ALL-UNNAMED");
     vmOptionStorage.push_back("--add-opens=jdk.zipfs/jdk.nio.zipfs=ALL-UNNAMED");
     const std::wstring selectedJavaBasePatchName =
@@ -1134,10 +1134,10 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
             L"#\n"
             L"# These are appended after the launcher's own options, so anything set here\n"
             L"# overrides the built in value. The built ins are:\n"
-            L"#   -Xmx3G -Xms512M -XX:MaxDirectMemorySize=512M\n"
+            L"#   -Xmx3584M -Xms512M -XX:MaxDirectMemorySize=512M\n"
             L"#   -XX:+UseG1GC -XX:+PerfDisableSharedMem\n"
             L"#   -XX:MaxGCPauseMillis=50 -XX:G1NewSizePercent=20\n"
-            L"#   -XX:G1ReservePercent=20 -XX:G1HeapRegionSize=32M\n"
+            L"#   -XX:G1ReservePercent=20 (G1 region size selected automatically)\n"
             L"#\n"
             L"# Unrecognised options are ignored rather than failing the launch, so a typo\n"
             L"# here will not stop the game starting. Check mc_launch.log for lines reading\n"
