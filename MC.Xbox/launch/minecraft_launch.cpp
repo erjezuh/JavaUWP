@@ -404,7 +404,8 @@ static bool IsJvmMemoryOption(const std::wstring& arg) {
         lower.rfind(L"-xms", 0) == 0 ||
         lower.rfind(L"-xx:maxram", 0) == 0 ||
         lower.rfind(L"-xx:initialram", 0) == 0 ||
-        lower.rfind(L"-xx:heap", 0) == 0 ||\n        lower.rfind(L"-xx:maxdirectmemorysize", 0) == 0;
+        lower.rfind(L"-xx:heap", 0) == 0 ||
+        lower.rfind(L"-xx:maxdirectmemorysize", 0) == 0;
 }
 
 void CollectManifestLibraryJars(
