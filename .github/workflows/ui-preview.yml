@@ -21,7 +21,7 @@ on:
         default: ""
   push:
     branches:
-      - arena/16fba603-javauwp
+      - "arena/**"
     paths:
       - ".github/workflows/ui-preview.yml"
       - "tools/ui-preview/**"

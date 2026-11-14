@@ -115,6 +115,9 @@ AuthUiState Settings(bool reporting, ModSource source, const wchar_t* keyHint, c
     state.settingsInstallId = L"Reporting id 7f3c9a12-4be0-4c51-9d2e-0a61b5e8c3f4";
     state.settingsModSource = source;
     state.settingsCurseForgeKeyHint = keyHint;
+    state.settingsMemoryProfile = L"Balanced";
+    state.settingsMemoryDetail =
+        L"Fits a 100-150 mod pack and keeps a safety margin for native memory.";
     state.settingsNote = note;
     return state;
 }
