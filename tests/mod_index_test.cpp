@@ -163,6 +163,80 @@ void TestDuplicates() {
     Check(!duplicates.empty() && duplicates[0] == "jei", "the duplicated id is named");
 }
 
+void TestLookupTableMatchesSlowPath() {
+    using modindex::LookupSource;
+
+    modindex::Entries entries = {
+        Make("sodium-0.6.13.jar", 100, 11, "sodium", true),
+        Make("moonlight-1.21.1.jar", 10, 100, "", false),
+        Make("jei-1.jar", 1, 1, "jei", true),
+        Make("jei-2.jar", 2, 2, "jei", true),
+        Make("controls-plus.jar", 30, 300, "lambdacontrols", true),
+        Make("aaa-unknown.jar", 5, 5, "", false)
+    };
+    modindex::SortEntries(entries);
+
+    modindex::LookupTable table = modindex::BuildLookupTable(entries);
+    CheckEq(static_cast<long long>(table.lowerNames.size()),
+        static_cast<long long>(entries.size()), "the table has one lowercased name per entry");
+    Check(!table.lowerNames.empty() && table.lowerNames[0] == modindex::LowerAscii(entries[0].name),
+        "the stored name is lowercased");
+
+    const char* ids[] = {"sodium", "jei", "lambdacontrols", "moonlight", "mystery", ""};
+    const char* tokens[] = {"sodium", "jei", "policy", "moonlight", "mystery", "nomatch"};
+    for (const char* id : ids) {
+        for (const char* token : tokens) {
+            const modindex::Lookup slow = modindex::LookupMod(entries, id, token);
+            const modindex::Lookup fast = modindex::LookupMod(entries, table, id, token);
+            Check(fast.index == slow.index, "the table path agrees on the index",
+                std::string(id) + "/" + token);
+            Check(static_cast<int>(fast.source) == static_cast<int>(slow.source),
+                "the table path agrees on the source", std::string(id) + "/" + token);
+        }
+    }
+
+    // NoteProbed keeps the table in sync one entry at a time.
+    size_t firstUnprobed = entries.size();
+    for (size_t i = 0; i < entries.size(); ++i) {
+        if (!entries[i].probed) { firstUnprobed = i; break; }
+    }
+    if (firstUnprobed < entries.size()) {
+        const modindex::Lookup before = modindex::LookupMod(entries, table, "hidden", "hidden");
+        Check(before.source == LookupSource::Probe, "an unprobed jar is offered for a probe");
+        entries[firstUnprobed].probed = true;
+        entries[firstUnprobed].fabricId = "hiddenmod";
+        modindex::NoteProbed(table, entries, static_cast<int>(firstUnprobed));
+        const modindex::Lookup after = modindex::LookupMod(entries, table, "hiddenmod", "nothing-matches");
+        Check(after.source == LookupSource::FabricIdCache,
+            "a jar probed after the table was built is cached in the map");
+        Check(after.index == static_cast<int>(firstUnprobed), "the cached id points at the probed jar");
+    }
+
+    // A stale table (entries changed size) must not answer from the fast path.
+    modindex::Entries grown = entries;
+    grown.push_back(Make("late.jar", 9, 9, "late", true));
+    Check(modindex::LookupMod(grown, table, "late", "late").index >= 0,
+        "a stale table falls back instead of failing");
+}
+
+void TestDuplicateTableMatchesSlowPath() {
+    const modindex::Entries entries = {
+        Make("jei-1.jar", 1, 1, "jei", true),
+        Make("sodium.jar", 3, 3, "sodium", true),
+        Make("jei-2.jar", 2, 2, "jei", true),
+        Make("unprobed.jar", 4, 4, "", false),
+        Make("JEI-3.jar", 6, 6, "JEI", true)
+    };
+    const modindex::LookupTable table = modindex::BuildLookupTable(entries);
+    const std::vector<std::string> slow = modindex::DuplicateIds(entries);
+    const std::vector<std::string> fast = modindex::DuplicateIds(entries, table);
+    CheckEq(static_cast<long long>(fast.size()), static_cast<long long>(slow.size()),
+        "the table reports the same number of duplicates");
+    Check(fast == slow, "the table reports the duplicates in the same order");
+    CheckEq(static_cast<long long>(fast.size()), 1, "one duplicated id");
+    Check(!fast.empty() && fast[0] == "jei", "ids compare case-insensitively");
+}
+
 } // namespace
 
 int main() {
@@ -172,6 +246,8 @@ int main() {
     TestMergeInvalidatesOnlyChangedFiles();
     TestLookupOrder();
     TestDuplicates();
+    TestLookupTableMatchesSlowPath();
+    TestDuplicateTableMatchesSlowPath();
 
     if (g_failures != 0) {
         std::printf("%d check(s) failed\n", g_failures);

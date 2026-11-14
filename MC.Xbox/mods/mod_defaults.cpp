@@ -22,6 +22,10 @@
 namespace {
 
 modindex::Entries g_modIndex;
+// Derived once per scan: lowercased names + mod id -> entry. Rebuilding it is
+// O(n); asking the entries one by one was O(n^2) with a string allocation per
+// comparison (the dominant cost on a 150 jar pack).
+modindex::LookupTable g_modLookup;
 std::wstring g_modIndexDir;
 std::wstring g_modIndexPath;
 bool g_modIndexLoaded = false;
@@ -89,6 +93,7 @@ void EnsureModIndex(const std::wstring& modsDir) {
     g_modIndexDir = modsDir;
     g_modIndexPath = ModIndexPathFor(modsDir);
     g_modIndex.clear();
+    g_modLookup = modindex::LookupTable();
 
     if (modsDir.empty()) return;
     const unsigned long long startedAt = GetTickCount64();
@@ -107,6 +112,7 @@ void EnsureModIndex(const std::wstring& modsDir) {
     }
 
     g_modIndex = modindex::Merge(cached, scanned);
+    g_modLookup = modindex::BuildLookupTable(g_modIndex);
     size_t reused = 0;
     for (const modindex::Entry& entry : g_modIndex) {
         if (entry.probed) ++reused;
@@ -161,7 +167,7 @@ static bool FindModJarByFabricIdOrName(
 
     const size_t probeLimit = g_modIndex.size() + 1;
     for (size_t attempt = 0; attempt < probeLimit; ++attempt) {
-        const modindex::Lookup found = modindex::LookupMod(g_modIndex, wanted, token);
+        const modindex::Lookup found = modindex::LookupMod(g_modIndex, g_modLookup, wanted, token);
         if (found.source == modindex::LookupSource::NotFound || found.index < 0) return false;
         if (found.source != modindex::LookupSource::Probe) {
             jarPath = ModJarPath(modsDir, g_modIndex[static_cast<size_t>(found.index)]);
@@ -180,6 +186,7 @@ static bool FindModJarByFabricIdOrName(
         entry.fabricId = id;
         entry.probed = true;
         g_modIndexDirty = true;
+        modindex::NoteProbed(g_modLookup, g_modIndex, found.index);
         if (!wanted.empty() && modindex::LowerAscii(id) == modindex::LowerAscii(wanted)) {
             jarPath = path;
             return true;
@@ -934,7 +941,7 @@ void ConfigureKnownModDefaults(
     const std::wstring& bundledModsDir) {
     // One scan, then every lookup below is served from it.
     EnsureModIndex(userModsDir);
-    for (const std::string& duplicate : modindex::DuplicateIds(g_modIndex)) {
+    for (const std::string& duplicate : modindex::DuplicateIds(g_modIndex, g_modLookup)) {
         WriteLogF(L"Two jars declare the same mod id (%s); the game will pick one. "
                   L"Remove the one you do not want.", a2w(duplicate.c_str()).c_str());
     }

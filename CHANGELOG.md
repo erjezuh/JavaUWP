@@ -44,6 +44,13 @@ configuración del launcher, no en la consola:
   **ningún** JAR.
 - `ReadZipTextFile` mapea el archivo en lugar de leerlo entero a memoria, así
   que un sondeo ya no mete el JAR completo en el *commit* de la app.
+- **Tabla de búsqueda derivada del índice** (`modindex::LookupTable`): nombres en
+  minúsculas y mapa `id -> entrada`, construidos una vez por escaneo y
+  actualizados con `NoteProbed` al sondear un JAR. Resolver un mod ya no recorre
+  la lista llamando a `LowerAscii()` en cada comparación (~22 500 asignaciones de
+  cadena por arranque con 150 JAR). La detección de duplicados usa la misma tabla.
+  Medido con `tools/bench-mod-index`: 3,6× más rápido y 11× menos bytes leídos
+  que abrir cada JAR (150 JAR, Linux, caché caliente).
 - Se avisa en el log si dos JAR declaran el mismo id (sin borrar nada).
 - Nuevas fases medidas (`LaunchClock`) y `logs/current/launch_timings.txt` con
   una fila por fase, más `first frame presented after N s`.
@@ -56,10 +63,27 @@ configuración del launcher, no en la consola:
   en el código, todos los topes nativos presentes, sin `G1HeapRegionSize`, índice
   de mods en uso, lectura de JAR mapeada y tests registrados.
 
-> **Sin verificación en consola todavía.** No hay UWP, MSVC ni Series S en el
-> entorno de desarrollo: el APPX se compila en CI y falta medir con un modpack
-> real de 100–150 mods y repetir entradas/salidas de servidor. Detalles,
-> metodología y limitaciones en
+### Build
+
+- **APPX compilado y verificado en CI** (`Native NeoForge fork build`, ejecución
+  `43599905491`, commit `6431089`): MSVC 19.51 con `/W4` y `/GL`, ambas tareas en
+  verde, ~14 min con caché tibia. Release `nightly-native`:
+  `BanditLauncherNative-neoforge.appx` (429 MiB), `.sha256` y `.cer`; el paquete
+  se sella como `1.0.<ejecución>.0` (`1.0.31.0`) para actualizar en el sitio.
+- `WriteJvmMemoryProfileSetting` asignaba el `bool` de `WriteTextFile` a un
+  `std::wstring`; era el error de compilación que tumbaba el build (corregido).
+- El paso de CI canalizaba `build.ps1` por un *pipe*: Windows PowerShell 5.1 con
+  `$ErrorActionPreference = "Stop"` trata cualquier línea de **stderr** de un
+  proceso nativo (el banner de `cl.exe`) como error terminante y mataba el build
+  en la primera llamada al compilador. Ahora se lanza como proceso hijo con las
+  salidas redirigidas a fichero, y un paso `if: failure()` publica el error como
+  anotación del check-run.
+
+> **Sin verificación en consola todavía.** No hay UWP ni Series S en el entorno
+> de desarrollo: el APPX está compilado y firmado, pero falta instalarlo y medir
+> con un modpack real de 100–150 mods, repetir entradas/salidas de servidor y
+> confirmar la invalidación de la caché de mods en la consola. Detalles,
+> metodología, mediciones y limitaciones en
 > [`docs/MEMORY-AND-STARTUP.es.md`](docs/MEMORY-AND-STARTUP.es.md).
 
 Notable changes to Bandit Launcher. Nightly packages are numbered by build revision rather than by release, so entries here are dated.

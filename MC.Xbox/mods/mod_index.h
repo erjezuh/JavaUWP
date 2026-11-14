@@ -22,6 +22,7 @@
 #include <cstdint>
 #include <string>
 #include <tuple>
+#include <unordered_map>
 #include <vector>
 
 namespace modindex {
@@ -177,6 +178,59 @@ enum class LookupSource {
     NotFound
 };
 
+// Tabla derivada del indice: nombres ya en minusculas y un mapa de id de mod a
+// posicion. Sin ella, resolver un mod recorria las entradas llamando a
+// LowerAscii() en cada comparacion: 150 JAR x 150 consultas eran ~22500
+// asignaciones de cadena por arranque.
+struct LookupTable {
+    std::vector<std::string> lowerNames;                 // paralelo a las entradas
+    std::unordered_map<std::string, int> byFabricId;     // id en minusculas -> indice
+    int firstUnprobed = -1;
+};
+
+inline LookupTable BuildLookupTable(const Entries& entries) {
+    LookupTable table;
+    table.lowerNames.reserve(entries.size());
+    for (size_t i = 0; i < entries.size(); ++i) {
+        table.lowerNames.push_back(LowerAscii(entries[i].name));
+        if (entries[i].probed && !entries[i].fabricId.empty()) {
+            const std::string id = LowerAscii(entries[i].fabricId);
+            if (table.byFabricId.find(id) == table.byFabricId.end()) {
+                table.byFabricId.emplace(id, static_cast<int>(i));
+            }
+        }
+        if (table.firstUnprobed < 0 && !entries[i].probed) {
+            table.firstUnprobed = static_cast<int>(i);
+        }
+    }
+    return table;
+}
+
+// Una entrada acaba de sondearse: actualiza solo lo que cambia, sin reconstruir.
+inline void NoteProbed(LookupTable& table, const Entries& entries, int index) {
+    if (index < 0 || static_cast<size_t>(index) >= entries.size()) return;
+    if (table.lowerNames.size() != entries.size()) {
+        table = BuildLookupTable(entries);
+        return;
+    }
+    const Entry& entry = entries[static_cast<size_t>(index)];
+    if (entry.probed && !entry.fabricId.empty()) {
+        const std::string id = LowerAscii(entry.fabricId);
+        if (table.byFabricId.find(id) == table.byFabricId.end()) {
+            table.byFabricId.emplace(id, index);
+        }
+    }
+    if (table.firstUnprobed == index) {
+        table.firstUnprobed = -1;
+        for (size_t i = static_cast<size_t>(index) + 1; i < entries.size(); ++i) {
+            if (!entries[i].probed) {
+                table.firstUnprobed = static_cast<int>(i);
+                break;
+            }
+        }
+    }
+}
+
 struct Lookup {
     int index = -1;
     LookupSource source = LookupSource::NotFound;
@@ -218,6 +272,66 @@ inline Lookup LookupMod(const Entries& entries, const std::string& modId, const 
         if (!entries[i].probed) return Lookup{ static_cast<int>(i), LookupSource::Probe };
     }
     return Lookup{ -1, LookupSource::NotFound };
+}
+
+// LookupMod con la tabla ya construida: mismo orden de resolucion, sin
+// asignaciones por comparacion. Si la tabla no corresponde, cae al camino
+// lento para no devolver una respuesta incorrecta.
+inline Lookup LookupMod(const Entries& entries, const LookupTable& table,
+                        const std::string& modId, const std::string& lowerToken) {
+    if (table.lowerNames.size() != entries.size()) {
+        return LookupMod(entries, modId, lowerToken);
+    }
+    const std::string token = LowerAscii(lowerToken);
+    const std::string wanted = LowerAscii(modId);
+
+    if (!token.empty()) {
+        int firstMatch = -1;
+        for (size_t i = 0; i < entries.size(); ++i) {
+            if (table.lowerNames[i].find(token) == std::string::npos) continue;
+            if (firstMatch < 0) firstMatch = static_cast<int>(i);
+            if (!wanted.empty() && LowerAscii(entries[i].fabricId) == wanted) {
+                return Lookup{ static_cast<int>(i), LookupSource::NameToken };
+            }
+        }
+        if (firstMatch >= 0) return Lookup{ firstMatch, LookupSource::NameToken };
+    }
+
+    if (!wanted.empty()) {
+        const auto found = table.byFabricId.find(wanted);
+        if (found != table.byFabricId.end()) {
+            return Lookup{ found->second, LookupSource::FabricIdCache };
+        }
+    }
+
+    if (table.firstUnprobed >= 0) {
+        for (size_t i = static_cast<size_t>(table.firstUnprobed); i < entries.size(); ++i) {
+            if (!entries[i].probed) return Lookup{ static_cast<int>(i), LookupSource::Probe };
+        }
+    }
+    return Lookup{ -1, LookupSource::NotFound };
+}
+
+// Deteccion de duplicados en una pasada, con la misma semantica que la version
+// cuadratica: un id por duplicado, en orden de primera aparicion.
+inline std::vector<std::string> DuplicateIds(const Entries& entries, const LookupTable& table) {
+    std::vector<std::string> ids;
+    std::unordered_map<std::string, int> seen;
+    seen.reserve(table.byFabricId.size());
+    for (size_t i = 0; i < entries.size(); ++i) {
+        if (!entries[i].probed || entries[i].fabricId.empty()) continue;
+        const std::string id = LowerAscii(entries[i].fabricId);
+        const auto found = seen.find(id);
+        if (found == seen.end()) {
+            seen.emplace(id, static_cast<int>(i));
+            continue;
+        }
+        if (found->second >= 0) {
+            ids.push_back(id);
+            found->second = -1;
+        }
+    }
+    return ids;
 }
 
 // Same mod id in more than one jar. Reported, never deleted: the launcher must
