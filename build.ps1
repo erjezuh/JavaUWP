@@ -4,6 +4,11 @@ param(
     [string]$McVersion,
     [string]$FabricLoader,
     [string]$AssetIndex,
+    # Default launch target for this package. Anything in config/versions.tsv can
+    # be selected; this fork ships with NeoForge 1.21.1 as the default.
+    [string]$DefaultLoader,
+    [string]$DefaultLoaderVersion,
+    [string]$DefaultLaunchVersion,
     [string]$AppxVersion = $env:APPX_VERSION,
     [ValidateSet("", "nightly", "stable", "nightly-native")]
     [string]$ReleaseChannel = "",
@@ -50,14 +55,35 @@ $inheritedAssetIndex    = $env:MC_ASSET_INDEX
 
 # Push command-line overrides into the environment before sourcing config.
 # scripts/config.ps1 honors these so every downstream script (compat mod,
-# patch-fabric, etc.) sees the same chosen version.
-if ($McVersion)    { $env:MC_VERSION = $McVersion }
-if ($FabricLoader) { $env:FABRIC_LOADER_VERSION = $FabricLoader }
-if ($AssetIndex)   { $env:MC_ASSET_INDEX = $AssetIndex }
+# patch-fabric, etc.) sees the same chosen version and default target.
+if ($McVersion)           { $env:MC_VERSION = $McVersion }
+if ($FabricLoader)        { $env:FABRIC_LOADER_VERSION = $FabricLoader }
+if ($AssetIndex)          { $env:MC_ASSET_INDEX = $AssetIndex }
+if ($DefaultLoader)       { $env:DEFAULT_LOADER = $DefaultLoader.ToLowerInvariant() }
+if ($DefaultLoaderVersion) { $env:DEFAULT_LOADER_VERSION = $DefaultLoaderVersion }
+if ($DefaultLaunchVersion) { $env:DEFAULT_LAUNCH_VERSION = $DefaultLaunchVersion }
 
 . (Join-Path $PSScriptRoot "scripts\common.ps1")
 
-Write-Host "=== Build preflight ==="
+# The compiled default and the build-time Minecraft version must describe the
+# same target, otherwise download_manifest.tsv and the launcher disagree.
+if ($ProjectConfig.DefaultMinecraftVersion -ne $ProjectConfig.MinecraftVersion) {
+    throw "Default target MC mismatch: DEFAULT_MC_VERSION=$($ProjectConfig.DefaultMinecraftVersion) but MC_VERSION=$($ProjectConfig.MinecraftVersion). Use -McVersion / MC_VERSION for both."
+}
+
+# Phase timing: "Build native APPX" used to be one opaque 20-minute CI step.
+# The per-target work below is stamp-driven, so knowing which phase is slow is
+# enough to tell a cold cache from a real regression.
+$script:BuildTotalWatch = [System.Diagnostics.Stopwatch]::StartNew()
+$script:BuildPhaseWatch = [System.Diagnostics.Stopwatch]::StartNew()
+function Write-Phase {
+    param([Parameter(Mandatory = $true)][string]$Name)
+    $last = $script:BuildPhaseWatch.Elapsed.TotalSeconds
+    $script:BuildPhaseWatch.Restart()
+    Write-Host ("=== {0} === [last phase {1:N1}s | elapsed {2:N1}s]" -f $Name, $last, $script:BuildTotalWatch.Elapsed.TotalSeconds)
+}
+
+Write-Phase "Build preflight"
 
 $root = Resolve-RepoRoot
 $pkg = Get-ConfigPath "PackageContentDir"
@@ -68,11 +94,10 @@ $nativesSourceDir = Get-ConfigPath "NativesDir"
 $certDir = Get-ConfigPath "CertificateDir"
 $mcBuildDir = Join-Path $buildDir "MC.Xbox"
 $glfwBuildDir = Join-Path $buildDir "glfw_shim"
-$mouseSupportBuildDir = Join-Path $buildDir "mouse_support"
-$mouseSupportDll = Join-Path $mouseSupportBuildDir "mouse_support.dll"
-$mouseSupportLib = Join-Path $mouseSupportBuildDir "mouse_support.lib"
+$ole32BuildDir = Join-Path $buildDir "ole32_shim"
 $mcExe = Join-Path $mcBuildDir "MC.Xbox.exe"
 $shimDll = Join-Path $glfwBuildDir "glfw.dll"
+$ole32ShimDll = Join-Path $ole32BuildDir "Ole32.dll"
 $currentJavaMajor = (@(Import-Csv (Join-Path $root $ProjectConfig.VersionCatalog) -Delimiter "`t" | Where-Object { $_.javaRuntime -eq "current" } | ForEach-Object { Get-MinecraftJavaMajorVersion $_.minecraftVersion }) | Measure-Object -Maximum).Maximum
 $jreSrc = Resolve-JavaHome -MajorVersion ([Math]::Max([int]$currentJavaMajor, [int]$ProjectConfig.JavaRelease))
 $jre21Src = Resolve-JavaHomeExact -MajorVersion 21
@@ -112,9 +137,19 @@ $appVersionBase = "$($baseVersionParts[0]).$($baseVersionParts[1]).$($baseVersio
 # update in place while CI can provide an exact APPX_VERSION for nightlies.
 $verFile = Join-Path $root ".local\app_build.txt"
 $verFileExisted = Test-Path $verFile
+# GitHub Actions checks out a clean worktree with no .local\app_build.txt, so
+# without this branch every CI build would stamp the manifest base (1.0.0.0).
+# Windows/Xbox then refuse the Add operation with 0x80070005 when a package
+# with that same identity and version is already registered on the console.
+# GITHUB_RUN_NUMBER increases monotonically for this workflow, so use it as the
+# third version field. An explicit -AppxVersion still wins.
+$ciVersioned = $env:GITHUB_RUN_NUMBER -match '^\d+$'
 if ($AppxVersion) {
     Assert-AppxVersion $AppxVersion
     $appVersion = $AppxVersion
+} elseif ($ciVersioned) {
+    $appVersion = "$($baseVersionParts[0]).$($baseVersionParts[1]).$($env:GITHUB_RUN_NUMBER).0"
+    Assert-AppxVersion $appVersion
 } else {
     $verRev = [int]$baseVersionParts[3]
     if ($verFileExisted) {
@@ -127,7 +162,7 @@ if ($AppxVersion) {
 }
 Ensure-Dir (Split-Path $verFile)
 Set-Content -Path $verFile -Value $appVersion -NoNewline
-$appx = Join-Path $outDir ("BanditLauncher_{0}.appx" -f $appVersion)
+$appx = Join-Path $outDir ("BanditLauncherNative_{0}.appx" -f $appVersion)
 
 $mcVersionSource = if ($McVersion) {
     "-McVersion"
@@ -145,6 +180,8 @@ $fabricLoaderSource = if ($FabricLoader) {
 }
 $appVersionSource = if ($AppxVersion) {
     "-AppxVersion"
+} elseif ($ciVersioned) {
+    "GITHUB_RUN_NUMBER"
 } elseif ($verFileExisted) {
     ".local\app_build.txt"
 } else {
@@ -154,6 +191,8 @@ $appVersionSource = if ($AppxVersion) {
 Write-Host ""
 Write-Host "Resolved build target:"
 Write-Host ("  MC version      {0}  ({1})" -f $ProjectConfig.MinecraftVersion, $mcVersionSource)
+Write-Host ("  Default target  {0}-{1}-{2}" -f $ProjectConfig.DefaultMinecraftVersion, $ProjectConfig.DefaultLoader, $ProjectConfig.DefaultLoaderVersion)
+Write-Host ("  Launch version  {0}" -f $ProjectConfig.DefaultLaunchVersion)
 Write-Host ("  Fabric loader   {0}  ({1})" -f $ProjectConfig.FabricLoaderVersion, $fabricLoaderSource)
 Write-Host ("  Asset index     {0}" -f $ProjectConfig.MinecraftAssetIndex)
 Write-Host ("  Appx version    {0}  ({1})" -f $appVersion, $appVersionSource)
@@ -168,7 +207,7 @@ foreach ($inherited in @(
     }
 }
 
-if (-not $AppxVersion -and -not $verFileExisted) {
+if (-not $AppxVersion -and -not $ciVersioned -and -not $verFileExisted) {
     Write-Warning "No .local\app_build.txt in this worktree, so the appx stamps $appVersion. Anything already installed on the console at a higher version will not be replaced by it."
 }
 
@@ -377,27 +416,17 @@ if (-not $SkipStopAppProcesses) {
 
 Ensure-Dir $buildDir, $outDir, $certDir, $mcBuildDir, $glfwBuildDir
 
-Write-Host "=== Generating runtime_config.h ==="
-# Token-substitute MC.Xbox/runtime_config.h.in into the build dir. App.cpp
-# picks it up via the INCLUDE path below. Regenerated every build so the
-# header always matches the currently selected MC version.
-$runtimeConfigTemplate = Join-Path $root "MC.Xbox\runtime_config.h.in"
-$runtimeConfigOutput   = Join-Path $mcBuildDir "runtime_config.h"
-if (-not (Test-Path $runtimeConfigTemplate)) { throw "runtime_config.h.in not found at $runtimeConfigTemplate" }
-$runtimeConfigContent = [System.IO.File]::ReadAllText($runtimeConfigTemplate)
-$runtimeConfigContent = $runtimeConfigContent.Replace('@@MC_VERSION@@',           $ProjectConfig.MinecraftVersion)
-$runtimeConfigContent = $runtimeConfigContent.Replace('@@FABRIC_LOADER_VERSION@@', $ProjectConfig.FabricLoaderVersion)
-$runtimeConfigContent = $runtimeConfigContent.Replace('@@MC_ASSET_INDEX@@',       $ProjectConfig.MinecraftAssetIndex)
-$runtimeConfigContent = $runtimeConfigContent.Replace('@@RELEASE_CHANNEL@@',      $ReleaseChannel)
-if ($runtimeConfigContent -match '@@[A-Z_]+@@') { throw "runtime_config.h still contains unsubstituted tokens after generation: $($Matches[0])" }
-[System.IO.File]::WriteAllText($runtimeConfigOutput, $runtimeConfigContent)
-Write-Host "runtime_config.h written for MC $($ProjectConfig.MinecraftVersion) / fabric-loader $($ProjectConfig.FabricLoaderVersion) / asset index $($ProjectConfig.MinecraftAssetIndex)"
+Write-Phase "Generating runtime_config.h"
+# Shared generator keeps build.ps1, tools/ui-preview and the packaged header in
+# sync (see scripts/gen-runtime-config.ps1).
+$runtimeConfigOutput = Join-Path $mcBuildDir "runtime_config.h"
+& (Join-Path $root "scripts\gen-runtime-config.ps1") `
+    -OutputPath $runtimeConfigOutput `
+    -ReleaseChannel $ReleaseChannel
 
-Write-Host "=== Building MC.Xbox.exe ==="
-$mcSources = @(
-    Get-ChildItem (Join-Path $root "MC.Xbox") -Recurse -File -Include *.cpp, *.c, *.h, *.hpp
-    Get-ChildItem (Join-Path $root "mouse_support") -Recurse -File -Include *.cpp, *.h
-) | Select-Object -ExpandProperty FullName
+Write-Phase "Building MC.Xbox.exe"
+$mcSources = Get-ChildItem (Join-Path $root "MC.Xbox") -Recurse -File -Include *.cpp, *.c, *.h, *.hpp |
+    Select-Object -ExpandProperty FullName
 $mcStampPath = Join-Path $mcBuildDir "MC.Xbox.stamp"
 $mcStamp = New-BuildStamp `
     -Values @("mc_xbox_exe", $tools.ClExe, $sdkVer, $jreSrc, ($CommonClFlags -join " ")) `
@@ -410,7 +439,7 @@ if ($mcNeedsBuild) {
     $env:INCLUDE = "$mcBuildDir;$($tools.MsvcRoot)\include;${sdkRoot}Include\$sdkVer\ucrt;${sdkRoot}Include\$sdkVer\shared;${sdkRoot}Include\$sdkVer\um;${sdkRoot}Include\$sdkVer\winrt;${sdkRoot}Include\$sdkVer\cppwinrt;$jreSrc\include;$jreSrc\include\win32"
     $env:LIB = "$($tools.MsvcRoot)\lib\x64;${sdkRoot}Lib\$sdkVer\ucrt\x64;${sdkRoot}Lib\$sdkVer\um\x64"
 
-    & $tools.ClExe App.cpp launch\app_globals.cpp common\launcher_common.cpp common\i18n.cpp common\crash_report.cpp mods\mod_defaults.cpp mods\mod_source.cpp mods\curseforge.cpp mods\manual_downloads.cpp mods\modpack_io.cpp mods\world_io.cpp net\http_client.cpp net\update_check.cpp profiles\profiles.cpp net\html_translate.cpp net\remote_file_server.cpp net\web_relay_server.cpp auth\minecraft_auth.cpp ui\launcher_ui.cpp ui\launcher_mouse.cpp ui\mods_ui_globals.cpp mods\mods_browser.cpp launch\runtime_manager.cpp launch\minecraft_launch.cpp launch\launch_internal.cpp launch\loaders\loader_common.cpp launch\loaders\loader.cpp launch\loaders\fabric.cpp launch\loaders\neoforge.cpp launch\loaders\forge.cpp launch\loaders\cleanroom.cpp telemetry\telemetry.cpp telemetry\crash_fingerprint.cpp telemetry\crash_parse.cpp telemetry\compat_feed.cpp third_party\miniz\miniz.c /std:c++17 /EHsc $CommonClFlags /O2 /GL /Gw /MP /arch:AVX2 /DNDEBUG /D_UNICODE /DUNICODE /D_WIN32_WINNT=0x0A00 /D_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS /DMINIZ_NO_STDIO /DMINIZ_NO_TIME /I. /Icommon /Inet /Iauth /Iui /Imods /Iprofiles /Ilaunch /Ilaunch\loaders /Itelemetry /I..\mouse_support /Fo"$mcBuildDir\" `
+    & $tools.ClExe App.cpp launch\app_globals.cpp common\launcher_common.cpp common\i18n.cpp common\crash_report.cpp mods\mod_defaults.cpp mods\mod_source.cpp mods\curseforge.cpp mods\manual_downloads.cpp mods\modpack_io.cpp mods\world_io.cpp net\http_client.cpp net\update_check.cpp profiles\profiles.cpp net\html_translate.cpp net\remote_file_server.cpp auth\minecraft_auth.cpp ui\launcher_ui.cpp ui\launcher_mouse.cpp ui\mods_ui_globals.cpp mods\mods_browser.cpp launch\runtime_manager.cpp launch\minecraft_launch.cpp launch\launch_internal.cpp launch\loaders\loader_common.cpp launch\loaders\loader.cpp launch\loaders\fabric.cpp launch\loaders\neoforge.cpp launch\loaders\forge.cpp launch\loaders\cleanroom.cpp telemetry\telemetry.cpp telemetry\crash_fingerprint.cpp telemetry\crash_parse.cpp telemetry\compat_feed.cpp third_party\miniz\miniz.c /std:c++17 /EHsc $CommonClFlags /O2 /GL /Gw /MP /arch:AVX2 /DNDEBUG /D_UNICODE /DUNICODE /D_WIN32_WINNT=0x0A00 /D_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS /DMINIZ_NO_STDIO /DMINIZ_NO_TIME /I. /Icommon /Inet /Iauth /Iui /Imods /Iprofiles /Ilaunch /Ilaunch\loaders /Itelemetry /Fo"$mcBuildDir\" `
         /DWINAPI_FAMILY=WINAPI_FAMILY_APP `
         /link /LTCG /SUBSYSTEM:WINDOWS /ENTRY:wWinMainCRTStartup /MACHINE:X64 `
         /OUT:"$mcExe" kernel32.lib shell32.lib runtimeobject.lib windowsapp.lib ole32.lib oleaut32.lib d2d1.lib dwrite.lib d3d11.lib dxgi.lib windowscodecs.lib winhttp.lib bcrypt.lib ws2_32.lib
@@ -422,24 +451,44 @@ if ($mcNeedsBuild) {
     Write-Host "MC.Xbox.exe up to date, skipping compile."
 }
 
-Write-Host "=== Building mouse support DLL ==="
-& (Join-Path $root "mouse_support\build_mouse_support.ps1") -OutputDir $mouseSupportBuildDir
-if (-not (Test-Path $mouseSupportDll)) { throw "mouse_support DLL missing after build: $mouseSupportDll" }
-
-Write-Host "=== Building GLFW CoreWindow shim ==="
-& (Join-Path $root "glfw_shim\build_glfw.ps1") -OutputDir $glfwBuildDir -MouseSupportLib $mouseSupportLib -MouseSupportInclude (Join-Path $root "mouse_support")
+Write-Phase "Building GLFW CoreWindow shim"
+& (Join-Path $root "glfw_shim\build_glfw.ps1") -OutputDir $glfwBuildDir
 if (-not (Test-Path $shimDll)) { throw "GLFW shim DLL missing after build: $shimDll" }
 
-Write-Host "=== Building Xbox compatibility mod ==="
+# JNA cannot LoadLibraryExW("Ole32.dll", ...) by bare name in an app container.
+# Package a tiny dependency-free COM shim so -Djna.library.path gives JNA an
+# absolute path, and OSHI's WMI/GPU probes get a caught COMException instead of
+# an uncaught UnsatisfiedLinkError while Forge loads mods (e.g. Embeddium).
+Write-Phase "Building Ole32/COM UWP shim"
+$ole32SourceDir = Join-Path $root "shims"
+$ole32Source = Join-Path $ole32SourceDir "ole32_uwp.cpp"
+if (-not (Test-Path $ole32Source)) { throw "Ole32 shim source missing: $ole32Source" }
+Ensure-Dir $ole32BuildDir
+$env:INCLUDE = "$($tools.MsvcRoot)\include;" +
+               "${sdkRoot}Include\$sdkVer\ucrt;" +
+               "${sdkRoot}Include\$sdkVer\shared;" +
+               "${sdkRoot}Include\$sdkVer\um;" +
+               "${sdkRoot}Include\$sdkVer\winrt;" +
+               "${sdkRoot}Include\$sdkVer\cppwinrt"
+$env:LIB = "$($tools.MsvcRoot)\lib\x64;" +
+           "${sdkRoot}Lib\$sdkVer\ucrt\x64;" +
+           "${sdkRoot}Lib\$sdkVer\um\x64"
+$ole32Obj = Join-Path $ole32BuildDir "ole32_uwp.obj"
+$ole32Lib = Join-Path $ole32BuildDir "ole32_uwp.lib"
+Push-Location $ole32BuildDir
+& $tools.ClExe $ole32Source /LD /EHsc /std:c++17 $CommonClFlags /O2 /DNDEBUG `
+    /D_UNICODE /DUNICODE /D_WIN32_WINNT=0x0A00 /DWINAPI_FAMILY=WINAPI_FAMILY_APP `
+    /Fo"$ole32Obj" /link /OUT:"$ole32ShimDll" /IMPLIB:"$ole32Lib" /MACHINE:X64 kernel32.lib
+$ole32CompileExit = $LASTEXITCODE
+Pop-Location
+if ($ole32CompileExit -ne 0) { throw "Ole32 UWP shim build FAILED with exit code $ole32CompileExit" }
+if (-not (Test-Path $ole32ShimDll)) { throw "Ole32 UWP shim DLL missing: $ole32ShimDll" }
+Write-Host "Ole32 UWP shim built -> $ole32ShimDll"
+
+Write-Phase "Building Xbox compatibility mod"
 & (Join-Path $root "compat_mod\build_compat_mod.ps1")
 
-Write-Host "=== Building default Fabric controller mod ==="
-& (Join-Path $root "controller_mod\fabric\build_fabric_controller_mod.ps1") `
-    -MinecraftVersion $ProjectConfig.MinecraftVersion `
-    -LoaderVersion $ProjectConfig.FabricLoaderVersion `
-    -OutputDir (Join-Path $gameDir "mods")
-
-Write-Host "=== Assembling PackageContent ==="
+Write-Phase "Assembling PackageContent"
 Remove-Item -Recurse -Force $pkg -ErrorAction SilentlyContinue
 Ensure-Dir (Join-Path $pkg "Assets")
 Ensure-Dir (Join-Path $pkg "natives")
@@ -451,12 +500,58 @@ Ensure-Dir (Join-Path $pkg "runtime\log_configs")
 Ensure-Dir (Join-Path $pkg "runtime\bundled-mods")
 Ensure-Dir (Join-Path $pkg "runtime\libraries")
 
+# This fork ships Controlify as its only controller mod. The Bandit controller
+# is no longer compiled for any target (51 per-version installer/compile runs
+# used ~27 of the 39 minutes of a cold build). Pin the Modrinth version ids,
+# SHA1 and byte sizes so every APPX is reproducible and verifiable. YACL is a
+# required Controlify dependency and is bundled alongside it.
+Write-Phase "Bundling Controlify"
+$bundleConfigPath = Join-Path $root "config\controlify-bundle.json"
+if (-not (Test-Path -LiteralPath $bundleConfigPath)) {
+    throw "Controlify bundle config not found at $bundleConfigPath"
+}
+$controlifyBundle = Get-Content -LiteralPath $bundleConfigPath -Raw | ConvertFrom-Json
+$expectedTargetId = "$($ProjectConfig.DefaultMinecraftVersion)-$($ProjectConfig.DefaultLoader)-$($ProjectConfig.DefaultLoaderVersion)"
+if ($controlifyBundle.targetId -ne $expectedTargetId) {
+    throw "Controlify bundle targets $($controlifyBundle.targetId) but the default target is $expectedTargetId"
+}
+$controlifyModNames = @($controlifyBundle.mods | ForEach-Object { $_.name })
+foreach ($bundleMod in $controlifyBundle.mods) {
+    $cachedMod = Join-Path (Join-Path $gameDir "mods") $bundleMod.name
+    Save-RemoteFile -Uri $bundleMod.url -Path $cachedMod -Sha1 $bundleMod.sha1 -Size ([long]$bundleMod.size)
+    Copy-Item -LiteralPath $cachedMod -Destination (Join-Path $pkg "runtime\bundled-mods\$($bundleMod.name)") -Force
+    Write-Host "Bundled $($bundleMod.name) ($($bundleMod.size) bytes)"
+}
+
+# com.google.guava:listenablefuture:9999.0-empty-to-avoid-conflict-with-guava
+# is an empty 2 KB placeholder, but its Maven path is 153 characters - thirty
+# longer than anything else in the manifest. With the Xbox LocalState prefix it
+# crosses Win32 MAX_PATH, so its runtime download never completes (4020/4021
+# files and then "Retrying in 10 seconds"). Ship it in the package instead:
+# EnsureRuntimeDownloads treats packaged libraries as already present and
+# CollectManifestLibraryJars prefers them on the classpath.
+$placeholderRelative = "com\google\guava\listenablefuture\9999.0-empty-to-avoid-conflict-with-guava\listenablefuture-9999.0-empty-to-avoid-conflict-with-guava.jar"
+$placeholderUrl = "https://libraries.minecraft.net/com/google/guava/listenablefuture/9999.0-empty-to-avoid-conflict-with-guava/listenablefuture-9999.0-empty-to-avoid-conflict-with-guava.jar"
+$placeholderSource = Join-Path (Join-Path $gameDir "libraries") $placeholderRelative
+$placeholderDest = Join-Path (Join-Path $pkg "runtime\libraries") $placeholderRelative
+try {
+    Save-RemoteFile -Uri $placeholderUrl -Path $placeholderSource -Sha1 "b421526c5f297295adef1c886e5246c39d4ac629" -Size 2199
+    Ensure-Dir (Split-Path $placeholderDest -Parent)
+    Copy-Item -LiteralPath $placeholderSource -Destination $placeholderDest -Force
+    Write-Host "Packaged Guava listenablefuture placeholder (avoids the MAX_PATH download)"
+} catch {
+    # The launcher's extended-length download path is the fallback; do not
+    # fail the whole package if this 2 KB file could not be cached locally.
+    Write-Warning "Could not bundle the Guava listenablefuture placeholder: $($_.Exception.Message)"
+}
+
 Copy-Item $mcExe (Join-Path $pkg "MC.Xbox.exe")
 
 $manifestOut = Join-Path $pkg "AppxManifest.xml"
 $manifestText = [System.IO.File]::ReadAllText($manifestSourcePath)
 $manifestText = [regex]::Replace($manifestText, '(<Identity\b[^>]*\bVersion=")\d+\.\d+\.\d+\.\d+(")', ('${1}' + $appVersion + '${2}'))
 [System.IO.File]::WriteAllText($manifestOut, $manifestText)
+Write-Host "Package identity: $($sourceManifest.Package.Identity.Name)"
 Write-Host "App package version: $appVersion"
 
 Write-Host "Copying launcher-owned runtime files..."
@@ -601,6 +696,24 @@ function Ensure-TinyRemapperJar {
 }
 
 $catalog = @(Import-Csv -Path $versionCatalogSource -Delimiter "`t")
+
+# The compiled default must be a real catalog row: the launcher resolves the
+# default target through runtime/version_catalog.tsv, and the package must carry
+# that row's download manifest and bundled mods.
+$defaultTargetId = "$($ProjectConfig.DefaultMinecraftVersion)-$($ProjectConfig.DefaultLoader)-$($ProjectConfig.DefaultLoaderVersion)"
+$defaultCatalogRow = @($catalog | Where-Object {
+    $_.minecraftVersion -eq $ProjectConfig.DefaultMinecraftVersion -and
+    $_.loader -eq $ProjectConfig.DefaultLoader -and
+    $_.loaderVersion -eq $ProjectConfig.DefaultLoaderVersion
+})
+if ($defaultCatalogRow.Count -ne 1) {
+    throw "Default target '$defaultTargetId' must appear exactly once in $versionCatalogSource (found $($defaultCatalogRow.Count)). Add the row or override DEFAULT_LOADER / DEFAULT_LOADER_VERSION."
+}
+if ($defaultCatalogRow[0].javaRuntime -ne $ProjectConfig.DefaultJavaRuntime) {
+    Write-Warning "Default target '$defaultTargetId' uses javaRuntime '$($defaultCatalogRow[0].javaRuntime)' in the catalog but '$($ProjectConfig.DefaultJavaRuntime)' is compiled into the launcher. Set DEFAULT_JAVA_RUNTIME to match."
+}
+Write-Host "Default launch target: $defaultTargetId (javaRuntime=$($defaultCatalogRow[0].javaRuntime))"
+
 $manifestTargets = @(
     $catalog |
         Where-Object { $_.loader -and $_.loaderVersion -and $_.loaderVersion -ne "selected" -and $_.loaderVersion -ne "none" }
@@ -609,24 +722,10 @@ $fabricTargets = @($manifestTargets | Where-Object { $_.loader -eq "fabric" })
 $forgeTargets = @($manifestTargets | Where-Object { $_.loader -eq "forge" })
 $neoForgeTargets = @($manifestTargets | Where-Object { $_.loader -eq "neoforge" })
 $cleanroomTargets = @($manifestTargets | Where-Object { $_.loader -eq "cleanroom" })
-function Test-ForgeControllerTarget {
-    param([Parameter(Mandatory = $true)]$Target)
-
-    return $Target.loader -eq "forge" -and $Target.controllerProvider -eq "forge"
-}
-
-function Test-FabricControllerTarget {
-    param([Parameter(Mandatory = $true)]$Target)
-
-    return $Target.loader -eq "fabric" -and $Target.controllerProvider -eq "fabric"
-}
-
-function Test-NeoForgeControllerTarget {
-    param([Parameter(Mandatory = $true)]$Target)
-
-    return $Target.loader -eq "neoforge" -and $Target.controllerProvider -eq "neoforge"
-}
-
+# controllerProvider is "none" for every catalog row: this fork bundles
+# Controlify once for the default target instead of compiling a Bandit
+# controller variant for each of the 56 targets.
+Write-Phase "Patched Fabric loader jars"
 $fabricLoaderVersions = @($ProjectConfig.FabricLoaderVersion) + @($fabricTargets | ForEach-Object { $_.loaderVersion }) |
     Where-Object { $_ } |
     Select-Object -Unique
@@ -643,9 +742,11 @@ foreach ($loaderVersion in $fabricLoaderVersions) {
 if ($fabricLoaderVersions -contains "0.14.25") {
     Ensure-TinyRemapperJar -TinyRemapperVersion "0.8.2"
 }
-# Bundled mods (compat mod, optionally diagnostics) live under runtime\bundled-mods.
-# App.cpp copies them into LocalState\game\mods on launch.
-foreach ($name in @("banditvault-xbox-compat-1.0.0.jar", "banditvault-fabric-controller-1.0.0.jar")) {
+# Bundled mods live under runtime\bundled-mods and are seeded into
+# LocalState\game\mods on launch: the UWP compat patch plus the Controlify
+# bundle. The Bandit controller jar is intentionally absent.
+$bundledModNames = @("banditvault-xbox-compat-1.0.0.jar") + $controlifyModNames
+foreach ($name in $bundledModNames) {
     $source = Join-Path $gameDir "mods\$name"
     if (-not (Test-JarComplete $source)) { throw "Required bundled mod missing or incomplete $source" }
     Copy-Item -LiteralPath $source -Destination (Join-Path $pkg "runtime\bundled-mods\$name") -Force
@@ -653,6 +754,19 @@ foreach ($name in @("banditvault-xbox-compat-1.0.0.jar", "banditvault-fabric-con
 
 Write-Host "Copying natives..."
 Copy-Item (Join-Path $nativesSourceDir "*.dll") (Join-Path $pkg "natives\")
+Write-Host "Copying Ole32/OleAut32 COM UWP shims..."
+# Same DLL twice: JNA also loads OleAut32 (SysAllocString/VariantClear) once a
+# WMI query gets past COM init, and that bare-name load fails in the app
+# container too. Both names must resolve to an absolute packaged path.
+Copy-Item $ole32ShimDll (Join-Path $pkg "natives\Ole32.dll") -Force
+Copy-Item $ole32ShimDll (Join-Path $pkg "natives\OleAut32.dll") -Force
+foreach ($shimName in @("Ole32.dll", "OleAut32.dll")) {
+    $packagedShim = Join-Path $pkg "natives\$shimName"
+    if (-not (Test-Path -LiteralPath $packagedShim -PathType Leaf) -or
+        (Get-Item -LiteralPath $packagedShim).Length -eq 0) {
+        throw "Packaged COM shim missing or empty: $packagedShim"
+    }
+}
 
 Write-Host "Extracting JNA native..."
 Add-Type -AssemblyName System.IO.Compression.FileSystem
@@ -675,8 +789,6 @@ if (Test-Path $jnaJar) {
 
 Write-Host "Copying GLFW shim..."
 Copy-Item $shimDll (Join-Path $pkg "natives\glfw.dll") -Force
-Copy-Item $mouseSupportDll (Join-Path $pkg "mouse_support.dll") -Force
-Copy-Item $mouseSupportDll (Join-Path $pkg "natives\mouse_support.dll") -Force
 
 Write-Host "Copying Mesa runtime..."
 $mesaRuntime = Resolve-MesaRuntimeDir -MesaRuntimeDir $MesaRuntimeDir
@@ -726,23 +838,45 @@ function Copy-CachedVersionManifest {
     Copy-Item -LiteralPath $cachePath -Destination $OutputPath -Force
 }
 
+# download_manifest.tsv is the launcher's fallback manifest for the *default*
+# target, so it has to describe the same loader the compiled default uses.
 $defaultDownloadManifest = Join-Path $pkg "download_manifest.tsv"
 Copy-CachedVersionManifest `
-    -MinecraftVersion $ProjectConfig.MinecraftVersion `
-    -Loader "fabric" `
-    -LoaderVersion $ProjectConfig.FabricLoaderVersion `
+    -MinecraftVersion $ProjectConfig.DefaultMinecraftVersion `
+    -Loader $ProjectConfig.DefaultLoader `
+    -LoaderVersion $ProjectConfig.DefaultLoaderVersion `
     -OutputPath $defaultDownloadManifest
+
+# Warn (do not fail) when the official installer metadata uses a different id
+# than the compiled fallback. The manifest header is authoritative at runtime;
+# this only catches stale DEFAULT_LAUNCH_VERSION values in scripts/config.ps1.
+$manifestLaunchVersion = (Select-String -LiteralPath $defaultDownloadManifest -Pattern "^# launchVersion`t" | Select-Object -First 1).Line
+if ($manifestLaunchVersion) {
+    $manifestLaunchVersion = ($manifestLaunchVersion -split "`t", 2)[1]
+    if ($manifestLaunchVersion -ne $ProjectConfig.DefaultLaunchVersion) {
+        Write-Warning "Default manifest launchVersion is '$manifestLaunchVersion' but DEFAULT_LAUNCH_VERSION is '$($ProjectConfig.DefaultLaunchVersion)'. The manifest wins at runtime; update scripts/config.ps1 to silence this warning."
+    }
+}
 
 $manifestsDir = Join-Path $pkg "runtime\manifests"
 Ensure-Dir $manifestsDir
-$defaultTargetId = "$($ProjectConfig.MinecraftVersion)-fabric-$($ProjectConfig.FabricLoaderVersion)"
 Ensure-Dir (Join-Path $pkg "runtime\version-mods\$defaultTargetId")
-foreach ($name in @("banditvault-xbox-compat-1.0.0.jar", "banditvault-fabric-controller-1.0.0.jar")) {
+# minecraft_launch.cpp syncs version-mods/<target> into the active profile's
+# mods folder for Forge/NeoForge/Cleanroom. Put the loader-matched Controlify
+# bundle here so every new default instance starts with Controller support and
+# nothing else from the old Bandit controller stack.
+foreach ($name in $controlifyModNames) {
     Copy-Item (Join-Path $pkg "runtime\bundled-mods\$name") (Join-Path $pkg "runtime\version-mods\$defaultTargetId\$name") -Force
+}
+if ($ProjectConfig.DefaultLoader -eq "fabric") {
+    # The UWP compat patch is a Fabric mod; only copy it into a Fabric default.
+    Copy-Item (Join-Path $pkg "runtime\bundled-mods\banditvault-xbox-compat-1.0.0.jar") `
+        (Join-Path $pkg "runtime\version-mods\$defaultTargetId\banditvault-xbox-compat-1.0.0.jar") -Force
 }
 Copy-Item -Force $defaultDownloadManifest (Join-Path $manifestsDir "$defaultTargetId.tsv")
 Write-Host "Default per-version manifest: $defaultTargetId.tsv"
 
+Write-Phase "Per-version download manifests"
 if (-not $SkipVersionManifests) {
     foreach ($row in $manifestTargets) {
         $lv = $row.loaderVersion
@@ -765,9 +899,15 @@ if (-not $SkipVersionManifests) {
     Write-Host "Skipping extra per-version manifests (-SkipVersionManifests)"
 }
 
+Write-Phase "Per-version compatibility mods"
 if (-not $SkipVersionCompat) {
     $versionModsRoot = Join-Path $pkg "runtime\version-mods"
     Ensure-Dir $versionModsRoot
+    # The Bandit controller mod is no longer compiled for any catalog target.
+    # Building one variant per row meant 51 Fabric/Forge/Cleanroom/NeoForge
+    # installer and compile runs: 1,633.7 s (27 min) of the 2,317.2 s (39 min)
+    # of a cold build, and the NeoForge installers were the only step that
+    # failed on transient network errors. Controlify is bundled instead.
     foreach ($row in $fabricTargets) {
         $lv = $row.loaderVersion
         $targetId = "$($row.minecraftVersion)-fabric-$lv"
@@ -783,38 +923,6 @@ if (-not $SkipVersionCompat) {
             Add-BuildFailure -Stage "Compat mod" -Target $targetId -Reason $_.Exception.Message
             if (Test-Path $outDir) { Remove-Item -Recurse -Force $outDir }
         }
-        if (Test-FabricControllerTarget -Target $row) {
-            Write-Host "Building per-version Fabric controller mod: $targetId"
-            try {
-                & (Join-Path $root "controller_mod\fabric\build_fabric_controller_mod.ps1") `
-                    -MinecraftVersion $row.minecraftVersion `
-                    -LoaderVersion $lv `
-                    -OutputDir $outDir
-            } catch {
-                Add-BuildFailure -Stage "Fabric controller mod" -Target $targetId -Reason $_.Exception.Message
-            }
-        } else {
-            Write-Host "Skipping per-version Fabric controller mod for ${targetId}: no bundled controller provider for this target"
-        }
-    }
-    foreach ($row in $forgeTargets) {
-        $lv = $row.loaderVersion
-        $targetId = "$($row.minecraftVersion)-forge-$lv"
-        if (-not (Test-ForgeControllerTarget -Target $row)) {
-            Write-Host "Skipping per-version forge controller mod for ${targetId}: no bundled controller provider for this target"
-            continue
-        }
-        $outDir = Join-Path $versionModsRoot $targetId
-        Write-Host "Building per-version forge controller mod: $targetId"
-        try {
-            & (Join-Path $root "controller_mod\forge\build_forge_controller_mod.ps1") `
-                -MinecraftVersion $row.minecraftVersion `
-                -ForgeVersion "$($row.minecraftVersion)-$lv" `
-                -OutputDir $outDir
-        } catch {
-            Add-BuildFailure -Stage "Forge controller mod" -Target $targetId -Reason $_.Exception.Message
-            if (Test-Path $outDir) { Remove-Item -Recurse -Force $outDir }
-        }
     }
     foreach ($row in $cleanroomTargets) {
         $lv = $row.loaderVersion
@@ -826,41 +934,10 @@ if (-not $SkipVersionCompat) {
         } catch {
             Add-BuildFailure -Stage "Cleanroom UWP patch" -Target $targetId -Reason $_.Exception.Message
         }
-        if ($row.controllerProvider -ne "cleanroom") {
-            Write-Host "Skipping per-version Cleanroom controller mod for ${targetId}: no bundled controller provider for this target"
-            continue
-        }
-        $outDir = Join-Path $versionModsRoot $targetId
-        Write-Host "Building per-version Cleanroom controller mod: $targetId"
-        try {
-            & (Join-Path $root "controller_mod\cleanroom\build_cleanroom_controller_mod.ps1") `
-                -MinecraftVersion $row.minecraftVersion `
-                -CleanroomVersion $lv `
-                -OutputDir $outDir
-        } catch {
-            Add-BuildFailure -Stage "Cleanroom controller mod" -Target $targetId -Reason $_.Exception.Message
-            if (Test-Path $outDir) { Remove-Item -Recurse -Force $outDir }
-        }
     }
-    foreach ($row in $neoForgeTargets) {
-        $lv = $row.loaderVersion
-        $targetId = "$($row.minecraftVersion)-neoforge-$lv"
-        if (-not (Test-NeoForgeControllerTarget -Target $row)) {
-            Write-Host "Skipping per-version NeoForge controller mod for ${targetId}: no bundled controller provider for this target"
-            continue
-        }
-        $outDir = Join-Path $versionModsRoot $targetId
-        Write-Host "Building per-version NeoForge controller mod: $targetId"
-        try {
-            & (Join-Path $root "controller_mod\neoforge\build_neoforge_controller_mod.ps1") `
-                -MinecraftVersion $row.minecraftVersion `
-                -NeoForgeVersion $lv `
-                -OutputDir $outDir
-        } catch {
-            Add-BuildFailure -Stage "NeoForge controller mod" -Target $targetId -Reason $_.Exception.Message
-            if (Test-Path $outDir) { Remove-Item -Recurse -Force $outDir }
-        }
-    }
+    # ResolveVersionInfo marks a target unsupported when its version-mods
+    # directory is absent, so always keep one for the default target.
+    Ensure-Dir (Join-Path $versionModsRoot $defaultTargetId)
 } else {
     Write-Host "Skipping per-version compat mods (-SkipVersionCompat)"
 }
@@ -1237,6 +1314,7 @@ function Build-SecureJarHandlerUwpPatch {
     Write-Host "securejarhandler UWP patch: $OutputJar"
 }
 
+Write-Phase "Java UWP patches and packaged JREs"
 Write-Host "Copying JRE..."
 $xboxSecurityProperties = Join-Path $root "xbox_security.properties"
 Copy-Item $xboxSecurityProperties (Join-Path $pkg "xbox_security.properties") -Force
@@ -1258,7 +1336,31 @@ Build-JavaZipfsRealpathPatch -JavaHome $jreSrc -OutputJar (Join-Path $pkg "java-
 Build-JavaZipfsRealpathPatch -JavaHome $jre21Src -OutputJar (Join-Path $pkg "java-zipfs-realpath-21.jar") -WorkName "java_zipfs_realpath_patch_21"
 Build-JavaDesktopUwpAwtPatch -JavaHome $jreSrc -OutputJar (Join-Path $pkg "java-desktop-uwp-awt.jar") -WorkName "java_desktop_uwp_awt_patch_current"
 Build-JavaDesktopUwpAwtPatch -JavaHome $jre21Src -OutputJar (Join-Path $pkg "java-desktop-uwp-awt-21.jar") -WorkName "java_desktop_uwp_awt_patch_21"
-Build-SecureJarHandlerUwpPatch -JavaHome $jre21Src -Version "3.0.8" -OutputJar (Join-Path $pkg "securejarhandler-uwp-patch.jar")
+# Build the UWP patch against the securejarhandler version the default
+# NeoForge target actually resolves. Older baseline was pinned to 3.0.8; new
+# NeoForge releases ship newer SJH versions, and a patch compiled against the
+# wrong one can fail to load. Fall back to 3.0.8 when metadata is unavailable.
+$sjhVersion = "3.0.8"
+$sjhMatch = Select-String -LiteralPath $defaultDownloadManifest -Pattern 'cpw/mods/securejarhandler/([^/]+)/securejarhandler-' -ErrorAction SilentlyContinue | Select-Object -First 1
+if ($sjhMatch -and $sjhMatch.Matches.Count -gt 0) {
+    $resolvedSjh = $sjhMatch.Matches[0].Groups[1].Value
+    if ($resolvedSjh) { $sjhVersion = $resolvedSjh }
+}
+$sjhCandidates = @($sjhVersion)
+if ($sjhVersion -ne "3.0.8") { $sjhCandidates += "3.0.8" }
+$sjhPatchJar = Join-Path $pkg "securejarhandler-uwp-patch.jar"
+$sjhBuilt = $false
+foreach ($candidate in $sjhCandidates) {
+    try {
+        Write-Host "Building securejarhandler UWP patch against $candidate"
+        Build-SecureJarHandlerUwpPatch -JavaHome $jre21Src -Version $candidate -OutputJar $sjhPatchJar
+        $sjhBuilt = $true
+        break
+    } catch {
+        Write-Warning "securejarhandler $candidate patch build failed: $($_.Exception.Message)"
+    }
+}
+if (-not $sjhBuilt) { throw "Could not build the securejarhandler UWP patch against any candidate version: $($sjhCandidates -join ', ')" }
 
 Write-Host "Copying UWP tile assets..."
 $appxAssetSource = Join-Path $root "MC.Xbox\Assets\appx"
@@ -1269,17 +1371,25 @@ foreach ($name in $appxAssetNames) {
     Copy-Item -Force $source (Join-Path $pkg "Assets\$name")
 }
 
-Write-Host "=== Packaging ==="
+Write-Phase "Packaging"
 $cert = Join-Path $certDir $ProjectConfig.CertificateFileName
-$certName = if ($env:APPX_CERT_SUBJECT) { $env:APPX_CERT_SUBJECT } else { $ProjectConfig.DefaultCertificateSubject }
+$certName = [string]$sourceManifest.Package.Identity.Publisher
+$certPassword = ConvertTo-SecureString $ProjectConfig.CertificatePassword -AsPlainText -Force
 
 if (-not (Test-Path $cert)) {
     $c = New-SelfSignedCertificate -Type CodeSigningCert -Subject $certName `
         -KeyUsage DigitalSignature -CertStoreLocation "Cert:\CurrentUser\My" `
         -TextExtension @("2.5.29.37={text}1.3.6.1.5.5.7.3.3","2.5.29.19={text}")
-    Export-PfxCertificate -Cert $c -FilePath $cert `
-        -Password (ConvertTo-SecureString $ProjectConfig.CertificatePassword -AsPlainText -Force) | Out-Null
+    Export-PfxCertificate -Cert $c -FilePath $cert -Password $certPassword | Out-Null
     Write-Host "Generated cert"
+} elseif (-not (Get-ChildItem Cert:\CurrentUser\My -ErrorAction SilentlyContinue |
+        Where-Object { $_.Subject -eq $certName -and $_.HasPrivateKey })) {
+    # CI restores staging\certs from actions/cache, but a fresh runner has an
+    # empty personal certificate store. Import the cached PFX or signtool has
+    # nothing to sign with. Without this, every warm-cache build fails here.
+    Import-PfxCertificate -FilePath $cert -CertStoreLocation "Cert:\CurrentUser\My" `
+        -Password $certPassword | Out-Null
+    Write-Host "Imported cached signing cert"
 }
 
 $allSigningCertCandidates = Get-ChildItem Cert:\CurrentUser\My |
@@ -1288,10 +1398,9 @@ $allSigningCertCandidates = Get-ChildItem Cert:\CurrentUser\My |
         ($_.EnhancedKeyUsageList | Where-Object { $_.FriendlyName -eq 'Code Signing' })
     }
 $exactSigningCertCandidates = $allSigningCertCandidates | Where-Object { $_.Subject -eq $certName } | Sort-Object NotBefore -Descending
-$banditVaultSigningCertCandidates = $allSigningCertCandidates | Where-Object { $_.Subject -like '*BanditVault*' -and $_.Subject -ne $certName } | Sort-Object NotBefore -Descending
-$signingCertCandidates = @($exactSigningCertCandidates) + @($banditVaultSigningCertCandidates)
+$signingCertCandidates = @($exactSigningCertCandidates)
 if (-not $signingCertCandidates) {
-    throw "No signing certificate for '$certName' in Cert:\CurrentUser\My. Restore the BanditVault certificate, or set APPX_CERT_SUBJECT to the subject you want to sign with. Signing with an unrelated certificate changes the package family name and loses LocalState."
+    throw "No code signing certificate for '$certName' in Cert:\CurrentUser\My."
 }
 
 $makeappx = Get-ChildItem "${sdkRoot}bin\$sdkVer\x64\makeappx.exe","${sdkRoot}bin\$sdkToolsFallbackVer\x64\makeappx.exe" -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName
@@ -1359,7 +1468,7 @@ if (-not $KeepStaging) {
 }
 
 Write-Host ""
-Write-Host "=== Done ==="
+Write-Phase "Done"
 Write-Host "Package: $appx"
 
 if ($script:BuildFailures.Count -gt 0) {

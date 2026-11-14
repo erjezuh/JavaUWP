@@ -1,4 +1,5 @@
 #include "launcher_common.h"
+#include "win32_long_path.h"
 
 #include <cstdarg>
 #include <atomic>
@@ -172,7 +173,24 @@ bool EnsureDirectoryTree(const std::wstring& path) {
 
     std::wstring current;
     size_t start = 0;
-    if (path.size() >= 2 && path[1] == L':') {
+    if (path.size() >= 4 && path.compare(0, 4, L"\\\\?\\") == 0) {
+        // Extended-length path. Keep the \\?\ device prefix (and the drive or
+        // UNC share) in `current` so every intermediate CreateDirectoryW uses
+        // the extended form too. Without this, a directory whose full name is
+        // over MAX_PATH can never be created.
+        if (path.size() >= 6 && path[5] == L':') {
+            current = path.substr(0, 6);  // \\?\C:
+            start = 6;
+        } else if (path.size() >= 8 && path.compare(4, 3, L"UNC") == 0) {
+            const size_t serverEnd = path.find_first_of(L"\\/", 8);
+            if (serverEnd == std::wstring::npos) return false;
+            const size_t shareEnd = path.find_first_of(L"\\/", serverEnd + 1);
+            current = path.substr(0, shareEnd == std::wstring::npos ? path.size() : shareEnd);
+            start = shareEnd == std::wstring::npos ? path.size() : shareEnd;
+        } else {
+            return false;
+        }
+    } else if (path.size() >= 2 && path[1] == L':') {
         current = path.substr(0, 2);
         start = 2;
     }

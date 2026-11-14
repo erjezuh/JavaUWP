@@ -75,17 +75,29 @@ std::wstring MakeTargetId(const std::wstring& minecraftVersion, const std::wstri
     return minecraftVersion + L"-" + loader + L"-" + (loaderVersion.empty() ? L"none" : loaderVersion);
 }
 
+std::wstring Capitalize(std::wstring s);
+
+static std::wstring LoaderDisplayName(const std::wstring& loader) {
+    if (loader == L"neoforge") return L"NeoForge";
+    if (loader == L"fabric") return L"Fabric";
+    if (loader == L"forge" || loader == L"cleanroom") return L"Forge";
+    return Capitalize(loader);
+}
+
 LaunchTarget DefaultLaunchTarget() {
+    // The default target is compiled in from scripts/config.ps1. This fork
+    // ships NeoForge 1.21.1, but any catalog row can be the default without
+    // touching this file (DEFAULT_LOADER / DEFAULT_LOADER_VERSION / ...).
     LaunchTarget t;
     t.minecraftVersion = kDefaultMinecraftVersionW;
-    t.loader = L"fabric";
-    t.controllerProvider = L"fabric";
-    t.loaderVersion = a2w(kDefaultFabricLoaderVersion);
+    t.loader = ToLowerW(kDefaultLoaderW);
+    t.controllerProvider = ToLowerW(kDefaultControllerProviderW);
+    t.loaderVersion = kDefaultLoaderVersionW;
     t.targetId = MakeTargetId(t.minecraftVersion, t.loader, t.loaderVersion);
-    t.displayName = t.minecraftVersion + L" Fabric";
-    t.javaRuntime = L"current";
-    t.supportLevel = L"supported";
-    t.notes = L"Current launcher default";
+    t.displayName = t.minecraftVersion + L" " + LoaderDisplayName(t.loader);
+    t.javaRuntime = kDefaultJavaRuntimeW;
+    t.supportLevel = kDefaultSupportLevelW;
+    t.notes = L"Default launch target for this build";
     return t;
 }
 
@@ -316,7 +328,7 @@ std::vector<Profile> LoadProfiles(const std::wstring& runtimeRoot) {
                     p.loaderVersion = JsonStringOrEmpty(obj, L"loaderVersion");
                     p.targetId = JsonStringOrEmpty(obj, L"targetId");
                     p.builtin = JsonBoolOrFalse(obj, L"builtin");
-                    p.controllerModEnabled = JsonBoolOrDefault(obj, L"controllerModEnabled", true);
+                    p.controllerModEnabled = JsonBoolOrDefault(obj, L"controllerModEnabled", false);
                     if (p.id.empty()) continue;
                     if (p.name.empty()) p.name = p.id;
                     if (p.minecraftVersion.empty()) p.minecraftVersion = def.minecraftVersion;
@@ -479,7 +491,7 @@ static bool ReadProfileBackupMeta(const std::wstring& backupDir, Profile& profil
         profile.loader = ToLowerW(JsonStringOrEmpty(obj, L"loader"));
         profile.loaderVersion = JsonStringOrEmpty(obj, L"loaderVersion");
         profile.targetId = JsonStringOrEmpty(obj, L"targetId");
-        profile.controllerModEnabled = JsonBoolOrDefault(obj, L"controllerModEnabled", true);
+        profile.controllerModEnabled = JsonBoolOrDefault(obj, L"controllerModEnabled", false);
         profile.builtin = false;
         if (profile.id.empty()) return false;
         if (profile.name.empty()) profile.name = profile.id;

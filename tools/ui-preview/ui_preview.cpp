@@ -230,18 +230,34 @@ std::vector<Scene> Scenes() {
     scenes.push_back({ L"main-menu", [] {
         AuthUiState state = Screen();
         state.showMainMenu = true;
-        state.title = L"Steve";
-        state.status = L"Ready to play 1.21.11 Fabric";
-        state.detail = L"Profile Survival, 12 mods";
+        state.mainMenu.account = L"Steve";
+        state.mainMenu.profileName = L"Survival";
+        state.mainMenu.targetText = L"1.21.1 NeoForge 21.1.250";
+        state.status = L"Ready to play 1.21.1 NeoForge";
+        state.detail = L"Active profile: Survival - 1.21.1 NeoForge 21.1.250";
         return state;
     } });
     scenes.push_back({ L"main-menu-update", [] {
         AuthUiState state = Screen();
         state.showMainMenu = true;
         state.updateAvailable = true;
-        state.title = L"Steve";
-        state.status = L"Ready to play 1.21.11 Fabric";
-        state.detail = L"Profile Survival, 12 mods";
+        state.selectedMenuIndex = 4;
+        state.mainMenu.account = L"Steve";
+        state.mainMenu.profileName = L"Survival";
+        state.mainMenu.targetText = L"1.21.1 NeoForge 21.1.250";
+        state.status = L"Ready to play 1.21.1 NeoForge";
+        state.detail = L"Active profile: Survival - 1.21.1 NeoForge 21.1.250";
+        return state;
+    } });
+    scenes.push_back({ L"main-menu-sign-out-confirm", [] {
+        AuthUiState state = Screen();
+        state.showMainMenu = true;
+        state.selectedMenuIndex = 6;
+        state.signOutConfirm = true;
+        state.mainMenu.account = L"Steve";
+        state.mainMenu.profileName = L"Survival";
+        state.mainMenu.targetText = L"1.21.1 NeoForge 21.1.250";
+        state.status = L"Ready to play 1.21.1 NeoForge";
         return state;
     } });
     scenes.push_back({ L"changelog-page", [] { return Changelog(false, 0, true); } });

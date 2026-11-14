@@ -5,6 +5,12 @@ $root = Resolve-RepoRoot
 if (-not $CatalogPath) { $CatalogPath = Join-Path $root $ProjectConfig.VersionCatalog }
 if (-not $PackagePath) { $PackagePath = Get-ConfigPath "PackageContentDir" }
 $targets = @(Import-Csv $CatalogPath -Delimiter "`t" | Where-Object { $_.loaderVersion -and $_.loaderVersion -ne 'selected' -and $_.loaderVersion -ne 'none' })
+$bundleConfigPath = Join-Path $root 'config/controlify-bundle.json'
+if (-not (Test-Path -LiteralPath $bundleConfigPath)) {
+    throw "Controlify bundle config not found at $bundleConfigPath"
+}
+$bundleConfig = Get-Content -LiteralPath $bundleConfigPath -Raw | ConvertFrom-Json
+$bundleMods = @($bundleConfig.mods)
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $zip = $null
 if ($AppxPath) { $zip = [IO.Compression.ZipFile]::OpenRead($AppxPath) }
@@ -21,8 +27,24 @@ try {
             if ($Relative.EndsWith('.jar') -and -not (Test-JarComplete $path)) { throw "Invalid packaged jar $Relative" }
         }
     }
+    function Forbid-ControllerJars {
+        if ($zip) {
+            $bad = @($zip.Entries | Where-Object { $_.FullName -match 'banditvault-(fabric|forge|neoforge|cleanroom)-controller-.*\.jar$' })
+            if ($bad.Count -gt 0) { throw "Bandit controller jar still packaged: $($bad[0].FullName)" }
+        } else {
+            $runtimePath = Join-Path $PackagePath 'runtime'
+            $bad = @(Get-ChildItem -LiteralPath $runtimePath -Recurse -File -Filter 'banditvault-*-controller-*.jar' -ErrorAction SilentlyContinue)
+            if ($bad.Count -gt 0) { throw "Bandit controller jar still packaged: $($bad[0].FullName)" }
+        }
+    }
     Require-Entry "runtime\version_catalog.tsv"
     Require-Entry "runtime\recommended-mods.json"
+    # OSHI/JNA/WMI hardware probes abort mod loading on UWP unless JNA gets an
+    # absolute path for these two COM libraries. Verify them inside the signed
+    # APPX, not just in the staging directory, so a packaging regression is
+    # caught by CI instead of showing up as a console crash.
+    Require-Entry "natives\Ole32.dll"
+    Require-Entry "natives\OleAut32.dll"
     foreach ($inputFile in @(
         @{ Source = $CatalogPath; Relative = 'runtime/version_catalog.tsv' },
         @{ Source = (Join-Path $root 'config/recommended-mods.json'); Relative = 'runtime/recommended-mods.json' }
@@ -47,7 +69,7 @@ try {
             Require-Entry "runtime\version-mods\$id\banditvault-xbox-compat-1.0.0.jar"
         }
         if ($target.controllerProvider -ne 'none') {
-            Require-Entry "runtime\version-mods\$id\banditvault-$($target.controllerProvider)-controller-1.0.0.jar"
+            throw "Catalog row $id still advertises a bundled Bandit controller provider '$($target.controllerProvider)'"
         }
         $runtimeDir = switch ($target.javaRuntime) { 'java17' { 'jre17' } 'java21' { 'jre21' } 'legacy' { 'jre8' } default { 'jre' } }
         Require-Entry "$runtimeDir\bin\server\jvm.dll"
@@ -56,5 +78,10 @@ try {
             Require-Entry "$base$suffix.jar"
         }
     }
-    Write-Host "Package validation passed $($targets.Count) targets"
+    Forbid-ControllerJars
+    foreach ($mod in $bundleMods) {
+        Require-Entry "runtime\bundled-mods\$($mod.name)"
+        Require-Entry "runtime\version-mods\$($bundleConfig.targetId)\$($mod.name)"
+    }
+    Write-Host "Package validation passed $($targets.Count) targets and $($bundleMods.Count) bundled Controlify mod(s)"
 } finally { if ($zip) { $zip.Dispose() } }

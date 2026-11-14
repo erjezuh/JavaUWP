@@ -1,0 +1,25 @@
+{
+  "targetId": "1.21.1-neoforge-21.1.250",
+  "minecraftVersion": "1.21.1",
+  "loader": "neoforge",
+  "source": "Modrinth",
+  "note": "Controlify is the only controller mod in this fork. Pinned Modrinth version ids and file hashes keep the APPX reproducible. YACL is a required Controlify dependency.",
+  "mods": [
+    {
+      "name": "controlify-3.0.1+lts+1.21.1-neoforge.jar",
+      "project": "DOUdJVEm",
+      "versionId": "RqsNKKLK",
+      "url": "https://cdn.modrinth.com/data/DOUdJVEm/versions/RqsNKKLK/controlify-3.0.1%2Blts%2B1.21.1-neoforge.jar",
+      "sha1": "6d904472e1c95bd9d8b5e7c5421b8db628915e20",
+      "size": 7981721
+    },
+    {
+      "name": "yet_another_config_lib_v3-3.8.2+1.21.1-neoforge.jar",
+      "project": "1eAoo2KR",
+      "versionId": "7TVdVtxF",
+      "url": "https://cdn.modrinth.com/data/1eAoo2KR/versions/7TVdVtxF/yet_another_config_lib_v3-3.8.2%2B1.21.1-neoforge.jar",
+      "sha1": "fe270c9f6e0a8142cf316944087f5109cef08bbb",
+      "size": 1118651
+    }
+  ]
+}

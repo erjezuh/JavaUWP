@@ -1,7 +1,9 @@
 param(
-    [string]$NeoForgeVersion = "21.1.233",
+    # Empty means "use the NeoForge version pinned in config/versions.tsv".
+    [string]$NeoForgeVersion = "",
     [string]$McVersion = "1.21.1",
-    [string]$NeoFormVersion = "20240808.144430",
+    # Empty means "read the NeoForm coordinate out of the official installer".
+    [string]$NeoFormVersion = "",
     [string]$JavaExe
 )
 
@@ -9,6 +11,12 @@ $ErrorActionPreference = "Stop"
 $root = Split-Path $PSScriptRoot -Parent
 . (Join-Path $PSScriptRoot "common.ps1")
 
+if (-not $NeoForgeVersion) {
+    $NeoForgeVersion = Resolve-CatalogLoaderVersion -MinecraftVersion $McVersion -Loader "neoforge"
+}
+if (-not $NeoFormVersion) {
+    $NeoFormVersion = Resolve-InstallerNeoFormVersion -NeoForgeVersion $NeoForgeVersion
+}
 if (-not $JavaExe) {
     $JavaExe = Join-Path (Resolve-JavaHomeForMinecraft -MinecraftVersion $McVersion) "bin\java.exe"
 }
@@ -16,6 +24,7 @@ if (-not (Test-Path $JavaExe)) {
     throw "java.exe not found at $JavaExe"
 }
 
+Write-Host "NeoForge $NeoForgeVersion / Minecraft $McVersion / NeoForm $NeoFormVersion"
 $mcAndNeoForm = "$McVersion-$NeoFormVersion"
 $target = Get-LoaderInstallRoot "neoforge"
 $installer = Join-Path (Get-LoaderInstallerCacheDir) "neoforge-$NeoForgeVersion-installer.jar"

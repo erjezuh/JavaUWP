@@ -17,6 +17,7 @@
 #include <windows.applicationmodel.h>
 #include <windows.ui.core.h>
 #include <windows.foundation.h>
+#include <windows.devices.input.h>
 
 #include <winrt/base.h>
 #include <winrt/Windows.Foundation.h>
@@ -33,7 +34,7 @@
 #include "profiles.h"
 #include "auth_screen.h"
 #include "launcher_ui.h"
-#include "web_relay_server.h"
+#include "launcher_mouse.h"
 #include "remote_file_server.h"
 #include "app_globals.h"
 #include "loader.h"
@@ -175,6 +176,17 @@ static void RegisterLifecycleHandlers(ICoreApplication* coreApp) {
     }
 }
 
+using CoreWindowPointerHandler = ABI::Windows::Foundation::__FITypedEventHandler_2_Windows__CUI__CCore__CCoreWindow_Windows__CUI__CCore__CPointerEventArgs_t;
+static ComPtr<CoreWindowPointerHandler> g_pointerHandler;
+static EventRegistrationToken g_pointerMovedToken{};
+static EventRegistrationToken g_pointerPressedToken{};
+static EventRegistrationToken g_pointerReleasedToken{};
+static EventRegistrationToken g_pointerWheelToken{};
+using MouseDeviceMovedHandler = ABI::Windows::Foundation::__FITypedEventHandler_2_Windows__CDevices__CInput__CMouseDevice_Windows__CDevices__CInput__CMouseEventArgs_t;
+static ComPtr<ABI::Windows::Devices::Input::IMouseDevice> g_nativeMouseDevice;
+static ComPtr<MouseDeviceMovedHandler> g_nativeMouseMovedHandler;
+static EventRegistrationToken g_nativeMouseMovedToken{};
+
 static winrt::Windows::Media::Capture::MediaCapture g_microphoneAccess{ nullptr };
 
 static void RequestMicrophoneAccess() {
@@ -201,6 +213,68 @@ static void RequestMicrophoneAccess() {
     }
 }
 
+static void RegisterCoreWindowPointerHandlers(ICoreWindow* window) {
+    if (!window) return;
+    g_pointerHandler = Callback<CoreWindowPointerHandler>(
+        [](ICoreWindow* sender, IPointerEventArgs* args) -> HRESULT {
+            if (!sender || !args) return S_OK;
+            ComPtr<ABI::Windows::UI::Input::IPointerPoint> point;
+            if (FAILED(args->get_CurrentPoint(point.GetAddressOf())) || !point) return S_OK;
+            ABI::Windows::Foundation::Point position{};
+            ABI::Windows::Foundation::Rect bounds{};
+            point->get_Position(&position);
+            sender->get_Bounds(&bounds);
+            LauncherMouseNativeMove(position.X, position.Y, bounds.Width, bounds.Height);
+
+            ComPtr<ABI::Windows::UI::Input::IPointerPointProperties> props;
+            if (SUCCEEDED(point->get_Properties(props.GetAddressOf())) && props) {
+                boolean left = false;
+                props->get_IsLeftButtonPressed(&left);
+                LauncherMouseNativeLeftButton(left != 0);
+                INT32 wheel = 0;
+                props->get_MouseWheelDelta(&wheel);
+                if (wheel != 0) {
+                    LauncherMouseNativeWheel(wheel);
+                }
+            }
+            return S_OK;
+        });
+    HRESULT hr = window->add_PointerMoved(g_pointerHandler.Get(), &g_pointerMovedToken);
+    if (FAILED(hr)) WriteLogF(L"CoreWindow add_PointerMoved failed hr=0x%08X", hr);
+    hr = window->add_PointerPressed(g_pointerHandler.Get(), &g_pointerPressedToken);
+    if (FAILED(hr)) WriteLogF(L"CoreWindow add_PointerPressed failed hr=0x%08X", hr);
+    hr = window->add_PointerReleased(g_pointerHandler.Get(), &g_pointerReleasedToken);
+    if (FAILED(hr)) WriteLogF(L"CoreWindow add_PointerReleased failed hr=0x%08X", hr);
+    hr = window->add_PointerWheelChanged(g_pointerHandler.Get(), &g_pointerWheelToken);
+    if (FAILED(hr)) WriteLogF(L"CoreWindow add_PointerWheelChanged failed hr=0x%08X", hr);
+    hr = window->put_PointerCursor(nullptr);
+    if (FAILED(hr)) WriteLogF(L"CoreWindow put_PointerCursor(null) failed hr=0x%08X", hr);
+
+    ComPtr<ABI::Windows::Devices::Input::IMouseDeviceStatics> mouseStatics;
+    hr = GetActivationFactory(
+        HStringReference(RuntimeClass_Windows_Devices_Input_MouseDevice).Get(),
+        mouseStatics.GetAddressOf());
+    if (SUCCEEDED(hr) && mouseStatics) {
+        hr = mouseStatics->GetForCurrentView(g_nativeMouseDevice.GetAddressOf());
+        if (SUCCEEDED(hr) && g_nativeMouseDevice) {
+            g_nativeMouseMovedHandler = Callback<MouseDeviceMovedHandler>(
+                [](ABI::Windows::Devices::Input::IMouseDevice*,
+                   ABI::Windows::Devices::Input::IMouseEventArgs* args) -> HRESULT {
+                    if (!args || !g_authWindow) return S_OK;
+                    ABI::Windows::Devices::Input::MouseDelta delta{};
+                    ABI::Windows::Foundation::Rect bounds{};
+                    if (SUCCEEDED(args->get_MouseDelta(&delta)) &&
+                        SUCCEEDED(g_authWindow->get_Bounds(&bounds))) {
+                        LauncherMouseNativeDelta(delta.X, delta.Y, bounds.Width, bounds.Height);
+                    }
+                    return S_OK;
+                });
+            hr = g_nativeMouseDevice->add_MouseMoved(g_nativeMouseMovedHandler.Get(), &g_nativeMouseMovedToken);
+        }
+    }
+    if (FAILED(hr)) WriteLogF(L"Native mouse moved handler unavailable hr=0x%08X", hr);
+    WriteLog(L"CoreWindow pointer handlers installed");
+}
 
 static void RegisterCoreWindowLifecycleHandlers(ICoreWindow* window) {
     if (!window || g_coreWindowLifecycleHooksInstalled) return;
@@ -259,6 +333,8 @@ static void RegisterCoreWindowLifecycleHandlers(ICoreWindow* window) {
     if (FAILED(hr)) {
         WriteLogF(L"CoreWindow add_Activated failed hr=0x%08X", hr);
     }
+
+    RegisterCoreWindowPointerHandlers(window);
 
     g_coreWindowLifecycleHooksInstalled = true;
     WriteLog(L"CoreWindow lifecycle handlers installed");
@@ -513,6 +589,7 @@ public:
         SetEnvironmentVariableW(L"MC_RUNTIME_DIR", exeDir.c_str());
         SetEnvironmentVariableW(L"MC_LOG_DIR", g_logDir.c_str());
         i18n::Init();
+        ApplyMouseSensitivity(LoadMouseSensitivity());
         telemetry::ReportHardCrash(exeDir);
         telemetry::FlushQueueAsync();
         updates::StartCheckAsync();
@@ -738,7 +815,6 @@ public:
         const std::wstring jreDir = javaRuntime.selectedDir;
         EnsureProfilesInitialized(exeDir);
         const std::wstring activeProfile = GetActiveProfileId(exeDir);
-        const Profile activeProfileInfo = GetProfileById(exeDir, activeProfile);
         EnsureProfileGameDataInitialized(exeDir, activeProfile);
         const std::wstring sharedGameDir = exeDir + L"\\game";
         const std::wstring gameDir = ProfileGameDir(exeDir, activeProfile);
@@ -765,11 +841,13 @@ public:
         const std::wstring packageRuntimeDir = packageDir + L"\\runtime";
         const std::wstring packagedLibrariesDir = packageRuntimeDir + L"\\libraries";
         const std::wstring userModsDir = ProfileModsDir(exeDir, activeProfile);
+        // The Bandit controller is no longer shipped. Always use the filtered
+        // bundled-mods view so Controlify (+ YACL) is the only controller mod.
         const std::wstring bundledModsDir = PrepareEffectiveBundledModsDir(
             exeDir,
             versionInfo.targetId,
             versionInfo.bundledModsDir,
-            activeProfileInfo.controllerModEnabled);
+            false);
         const std::wstring clientJar = sharedGameDir + L"\\versions\\" + minecraftVersion + L"\\" + minecraftVersion + L".jar";
         const std::wstring argsPath = g_logDir + L"\\java_args.txt";
         const std::wstring javaLog = g_logDir + L"\\java_output.log";
@@ -790,19 +868,13 @@ public:
         WriteLogF(L"sharedGameDir: %s", sharedGameDir.c_str());
         WriteLogF(L"profileGameDir: %s", gameDir.c_str());
         WriteLogF(L"downloadedLibrariesDir: %s", (sharedGameDir + L"\\libraries").c_str());
-        WriteLogF(L"profile controller mod enabled=%d", activeProfileInfo.controllerModEnabled ? 1 : 0);
         WriteLogF(L"bundledModsDir: %s", bundledModsDir.c_str());
         WriteLogF(L"userModsDir: %s", userModsDir.c_str());
-        if (!activeProfileInfo.controllerModEnabled) {
-            const int controllerRemoved = DeleteBanditControllerModsFromDir(userModsDir);
-            if (controllerRemoved > 0) {
-                WriteLogF(L"Removed %d Bandit controller mod(s) from active profile before launch", controllerRemoved);
-            }
-        } else {
-            const int controlifyRemoved = DeleteControlifyModsFromDir(userModsDir);
-            if (controlifyRemoved > 0) {
-                WriteLogF(L"Removed %d Controlify mod(s) from active profile before launch", controlifyRemoved);
-            }
+        // Migrate older installs: remove stale Bandit controller jars, but never
+        // delete Controlify - it is the only controller mod in this fork.
+        const int controllerRemoved = DeleteBanditControllerModsFromDir(userModsDir);
+        if (controllerRemoved > 0) {
+            WriteLogF(L"Removed %d stale Bandit controller mod(s) from active profile before launch", controllerRemoved);
         }
         const int blockedRemoved = PurgeBlockedModsFromDir(exeDir, userModsDir);
         if (blockedRemoved > 0) {
@@ -867,7 +939,7 @@ public:
         }
         g_minecraftRunning.store(true);
         const bool jvmSpentBeforeLaunch = EmbeddedJvmAlreadyUsed();
-        const std::wstring effLaunchVersion = versionInfo.launchVersion.empty() ? a2w(kFabricLaunchVersion) : versionInfo.launchVersion;
+        const std::wstring effLaunchVersion = versionInfo.launchVersion.empty() ? std::wstring(kDefaultLaunchVersionW) : versionInfo.launchVersion;
         const std::wstring effAssetIndex = versionInfo.assetIndex.empty() ? a2w(kMinecraftAssetIndex) : versionInfo.assetIndex;
         const bool launched = RunLaunchTaskWithLiveUi(
             launchRenderer,
@@ -962,34 +1034,12 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int)
 {
     RoInitialize(RO_INIT_MULTITHREADED);
 
-    typedef void (*MouseSupportVoidProc)();
-    MouseSupportVoidProc mouseSupportShutdown = nullptr;
-    HMODULE mouseSupportModule = LoadPackagedLibrary(L"mouse_support.dll", 0);
-    if (mouseSupportModule) {
-        MouseSupportVoidProc mouseSupportInit =
-            reinterpret_cast<MouseSupportVoidProc>(GetProcAddress(mouseSupportModule, "MouseSupport_Init"));
-        mouseSupportShutdown =
-            reinterpret_cast<MouseSupportVoidProc>(GetProcAddress(mouseSupportModule, "MouseSupport_Shutdown"));
-        if (mouseSupportInit) {
-            mouseSupportInit();
-            WriteLog(L"mouse_support.dll initialized at launcher startup");
-        }
-    } else {
-        WriteLogF(L"mouse_support.dll not loaded err=%lu", GetLastError());
-    }
-
-    StartWebRelayServer();
-
     ComPtr<ICoreApplication> coreApp;
     GetActivationFactory(
         HStringReference(RuntimeClass_Windows_ApplicationModel_Core_CoreApplication).Get(),
         &coreApp);
     RegisterLifecycleHandlers(coreApp.Get());
     coreApp->Run(Make<AppSource>().Get());
-    if (mouseSupportShutdown) {
-        mouseSupportShutdown();
-    }
-    StopWebRelayServer();
     RoUninitialize();
     return 0;
 }

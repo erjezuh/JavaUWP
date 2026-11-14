@@ -1,0 +1,127 @@
+name: Publish APPX from a completed build
+
+# Recovery path: the native build writes this file automatically when its
+# Release step fails. You can also put a run id in docs/ci/.publish-trigger
+# and push it manually. Either way this downloads that run's APPX artifact and
+# attaches it to the nightly-native Release without rebuilding (a cold build
+# is ~30 minutes). It also commits its transcript for diagnosis.
+on:
+  push:
+    branches:
+      - arena/16fba603-javauwp
+    paths:
+      - "docs/ci/.publish-trigger"
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: publish-appx-artifact
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Attach APPX assets to nightly-native
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Publish assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          RUN_ID=$(tr -d '[:space:]' < docs/ci/.publish-trigger)
+          SHA=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID" --jq .head_sha)
+          echo "Source run: $RUN_ID ($SHA)"
+          export RUN_ID SHA
+
+          cat > /tmp/publish.sh <<'SCRIPT'
+          set -e
+          echo "== gh =="; gh --version | head -2
+          ARTIFACT_ID=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/artifacts" \
+            --jq '.artifacts[] | select(.name=="BanditLauncherNative-neoforge") | .id' | head -1)
+          echo "Artifact id: $ARTIFACT_ID"
+          test -n "$ARTIFACT_ID"
+          # gh api follows the signed redirect itself; curl with an auth header
+          # can silently store the JSON error body instead of the zip.
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID/zip" \
+            > /tmp/appx-artifact.zip
+          ls -la /tmp/appx-artifact.zip
+          if ! unzip -t /tmp/appx-artifact.zip >/dev/null 2>&1; then
+            echo "Download is not a zip; first bytes:"
+            head -c 500 /tmp/appx-artifact.zip | tr -cd '[:print:]\n'; echo
+            exit 1
+          fi
+          rm -rf /tmp/artifact dist
+          mkdir -p /tmp/artifact dist
+          unzip -o -q /tmp/appx-artifact.zip -d /tmp/artifact
+          # upload-artifact flattens to the least common ancestor, but be
+          # tolerant of an extra dist/ level in the archive
+          for f in BanditLauncherNative-neoforge.appx BanditLauncherNative-neoforge.sha256 BanditLauncherNative-neoforge.cer; do
+            src=$(find /tmp/artifact -type f -name "$f" | head -1)
+            test -n "$src" || { echo "missing $f in artifact"; exit 1; }
+            cp "$src" "dist/$f"
+          done
+          echo "== dist =="; ls -la dist
+
+          cat > /tmp/notes.md <<'NOTES'
+          Native keyboard/mouse build with NeoForge 1.21.1 as the default target.
+
+          Package version: BanditLauncherNative-neoforge
+
+          Install the .appx and the matching .cer through Xbox Device Portal while the console is in Developer Mode. Check the download with the .sha256 file. This separate package has its own LocalState, profiles and settings.
+
+          Redistribution of the APPX package is not permitted without prior written permission, as described in the project license. Videos, streams, tutorials, and install guides are allowed when they follow the creator content rules in the license, including crediting and linking back to veroxsity / BanditVault.
+
+          Built from the fork branch by the Native NeoForge fork build workflow.
+          NOTES
+
+          echo "== release view =="
+          if gh release view nightly-native >/dev/null 2>&1; then
+            echo "release exists -> edit"
+            gh release edit nightly-native --title nightly-native --notes-file /tmp/notes.md --prerelease
+          else
+            echo "release missing -> create"
+            gh release create nightly-native --target "$SHA" --title nightly-native \
+              --notes-file /tmp/notes.md --prerelease
+          fi
+          echo "== upload =="
+          gh release upload nightly-native \
+            dist/BanditLauncherNative-neoforge.appx \
+            dist/BanditLauncherNative-neoforge.sha256 \
+            dist/BanditLauncherNative-neoforge.cer --clobber
+          echo "== done =="
+          gh release view nightly-native --json url,assets --jq '.url, (.assets[].name)'
+          SCRIPT
+
+          set +e
+          bash /tmp/publish.sh > /tmp/publish.log 2>&1
+          code=$?
+          set -e
+          cat /tmp/publish.log
+          echo "PUBLISH_EXIT=$code" >> /tmp/publish.log
+          exit $code
+
+      - name: Save transcript
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p docs/ci
+          { echo "# APPX publish transcript"; echo; echo '```'; cat /tmp/publish.log 2>/dev/null || echo "no log"; echo '```'; } > docs/ci/publish-log.md
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f docs/ci/publish-log.md
+          if git diff --cached --quiet; then
+            echo "No transcript changes"
+          else
+            git commit -m "CI: APPX publish transcript"
+            git pull --rebase origin "$GITHUB_REF_NAME"
+            git push origin "HEAD:$GITHUB_REF_NAME"
+          fi

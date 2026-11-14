@@ -1,6 +1,7 @@
 param(
     [string]$MinecraftVersion = "1.21.1",
-    [string]$NeoForgeVersion = "21.1.233",
+    # Empty means "use the NeoForge version pinned in config/versions.tsv".
+    [string]$NeoForgeVersion = "",
     [string]$NeoFormVersion,
     [string]$OutputDir
 )
@@ -8,6 +9,10 @@ param(
 $ErrorActionPreference = "Stop"
 
 . (Join-Path (Split-Path (Split-Path $PSScriptRoot -Parent) -Parent) "scripts\common.ps1")
+
+if (-not $NeoForgeVersion) {
+    $NeoForgeVersion = Resolve-CatalogLoaderVersion -MinecraftVersion $MinecraftVersion -Loader "neoforge"
+}
 
 $root = Resolve-RepoRoot
 $gameDir = Get-ConfigPath "GameDir"
@@ -44,42 +49,10 @@ if (-not $variantLayers.ContainsKey($MinecraftVersion)) {
 }
 
 function Resolve-NeoFormVersion([string]$Version) {
-    $installerDir = Join-Path (Get-ConfigPath "StagingDir") "cache\neoforge\$Version"
-    Ensure-Dir $installerDir
-    $neoFormCache = Join-Path $installerDir "neoform.txt"
-    if (Test-Path $neoFormCache) {
-        $cached = ([System.IO.File]::ReadAllText($neoFormCache)).Trim()
-        if ($cached) { return $cached }
-    }
-    $installerJar = Join-Path $installerDir "neoforge-$Version-installer.jar"
-    Save-RemoteFile `
-        -Uri "https://maven.neoforged.net/releases/net/neoforged/neoforge/$Version/neoforge-$Version-installer.jar" `
-        -Path $installerJar
-
-    Add-Type -AssemblyName System.IO.Compression.FileSystem
-    $zip = [System.IO.Compression.ZipFile]::OpenRead($installerJar)
-    try {
-        $entry = $zip.GetEntry("version.json")
-        if (-not $entry) { throw "NeoForge installer has no version.json" }
-        $reader = [System.IO.StreamReader]::new($entry.Open())
-        try {
-            $profile = $reader.ReadToEnd() | ConvertFrom-Json
-        } finally {
-            $reader.Dispose()
-        }
-    } finally {
-        $zip.Dispose()
-    }
-
-    $arguments = @($profile.arguments.game)
-    for ($i = 0; $i -lt $arguments.Count - 1; $i++) {
-        if ([string]$arguments[$i] -eq "--fml.neoFormVersion") {
-            $resolved = [string]$arguments[$i + 1]
-            [System.IO.File]::WriteAllText($neoFormCache, $resolved, (New-Object System.Text.UTF8Encoding($false)))
-            return $resolved
-        }
-    }
-    throw "NeoForm version missing from NeoForge $Version profile"
+    # Shared resolver reads version.json, minecraftArguments and
+    # install_profile.json, so all NeoForge releases resolve their NeoForm
+    # coordinate the same way as the download manifest generator.
+    return Resolve-InstallerNeoFormVersion -NeoForgeVersion $Version
 }
 
 $javaHome = Resolve-JavaHomeForMinecraft -MinecraftVersion $MinecraftVersion

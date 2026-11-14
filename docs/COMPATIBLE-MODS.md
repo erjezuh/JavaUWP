@@ -35,3 +35,12 @@ Mods that have been tested and confirmed working. Will update over time as more 
 - [Text Placeholder API](https://modrinth.com/mod/placeholder-api)
 - [Yet Another Config Lib](https://modrinth.com/mod/yacl)
 - [Zoomify](https://modrinth.com/mod/zoomify)
+
+## Known incompatible: Embeddium / Rubidium on `1.20.1 / Forge`
+
+These two Sodium ports replace the chunk renderer unconditionally (there is no
+`use_chunk_multidraw` switch in Embeddium 0.3.x), which crashes Mesa's WGL/llvmpipe
+UWP path with `EXCEPTION_ACCESS_VIOLATION` a few seconds after joining a world.
+`1.20.1 / Forge` no longer recommends a Sodium-family renderer; the launcher
+moves those jars aside as `*.jar.disabled`. This does **not** affect Fabric's
+Sodium (listed above) or other Minecraft versions. See [FAQ.md](FAQ.md).

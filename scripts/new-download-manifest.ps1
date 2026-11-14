@@ -89,6 +89,33 @@ function Get-RemoteTextOrThrow([string]$Url) {
     throw "Could not fetch $Url after 4 attempts: $lastError"
 }
 
+# Some NeoForge installer artifacts are published without a .sha1 sidecar.
+# Fall back to downloading the artifact once and hashing it locally, so a
+# missing sidecar cannot abort the whole per-target manifest.
+function Get-RemoteSha1([string]$Url) {
+    try {
+        $content = (Invoke-WebRequest -UseBasicParsing -Uri "$Url.sha1" -TimeoutSec 30).Content
+        $text = if ($content -is [byte[]]) {
+            [System.Text.Encoding]::ASCII.GetString($content).Trim()
+        } else {
+            ([string]$content).Trim()
+        }
+        if ($text -match '^[0-9a-fA-F]{40}$') {
+            return $text.ToLowerInvariant()
+        }
+    } catch {
+        Write-Host "No usable .sha1 for $Url, hashing the artifact locally"
+    }
+
+    $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("manifest-sha1-" + [guid]::NewGuid().ToString("N"))
+    try {
+        Save-RemoteFile -Uri $Url -Path $tmp
+        return (Get-FileHash -LiteralPath $tmp -Algorithm SHA1).Hash.ToLowerInvariant()
+    } finally {
+        Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Get-RemoteSizeOrZero([string]$Url) {
     try {
         $response = Invoke-WebRequest -UseBasicParsing -Method Head -Uri $Url -TimeoutSec 30
@@ -198,7 +225,7 @@ function Add-FabricLibraries($FabricProfile, [System.Collections.Generic.List[ob
         }
 
         $url = "$baseUrl$path"
-        $sha1 = if ($library.sha1) { $library.sha1 } else { Get-RemoteTextOrThrow "$url.sha1" }
+        $sha1 = if ($library.sha1) { $library.sha1 } else { Get-RemoteSha1 $url }
         $size = if ($library.size) { [UInt64]$library.size } else { Get-RemoteSizeOrZero $url }
         Add-Entry $Entries "game/libraries/$path" $sha1 $size $url
     }
@@ -223,7 +250,7 @@ function Add-LoaderLibraries($LoaderProfile, [System.Collections.Generic.List[ob
         }
 
         $url = "$baseUrl$path"
-        $sha1 = if ($library.sha1) { $library.sha1 } else { Get-RemoteTextOrThrow "$url.sha1" }
+        $sha1 = if ($library.sha1) { $library.sha1 } else { Get-RemoteSha1 $url }
         $size = if ($library.size) { [UInt64]$library.size } else { Get-RemoteSizeOrZero $url }
         Add-Entry $Entries "game/libraries/$path" $sha1 $size $url
     }
@@ -309,8 +336,15 @@ function Add-InstallerMavenEntries(
 
             $path = $entry.FullName.Substring("maven/".Length)
             $url = "$BaseUrl$path"
-            $sha1 = Get-RemoteTextOrThrow "$url.sha1"
-            Add-Entry $Entries "game/libraries/$path" $sha1 ([UInt64]$entry.Length) $url
+            try {
+                $sha1 = Get-RemoteSha1 $url
+                Add-Entry $Entries "game/libraries/$path" $sha1 ([UInt64]$entry.Length) $url
+            } catch {
+                # A single unpublished installer artifact must not make every
+                # other target in this package unbuildable. The launcher's
+                # prep preflight reports the concrete missing input instead.
+                Write-Warning "Skipping installer maven entry $path : $($_.Exception.Message)"
+            }
         }
     } finally {
         $zip.Dispose()
@@ -445,7 +479,7 @@ function Add-LoaderInstallerJarEntry(
         $forgeVersion = Get-ForgeInstallerVersion $MinecraftVersion $LoaderVersion
         $path = "net/minecraftforge/forge/$forgeVersion/forge-$forgeVersion-installer.jar"
         $url = "https://maven.minecraftforge.net/$path"
-        $sha1 = Get-RemoteTextOrThrow "$url.sha1"
+        $sha1 = Get-RemoteSha1 $url
         $size = Get-RemoteSizeOrZero $url
         Add-Entry $Entries "game/libraries/$path" $sha1 $size $url
         return
@@ -454,7 +488,7 @@ function Add-LoaderInstallerJarEntry(
     if ($Loader -eq "neoforge") {
         $path = "net/neoforged/neoforge/$LoaderVersion/neoforge-$LoaderVersion-installer.jar"
         $url = "https://maven.neoforged.net/releases/$path"
-        $sha1 = Get-RemoteTextOrThrow "$url.sha1"
+        $sha1 = Get-RemoteSha1 $url
         $size = Get-RemoteSizeOrZero $url
         Add-Entry $Entries "game/libraries/$path" $sha1 $size $url
         return
@@ -464,7 +498,7 @@ function Add-LoaderInstallerJarEntry(
         # the runtime jar only ships inside the installer, the one on their maven is a dev build
         $path = "com/cleanroommc/cleanroom/$LoaderVersion/cleanroom-$LoaderVersion-installer.jar"
         $url = "https://repo.cleanroommc.com/releases/$path"
-        $sha1 = Get-RemoteTextOrThrow "$url.sha1"
+        $sha1 = Get-RemoteSha1 $url
         $size = Get-RemoteSizeOrZero $url
         Add-Entry $Entries "game/libraries/$path" $sha1 $size $url
     }
@@ -515,18 +549,38 @@ function Get-LibraryVersion($Profile, [string]$Prefix) {
     return ""
 }
 
-function Get-NeoFormVersionFromProfile($Profile) {
-    if (-not $Profile -or -not $Profile.arguments -or -not $Profile.arguments.game) {
-        return ""
+function Get-LibraryVersionFromPrefixes($Profile, [string[]]$Prefixes) {
+    foreach ($prefix in $Prefixes) {
+        $version = Get-LibraryVersion $Profile $prefix
+        if ($version) { return $version }
     }
+    return ""
+}
 
-    $arguments = @($Profile.arguments.game)
-    for ($i = 0; $i -lt $arguments.Count - 1; $i++) {
-        if ([string]$arguments[$i] -eq "--fml.neoFormVersion") {
-            return [string]$arguments[$i + 1]
+function Get-NeoFormVersionFromProfile($Profile, $InstallProfile) {
+    # Current installers put the NeoForm coordinate in version.json's game
+    # arguments. Older/mirrored installers keep it in minecraftArguments or in
+    # install_profile.json data, so check all three shapes.
+    if ($Profile -and $Profile.arguments -and $Profile.arguments.game) {
+        $arguments = @($Profile.arguments.game)
+        for ($i = 0; $i -lt $arguments.Count - 1; $i++) {
+            if ([string]$arguments[$i] -eq "--fml.neoFormVersion") {
+                return [string]$arguments[$i + 1]
+            }
         }
     }
-
+    if ($Profile -and $Profile.minecraftArguments -match '--fml\.neoFormVersion\s+([^\s"]+)') {
+        return $Matches[1]
+    }
+    if ($InstallProfile -and $InstallProfile.data) {
+        $names = @("NEOFORM_VERSION", "NEO_FORM_VERSION", "MCP_VERSION", "neoFormVersion")
+        foreach ($property in $InstallProfile.data.PSObject.Properties) {
+            if ($names -contains $property.Name) {
+                $value = [string]$property.Value
+                if ($value -match '^[0-9][0-9A-Za-z.\-_]*$') { return $value }
+            }
+        }
+    }
     return ""
 }
 
@@ -550,9 +604,13 @@ function Add-NeoFormArchiveEntry(
     }
 
     $url = "https://maven.neoforged.net/releases/$path"
-    $sha1 = Get-RemoteTextOrThrow "$url.sha1"
-    $size = Get-RemoteSizeOrZero $url
-    Add-Entry $Entries $manifestPath $sha1 $size $url
+    try {
+        $sha1 = Get-RemoteSha1 $url
+        $size = Get-RemoteSizeOrZero $url
+        Add-Entry $Entries $manifestPath $sha1 $size $url
+    } catch {
+        Write-Warning "NeoForm archive $coordinate is not published at $url : $($_.Exception.Message)"
+    }
 }
 
 function Add-Assets($VersionJson, [System.Collections.Generic.List[object]]$Entries) {
@@ -626,7 +684,7 @@ if ($Loader -eq "fabric") {
     if ($installerJar -and (Test-Path $installerJar)) {
         Add-InstallerMavenEntries $installerJar "https://maven.neoforged.net/releases/" $entries
     }
-    Add-NeoFormArchiveEntry $MinecraftVersion (Get-NeoFormVersionFromProfile $loaderProfile) $entries
+    Add-NeoFormArchiveEntry $MinecraftVersion (Get-NeoFormVersionFromProfile $loaderProfile $installProfile) $entries
 }
 Add-Assets $versionJson $entries
 
@@ -667,13 +725,16 @@ if ($gameArgs.Count -gt 0) {
 }
 if ($Loader -eq "neoforge") {
     $neoFormVersion = Get-GameArgumentValue $gameArgs "--fml.neoFormVersion"
+    if (-not $neoFormVersion) {
+        $neoFormVersion = Get-NeoFormVersionFromProfile $loaderProfile $installProfile
+    }
     if ($neoFormVersion) {
         $lines.Add("# neoFormVersion`t$neoFormVersion")
     }
-    $installToolsVersion = Get-LibraryVersion $installProfile "net.neoforged.installertools:installertools:"
-    $jarSplitterVersion = Get-LibraryVersion $installProfile "net.neoforged.installertools:jarsplitter:"
-    $binaryPatcherVersion = Get-LibraryVersion $installProfile "net.neoforged.installertools:binarypatcher:"
-    $autoRenamingToolVersion = Get-LibraryVersion $installProfile "net.neoforged:AutoRenamingTool:"
+    $installToolsVersion = Get-LibraryVersionFromPrefixes $installProfile @("net.neoforged.installertools:installertools:", "net.minecraftforge:installertools:", "net.neoforged:installertools:")
+    $jarSplitterVersion = Get-LibraryVersionFromPrefixes $installProfile @("net.neoforged.installertools:jarsplitter:", "net.minecraftforge:jarsplitter:", "net.neoforged:jarsplitter:")
+    $binaryPatcherVersion = Get-LibraryVersionFromPrefixes $installProfile @("net.neoforged.installertools:binarypatcher:", "net.minecraftforge:binarypatcher:", "net.neoforged:binarypatcher:")
+    $autoRenamingToolVersion = Get-LibraryVersionFromPrefixes $installProfile @("net.neoforged:AutoRenamingTool:", "net.minecraftforge:AutoRenamingTool:")
     if ($installToolsVersion) { $lines.Add("# neoForgeInstallToolsVersion`t$installToolsVersion") }
     if ($jarSplitterVersion) { $lines.Add("# neoForgeJarSplitterVersion`t$jarSplitterVersion") }
     if ($binaryPatcherVersion) { $lines.Add("# neoForgeBinaryPatcherVersion`t$binaryPatcherVersion") }

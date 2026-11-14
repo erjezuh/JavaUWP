@@ -1,4 +1,5 @@
 #include "crash_parse.h"
+#include "memory_profile.h"
 
 #include <algorithm>
 #include <cctype>
@@ -203,6 +204,24 @@ ParsedCrash ParseHsErr(const std::string& text) {
     }
     if (parsed.outerClass.empty()) return ParsedCrash();
     parsed.rootClass = parsed.outerClass;
+
+    // Turn a raw hs_err memory failure into an actionable category. A missing
+    // mod/library must never be reported as "not enough memory".
+    const bool memoryOuter =
+        parsed.outerClass == "InsufficientMemory" ||
+        parsed.outerClass == "NativeOutOfMemory" ||
+        parsed.outerClass.find("OutOfMemory") != std::string::npos;
+    const memory::FailureInfo failure = memoryOuter
+        ? memory::ClassifyFailure(text) : memory::FailureInfo();
+    if (memoryOuter && failure.category != memory::Failure::Unknown &&
+        failure.category != memory::Failure::Dependency) {
+        const std::string prefix = std::string("Memory failure (") + failure.label + "): ";
+        if (parsed.message.empty()) {
+            parsed.message = prefix + failure.advice;
+        } else {
+            parsed.message = prefix + parsed.message + " " + failure.advice;
+        }
+    }
 
     for (size_t i = 0; i < lines.size(); ++i) {
         if (!StartsWith(Trim(lines[i]), "# Problematic frame:")) continue;

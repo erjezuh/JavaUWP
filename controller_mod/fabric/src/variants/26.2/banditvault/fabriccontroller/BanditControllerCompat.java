@@ -51,12 +51,12 @@ public final class BanditControllerCompat {
     private static boolean crouchToggled;
     private static boolean sprintToggled;
     private static Object lastCursorScreen;
-    private static Object lastRelayCursorScreen;
+    private static Object lastMouseCursorScreen;
+    private static double lastMouseCursorX = Double.NaN;
+    private static double lastMouseCursorY = Double.NaN;
+    private static boolean mouseOwnsCursor;
     private static Screen queuedCursorScreen;
     private static GuiGraphicsExtractor queuedCursorContext;
-    private static double lastRelayCursorX = Double.NaN;
-    private static double lastRelayCursorY = Double.NaN;
-    private static boolean relayOwnsCursor;
     private static boolean snapStickLatched;
     private static KeyMapping radialPressedKey;
     private static boolean radialPressedAsKeyboard;
@@ -64,7 +64,7 @@ public final class BanditControllerCompat {
     private static final java.util.Set<String> RAW_JAVA_KEYS_DOWN = new java.util.HashSet<String>();
     private static CursorMode cursorMode = CursorMode.SNAP;
 
-    private static final double RELAY_CURSOR_MOVE_EPSILON = 0.5;
+    private static final double MOUSE_CURSOR_MOVE_EPSILON = 0.5;
     private static final double CONTROLLER_CURSOR_TAKEOVER_THRESHOLD = 0.20;
 
     private enum CursorMode {
@@ -93,7 +93,7 @@ public final class BanditControllerCompat {
                 releaseGameplayKeys(client, FabricClientApi.screen(client) == null);
                 crouchToggled = false;
                 sprintToggled = false;
-                relayOwnsCursor = false;
+                mouseOwnsCursor = false;
                 active = false;
             }
             return;
@@ -116,7 +116,7 @@ public final class BanditControllerCompat {
             tickScreen(client, FabricClientApi.screen(client));
         } else {
             BanditControllerKeyboard.close();
-            relayOwnsCursor = false;
+            mouseOwnsCursor = false;
             tickGameplay(client);
         }
 
@@ -169,8 +169,8 @@ public final class BanditControllerCompat {
             return;
         }
         FabricScreenApi.beginCursorLayer(context);
-        if (!relayOwnsCursor) renderControllerGuide(screen, context, client);
-        if (!relayOwnsCursor && cursorX >= 0.0 && cursorY >= 0.0) {
+        if (!mouseOwnsCursor) renderControllerGuide(screen, context, client);
+        if (!mouseOwnsCursor && cursorX >= 0.0 && cursorY >= 0.0) {
             FabricScreenApi.drawCursor(context, (int)Math.round(cursorX), (int)Math.round(cursorY));
         }
         FabricScreenApi.endCursorLayer(context);
@@ -212,9 +212,9 @@ public final class BanditControllerCompat {
         if (!active || screen == null || client == null || FabricClientApi.screen(client) != screen) {
             return;
         }
-        observeRelayCursor(screen);
-        if (relayOwnsCursor) {
-            screen.mouseMoved(lastRelayCursorX, lastRelayCursorY);
+        observeMouseCursor(screen);
+        if (mouseOwnsCursor) {
+            screen.mouseMoved(lastMouseCursorX, lastMouseCursorY);
             return;
         }
         if (cursorMode == CursorMode.FREE) {
@@ -257,7 +257,7 @@ public final class BanditControllerCompat {
 
     public static int screenMouseX(Screen screen, int fallback) {
         Minecraft client = Minecraft.getInstance();
-        if (!active || relayOwnsCursor || cursorX < 0.0 || client == null || FabricClientApi.screen(client) != screen) {
+        if (!active || mouseOwnsCursor || cursorX < 0.0 || client == null || FabricClientApi.screen(client) != screen) {
             return fallback;
         }
         return (int)Math.round(cursorX);
@@ -265,7 +265,7 @@ public final class BanditControllerCompat {
 
     public static int screenMouseY(Screen screen, int fallback) {
         Minecraft client = Minecraft.getInstance();
-        if (!active || relayOwnsCursor || cursorY < 0.0 || client == null || FabricClientApi.screen(client) != screen) {
+        if (!active || mouseOwnsCursor || cursorY < 0.0 || client == null || FabricClientApi.screen(client) != screen) {
             return fallback;
         }
         return (int)Math.round(cursorY);
@@ -416,7 +416,7 @@ public final class BanditControllerCompat {
         ensureScreenCursor(screen);
         float ry = axis(GLFW.GLFW_GAMEPAD_AXIS_RIGHT_Y);
 
-        if (cursorMode == CursorMode.SNAP && !relayOwnsCursor) {
+        if (cursorMode == CursorMode.SNAP && !mouseOwnsCursor) {
             applySnapTarget(screen, MENU_NAVIGATION.synchronize(screen, cursorX, cursorY));
         }
 
@@ -508,7 +508,7 @@ public final class BanditControllerCompat {
             cursorX = Math.max(1, screen.width / 2);
             cursorY = Math.max(1, screen.height / 2);
             snapStickLatched = false;
-            resetRelayCursorBaseline();
+            resetMouseCursorBaseline();
             MENU_NAVIGATION.reset(screen);
             if (cursorMode == CursorMode.SNAP) {
                 applySnapTarget(screen, MENU_NAVIGATION.discover(screen, cursorX, cursorY));
@@ -553,8 +553,8 @@ public final class BanditControllerCompat {
     }
 
     private static void takeControllerCursor() {
-        relayOwnsCursor = false;
-        resetRelayCursorBaseline();
+        mouseOwnsCursor = false;
+        resetMouseCursorBaseline();
     }
 
     static void resumeMenuAfterKeyboard(Screen screen) {
@@ -569,10 +569,10 @@ public final class BanditControllerCompat {
         }
     }
 
-    private static void resetRelayCursorBaseline() {
-        lastRelayCursorScreen = null;
-        lastRelayCursorX = Double.NaN;
-        lastRelayCursorY = Double.NaN;
+    private static void resetMouseCursorBaseline() {
+        lastMouseCursorScreen = null;
+        lastMouseCursorX = Double.NaN;
+        lastMouseCursorY = Double.NaN;
     }
 
     private static void updateScreenCursor(Minecraft client, Screen screen, boolean frameTimed) {
@@ -583,7 +583,7 @@ public final class BanditControllerCompat {
         BanditControllerSettings settings = BanditControllerSettings.get();
         float rawX = axis(GLFW.GLFW_GAMEPAD_AXIS_LEFT_X);
         float rawY = axis(GLFW.GLFW_GAMEPAD_AXIS_LEFT_Y);
-        if (relayOwnsCursor) {
+        if (mouseOwnsCursor) {
             double takeoverMagnitude = Math.max(Math.abs(rawX), Math.abs(rawY));
             if (takeoverMagnitude < CONTROLLER_CURSOR_TAKEOVER_THRESHOLD) {
                 lastScreenCursorNanos = System.nanoTime();
@@ -617,7 +617,7 @@ public final class BanditControllerCompat {
         }
     }
 
-    private static void observeRelayCursor(Screen screen) {
+    private static void observeMouseCursor(Screen screen) {
         Minecraft client = Minecraft.getInstance();
         if (client == null || client.mouseHandler == null) {
             return;
@@ -629,22 +629,22 @@ public final class BanditControllerCompat {
             mouseX = mouseX * screen.width / Math.max(1.0, window.getScreenWidth());
             mouseY = mouseY * screen.height / Math.max(1.0, window.getScreenHeight());
         }
-        if (screen != lastRelayCursorScreen || Double.isNaN(lastRelayCursorX) || Double.isNaN(lastRelayCursorY)) {
-            lastRelayCursorScreen = screen;
-            lastRelayCursorX = mouseX;
-            lastRelayCursorY = mouseY;
+        if (screen != lastMouseCursorScreen || Double.isNaN(lastMouseCursorX) || Double.isNaN(lastMouseCursorY)) {
+            lastMouseCursorScreen = screen;
+            lastMouseCursorX = mouseX;
+            lastMouseCursorY = mouseY;
             return;
         }
 
-        if (Math.abs(mouseX - lastRelayCursorX) > RELAY_CURSOR_MOVE_EPSILON ||
-            Math.abs(mouseY - lastRelayCursorY) > RELAY_CURSOR_MOVE_EPSILON) {
-            if (!relayOwnsCursor) {
+        if (Math.abs(mouseX - lastMouseCursorX) > MOUSE_CURSOR_MOVE_EPSILON ||
+            Math.abs(mouseY - lastMouseCursorY) > MOUSE_CURSOR_MOVE_EPSILON) {
+            if (!mouseOwnsCursor) {
                 screen.clearFocus();
             }
-            relayOwnsCursor = true;
+            mouseOwnsCursor = true;
         }
-        lastRelayCursorX = mouseX;
-        lastRelayCursorY = mouseY;
+        lastMouseCursorX = mouseX;
+        lastMouseCursorY = mouseY;
     }
 
     private static void applyLook(LocalPlayer player, float rx, float ry, float seconds, BanditControllerSettings settings) {
