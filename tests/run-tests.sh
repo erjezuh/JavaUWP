@@ -22,6 +22,24 @@ g++ -std=c++17 -Wall -Wextra -Werror -pedantic \
 /tmp/sodium_family_test
 
 echo
+echo "== Adaptive JVM memory profiles (C++) =="
+g++ -std=c++17 -Wall -Wextra -Werror -pedantic \
+    -o /tmp/memory_profile_test tests/memory_profile_test.cpp
+/tmp/memory_profile_test
+
+echo
+echo "== Launch phase timings (C++) =="
+g++ -std=c++17 -Wall -Wextra -Werror -pedantic \
+    -o /tmp/launch_phase_test tests/launch_phase_test.cpp
+/tmp/launch_phase_test
+
+echo
+echo "== Mod metadata index / cache invalidation (C++) =="
+g++ -std=c++17 -Wall -Wextra -Werror -pedantic \
+    -o /tmp/mod_index_test tests/mod_index_test.cpp
+/tmp/mod_index_test
+
+echo
 echo "== GLFW shim per-frame cache policy (C++) =="
 g++ -std=c++17 -Wall -Wextra -Werror -pedantic \
     -o /tmp/perf_cache_test tests/perf_cache_test.cpp

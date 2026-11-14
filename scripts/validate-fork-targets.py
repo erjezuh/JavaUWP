@@ -477,28 +477,30 @@ def main() -> int:
     if "p_eglSwapInterval(g_eglDisplay, i)" not in glfw_shim:
         errors.append("glfwSwapInterval no longer honours the value requested by the game")
 
-    # 18. Modded profiles get a 3.5 GiB heap. HotSpot rejects decimal -Xmx
-    # values ("-Xmx3.5G" stops the JVM before the game starts), so the value
-    # must be a whole number of MiB. Keep the log, the seeded jvm_args.txt
-    # template and the documented rollback in sync, and leave other targets
-    # (Cleanroom/1.12.2) alone.
+    # 18. Memory plan wiring. The fixed 3584 MiB heap reproduced
+    # "InsufficientMemory / G1 virtual space" mmap failures on UWP, so the
+    # built-in args must come from the measured device budget, not a constant.
     launch_cpp = read("MC.Xbox/launch/minecraft_launch.cpp")
     cleanroom_cpp = read("MC.Xbox/launch/loaders/cleanroom.cpp")
-    if 'vmOptionStorage.push_back("-Xmx3584M");' not in launch_cpp:
-        errors.append("minecraft_launch.cpp no longer sets the 3.5 GiB (-Xmx3584M) heap")
-    for needle in ("JVM heap: -Xmx3584M (3.5 GiB)", "#   -Xmx3584M (3.5 GiB)"):
+    for needle in ("#include \"memory_profile.h\"", "ReadAppMemoryBudget(",
+                   "memory::ComputePlan(", "memory::BuildJvmMemoryArgs(",
+                   "memory::DescribeDiagnostics("):
         if needle not in launch_cpp:
-            errors.append(f"minecraft_launch.cpp log/template is out of sync with the heap ({needle})")
-    if "#-Xmx3G" not in launch_cpp:
-        errors.append("jvm_args.txt template lost the documented rollback to 3 GiB")
+            errors.append(f"minecraft_launch.cpp lost adaptive memory wiring ({needle})")
+    if "vmOptionStorage.push_back(\"-Xmx3584M\")" in launch_cpp:
+        errors.append("the fixed -Xmx3584M heap is back; it exhausts the UWP virtual budget")
     for number, line in enumerate(launch_cpp.splitlines(), 1):
         active = line.strip()
         if active.startswith("//") or active.startswith('L"#') or active.startswith("#"):
             continue
-        if "-Xmx3G" in active:
-            errors.append(f"minecraft_launch.cpp line {number} still has an active -Xmx3G reference")
+        for flag in ("-XX:G1HeapRegionSize=", "-XX:G1NewSizePercent=",
+                     "-XX:G1ReservePercent=", "-XX:MaxGCPauseMillis=",
+                     "-XX:+UnlockExperimentalVMOptions"):
+            if flag in active and "removed" not in active and "removed:" not in active:
+                errors.append(f"minecraft_launch.cpp line {number} re-enables {flag} by default")
     for rel in ("MC.Xbox/launch/minecraft_launch.cpp",
                 "MC.Xbox/launch/loaders/cleanroom.cpp",
+                "MC.Xbox/launch/memory_profile.h",
                 "CHANGELOG.md", "docs/FAQ.md", "docs/ARCHITECTURE.md",
                 "docs/FORK-NATIVE-NEOFORGE.es.md"):
         for match in re.finditer(r"-Xmx\d+\.\d+[kKmMgG]?", read(rel)):
@@ -507,6 +509,69 @@ def main() -> int:
                 "Java only accepts a whole number")
     if 'vmOptions.push_back("-Xmx2560M");' not in cleanroom_cpp:
         errors.append("Cleanroom/1.12.2 heap changed; other targets must stay untouched")
+
+    # 19. Mod index: one metadata pass per launch, cache invalidated by
+    # size/timestamp, and the cache must never be written inside mods/.
+    mod_defaults = read("MC.Xbox/mods/mod_defaults.cpp")
+    mod_index = read("MC.Xbox/mods/mod_index.h")
+    for needle in ("EnsureModIndex(", "modindex::Diff", "state.index.Rebuild(",
+                   "modindex::CacheKeyFor("):
+        if needle not in mod_defaults:
+            errors.append(f"mod_defaults.cpp lost the shared mod index ({needle})")
+    if "nFileSizeHigh" not in mod_defaults:
+        errors.append("mod index stamps lost file size invalidation")
+    if "BANDIT-MOD-INDEX-v1" not in mod_index:
+        errors.append("mod index cache format marker is missing")
+    if "ftLastWriteTime" not in mod_defaults:
+        errors.append("mod index stamps lost last-write-time invalidation")
+    if 'ReadTextFile(cachePath' not in mod_defaults or \
+            'WriteTextFile(cachePath' not in mod_defaults:
+        errors.append("mod index cache read/write wiring is missing")
+    if re.search(r"L\"\\\\mods\\\\\"\s*\+\s*a2w\(modindex::CacheKeyFor", mod_defaults):
+        errors.append("the mod index cache must live in config/, outside mods/")
+    for rel in ("tests/memory_profile_test.cpp", "tests/launch_phase_test.cpp",
+                "tests/mod_index_test.cpp"):
+        try:
+            read(rel)
+        except (OSError, FileNotFoundError):
+            errors.append(f"missing portable test: {rel}")
+    suite = read("tests/run-tests.sh")
+    for test in ("memory_profile_test", "launch_phase_test", "mod_index_test"):
+        if f"tests/{test}.cpp" not in suite:
+            errors.append(f"tests/run-tests.sh does not build {test}.cpp")
+    for needle in ("#include \"launch_phase.h\"", "launchphase::Timeline",
+                   "launchphase::kIndeterminate", "launchphase::ScopeExit"):
+        if needle not in launch_cpp:
+            errors.append(f"minecraft_launch.cpp lost phase timing ({needle})")
+    # Only the launch task's seeded value matters here; the Microsoft sign-in
+    # screen legitimately uses a small fixed progress value for its own state.
+    launcher_ui = read("MC.Xbox/ui/launcher_ui.cpp")
+    launch_task = launcher_ui.split("bool RunLaunchTaskWithLiveUi(", 1)
+    if len(launch_task) == 2:
+        launch_task = launch_task[1].split("\nbool ", 1)[0]
+        if "state.progress = -1.0f;" not in launch_task:
+            errors.append("RunLaunchTaskWithLiveUi no longer starts indeterminate")
+        if re.search(r"state\.progress\s*=\s*0\.\d+f", launch_task):
+            errors.append("RunLaunchTaskWithLiveUi still seeds a fabricated percentage")
+    if "memory_diagnostic.txt" not in read("MC.Xbox/common/crash_report.cpp"):
+        errors.append("crash ZIP no longer includes memory_diagnostic.txt")
+    if "ClassifyFailure(text)" not in read("MC.Xbox/telemetry/crash_parse.cpp"):
+        errors.append("crash parsing no longer classifies native memory failures")
+
+    # 20. Phase labels must exist in both language catalogs, and the report
+    # documenting the untested UWP checks must stay in the tree.
+    en_lang = json.loads(read("MC.Xbox/lang/en.json"))
+    es_lang = json.loads(read("MC.Xbox/lang/es-419.json"))
+    for label in ("Checking files", "Analyzing mods", "Preparing dependencies",
+                  "Preparing Java", "Starting NeoForge", "Loading Minecraft"):
+        if label not in en_lang:
+            errors.append(f"en.json is missing the launch phase label {label!r}")
+        if label not in es_lang or es_lang[label] == label:
+            errors.append(f"es-419.json does not translate the launch phase label {label!r}")
+    try:
+        read("docs/MEMORY-AND-MOD-LOADING-REPORT.es.md")
+    except (OSError, FileNotFoundError):
+        errors.append("the memory/mod-loading optimization report is missing")
 
     for warning in warnings:
         print(f"WARN  {warning}")

@@ -143,7 +143,9 @@ bool RunLaunchTaskWithLiveUi(
     state.detail = loaderLabel.empty()
         ? Tr(L"Preparing launch files.")
         : TrFormat(L"Preparing {0} and launch files.", { loaderLabel });
-    state.progress = 0.12f;
+    // No invented percentage: the launch task reports real phases and uses a
+    // negative value for indeterminate work, which the UI draws as a pulse.
+    state.progress = -1.0f;
     state.launchLogText = ReadLaunchLogTailForUi(launchLogPaths);
     RenderAuth(renderer, state);
 
@@ -278,6 +280,16 @@ static std::wstring CrashSuspectLine(const telemetry::CrashRecord& record) {
             line += L"\n" + frame;
             ++shown;
         }
+        line += L"\n" + std::wstring(Tr(L"Open Remote Files on the main menu to read it on a phone or PC."));
+        return line;
+    }
+    // Native/GC memory failures now carry a classified explanation from
+    // ParseHsErr (heap vs direct vs virtual vs UWP limit vs G1). Reuse the
+    // existing Remote Files hint instead of adding a new translation key.
+    if (record.exception.find(L"InsufficientMemory") != std::wstring::npos ||
+        record.exception.find(L"NativeOutOfMemory") != std::wstring::npos ||
+        record.exception.find(L"OutOfMemoryError") != std::wstring::npos) {
+        std::wstring line = record.message.empty() ? record.exception : record.message;
         line += L"\n" + std::wstring(Tr(L"Open Remote Files on the main menu to read it on a phone or PC."));
         return line;
     }

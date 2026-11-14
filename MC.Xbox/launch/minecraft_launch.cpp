@@ -7,6 +7,8 @@
 #include "loader.h"
 #include "loader_common.h"
 #include "launch_diagnostics.h"
+#include "launch_phase.h"
+#include "memory_profile.h"
 #include "neoforge.h"
 #include "launcher_common.h"
 #include "win32_long_path.h"
@@ -851,12 +853,52 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
         }
     };
 
+    // UI labels go through the translation catalog. launchphase::Label()
+    // remains the stable ASCII key used by the log timeline and portable tests.
+    const auto phaseLabel = [](launchphase::Phase phase) -> const wchar_t* {
+        switch (phase) {
+            case launchphase::Phase::CheckingFiles: return Tr(L"Checking files");
+            case launchphase::Phase::AnalyzingMods: return Tr(L"Analyzing mods");
+            case launchphase::Phase::PreparingDependencies: return Tr(L"Preparing dependencies");
+            case launchphase::Phase::PreparingJava: return Tr(L"Preparing Java");
+            case launchphase::Phase::StartingLoader: return Tr(L"Starting NeoForge");
+            case launchphase::Phase::LoadingMinecraft: return Tr(L"Loading Minecraft");
+        }
+        return Tr(L"Preparing Minecraft");
+    };
+
+    // Real phase timings. The old 12/24/38/52/64 % values were arbitrary; the
+    // UI already renders a negative progress value as an indeterminate bar,
+    // so unmeasurable phases now show "Loading..." instead of a fake number.
+    launchphase::Timeline launchTimeline;
+    const ULONGLONG launchStartedMs = GetTickCount64();
+    std::atomic<unsigned long long> firstFrameMs{ 0 };
+    const auto beginPhase = [&](launchphase::Phase phase, const wchar_t* detail, float value) {
+        const ULONGLONG now = GetTickCount64();
+        launchTimeline.CloseAll(now);
+        launchTimeline.Begin(phase, now);
+        if (value >= 0.0f) launchTimeline.MarkMeasured(phase);
+        reportProgress(phaseLabel(phase), detail, value);
+    };
+    bool timelineReported = false;
+    const auto finishTimeline = [&]() {
+        if (timelineReported) return;
+        timelineReported = true;
+        const ULONGLONG now = GetTickCount64();
+        launchTimeline.CloseAll(now);
+        WriteLogF(L"%s", a2w(launchTimeline.FormatLog().c_str()).c_str());
+        WriteLogF(L"Launcher preparation: %llu ms; time to first presented frame: %llu ms",
+            now - launchStartedMs,
+            firstFrameMs.load() > launchStartedMs ? firstFrameMs.load() - launchStartedMs : 0ull);
+    };
+    launchphase::ScopeExit timelineGuard{ [&]() { finishTimeline(); } };
+
     if (g_embeddedJvmUsed) {
         WriteLog(L"Refusing launch: this process has already run a JVM, it cannot start another");
         reportProgress(
             Tr(L"Restart the launcher"),
             Tr(L"A previous launch already used this session's Java runtime. Close the launcher and open it again."),
-            1.0f);
+            launchphase::kIndeterminate);
         return false;
     }
 
@@ -869,10 +911,10 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
     } else if (loaderId == LoaderId::Forge || loaderId == LoaderId::Cleanroom) {
         loaderLabel = L"Forge";
     }
-    reportProgress(
-        Tr(L"Starting Minecraft"),
+    beginPhase(
+        launchphase::Phase::CheckingFiles,
         (TrFormat(L"Preparing {0} and launch files.", { loaderLabel })).c_str(),
-        0.12f);
+        launchphase::kIndeterminate);
     const std::wstring effectiveMainClass = LoaderDefaultMainClass(loaderId, mainClassName);
     std::wstring mainClassPath = effectiveMainClass;
     std::replace(mainClassPath.begin(), mainClassPath.end(), L'.', L'/');
@@ -961,7 +1003,33 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
     if (earlyBlockedRemoved > 0) {
         WriteLogF(L"Removed %d blocked mod(s) from active profile before configuring launch", earlyBlockedRemoved);
     }
-    ConfigureKnownModDefaults(gameDir, userModsDir, minecraftVersion, bundledModsDir);
+    beginPhase(
+        launchphase::Phase::AnalyzingMods,
+        Tr(L"Indexing mods and applying launcher defaults."),
+        launchphase::kIndeterminate);
+    int lastReportedStep = -1;
+    ConfigureKnownModDefaults(gameDir, userModsDir, minecraftVersion, bundledModsDir,
+        [&](size_t done, size_t total) {
+            // The only launch phase with a countable total: JARs in mods/.
+            // Anything else is deliberately left indeterminate. Each UI update
+            // redraws the screen and re-reads the launch log, so throttle the
+            // notifications to at most ~20 per launch; the value reported is
+            // still the real done/total ratio at that instant, never invented.
+            if (total == 0) return;
+            const int step = static_cast<int>(done * 20ull / total);
+            if (step == lastReportedStep && done != total) return;
+            lastReportedStep = step;
+            const float measured = launchphase::MeasuredProgress(done, total);
+            launchTimeline.MarkMeasured(launchphase::Phase::AnalyzingMods);
+            reportProgress(
+                phaseLabel(launchphase::Phase::AnalyzingMods),
+                Tr(L"Indexing mods and applying launcher defaults."),
+                measured);
+        });
+    beginPhase(
+        launchphase::Phase::PreparingDependencies,
+        Tr(L"Preparing libraries and classpath."),
+        launchphase::kIndeterminate);
     if (SetCurrentDirectoryW(gameDir.c_str())) {
         WriteLogF(L"Process current directory set to gameDir: %s", gameDir.c_str());
     } else {
@@ -1029,27 +1097,50 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
 
     std::vector<std::string> vmOptionStorage;
     vmOptionStorage.reserve(64);
-    // 5120 MB app budget on Series S dev mode. 3584M = 3.5 GiB for modded
-    // profiles; Java rejects decimal -Xmx values, so it must be spelled in MiB.
-    // Together with 512M direct buffers, metaspace and the Mesa/D3D12 runtime
-    // this is close to the budget: jvm_args.txt can lower it again if the app
-    // is killed for memory on a smaller console.
-    vmOptionStorage.push_back("-Xmx3584M");
-    vmOptionStorage.push_back("-Xms512M");
-    vmOptionStorage.push_back("-XX:MaxDirectMemorySize=512M");
 
-    // ignoreUnrecognized is JNI_FALSE, so a typo in jvm_args.txt would stop it booting
-    vmOptionStorage.push_back("-XX:+IgnoreUnrecognizedVMOptions");
-    vmOptionStorage.push_back("-XX:+UnlockExperimentalVMOptions");
-    vmOptionStorage.push_back("-XX:+UseG1GC");
-    // the 200ms default target lets young gen reach 2.2G before collecting
-    vmOptionStorage.push_back("-XX:MaxGCPauseMillis=50");
-    vmOptionStorage.push_back("-XX:G1NewSizePercent=20");
-    vmOptionStorage.push_back("-XX:G1ReservePercent=20");
-    vmOptionStorage.push_back("-XX:G1HeapRegionSize=32M");
-    // hsperfdata is mmapped and rewritten every collection, on console storage that is a frame hitch
-    vmOptionStorage.push_back("-XX:+PerfDisableSharedMem");
-    WriteLog(L"JVM heap: -Xmx3584M (3.5 GiB) -Xms512M -XX:MaxDirectMemorySize=512M, G1 at 50ms pause target");
+    // Adaptive memory plan. A fixed 3584 MiB heap reserved nearly all of the
+    // ~5120 MiB UWP virtual budget; G1 then failed to map 9x32 MiB regions
+    // ("InsufficientMemory / G1 virtual space") when re-entering a world.
+    // Windows.System.MemoryManager reports the real per-app limit, so the heap
+    // now scales with the device and always leaves a native reserve for
+    // Mesa/D3D12, LWJGL, metaspace and thread stacks.
+    memory::DeviceMemory deviceMemory;
+    {
+        unsigned long long limitMb = 0;
+        unsigned long long usedMb = 0;
+        if (ReadAppMemoryBudget(limitMb, usedMb)) {
+            deviceMemory.budgetKnown = true;
+            deviceMemory.budgetMb = limitMb;
+            deviceMemory.usedMb = usedMb;
+        }
+    }
+    // The default is conservative; advanced users can opt into balanced or
+    // performance. On console there is no environment editor, so the profile
+    // can also be written to config/bandit-memory-profile.txt via Remote Files.
+    std::wstring profileSettingWide = GetEnvVarString(L"MC_MEMORY_PROFILE");
+    if (profileSettingWide.empty()) {
+        std::wstring profileFromFile;
+        if (ReadTextFile(gameDir + L"\\config\\bandit-memory-profile.txt", profileFromFile)) {
+            profileSettingWide = profileFromFile;
+        }
+    }
+    const std::string memoryProfileSetting = w2a(profileSettingWide);
+    const memory::Plan memoryPlan =
+        memory::ComputePlan(deviceMemory, memory::ParseProfile(memoryProfileSetting));
+    for (const std::string& arg : memory::BuildJvmMemoryArgs(memoryPlan)) {
+        vmOptionStorage.push_back(arg);
+    }
+    WriteLogF(L"Memory plan: profile=%s measured=%d appLimit=%llu MB appUsed=%llu MB "
+        L"headroom=%llu MB nativeReserve=%llu MB heap=%llu..%llu MB direct=%llu MB fixedHeap=%d",
+        a2w(memory::ProfileName(memoryPlan.profile)).c_str(),
+        memoryPlan.measured ? 1 : 0,
+        deviceMemory.budgetMb, deviceMemory.usedMb,
+        deviceMemory.budgetMb > deviceMemory.usedMb
+            ? deviceMemory.budgetMb - deviceMemory.usedMb : 0ull,
+        memoryPlan.nativeReserveMb, memoryPlan.heapMinMb, memoryPlan.heapMaxMb,
+        memoryPlan.directMb, memoryPlan.fixedHeap ? 1 : 0);
+    WriteLog(L"G1 sizing flags removed: G1HeapRegionSize, G1NewSizePercent, "
+        L"G1ReservePercent, MaxGCPauseMillis, UnlockExperimentalVMOptions");
     vmOptionStorage.push_back("--enable-native-access=ALL-UNNAMED");
     vmOptionStorage.push_back("--add-opens=jdk.zipfs/jdk.nio.zipfs=ALL-UNNAMED");
     const std::wstring selectedJavaBasePatchName =
@@ -1196,25 +1287,28 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
             L"#\n"
             L"# These are appended after the launcher's own options, so anything set here\n"
             L"# overrides the built in value. The built ins are:\n"
-            L"#   -Xmx3584M (3.5 GiB) -Xms512M -XX:MaxDirectMemorySize=512M\n"
-            L"#   -XX:+UseG1GC -XX:+PerfDisableSharedMem\n"
-            L"#   -XX:MaxGCPauseMillis=50 -XX:G1NewSizePercent=20\n"
-            L"#   -XX:G1ReservePercent=20 -XX:G1HeapRegionSize=32M\n"
+            L"#   Adaptive -Xmx/-Xms/-XX:MaxDirectMemorySize computed from the UWP\n"
+            L"#   app memory limit (see mc_launch.log \"Memory plan:\" for the values used)\n"
+            L"#   -XX:+UseG1GC -XX:+IgnoreUnrecognizedVMOptions -XX:+PerfDisableSharedMem\n"
+            L"#   G1 uses its own ergonomics: no G1HeapRegionSize, G1NewSizePercent,\n"
+            L"#   G1ReservePercent or MaxGCPauseMillis overrides.\n"
             L"#\n"
             L"# Unrecognised options are ignored rather than failing the launch, so a typo\n"
             L"# here will not stop the game starting. Check mc_launch.log for lines reading\n"
             L"# \"jvm_args.txt applying:\" to confirm what was actually picked up.\n"
             L"\n"
-            L"# Series S has a ~5120 MB app budget. If the app is killed for memory\n"
-            L"# with a large modpack, uncomment this to return to the old 3 GiB heap.\n"
+            L"# Profile (default: conservative): set MC_MEMORY_PROFILE=balanced/performance,\n"
+            L"# or write one word in config\\bandit-memory-profile.txt via Remote Files.\n"
+            L"# A -Xmx line here overrides the computed heap. Raising it back towards 3G\n"
+            L"# can reintroduce the \"InsufficientMemory / G1 virtual space\" mmap failure.\n"
             L"#-Xmx3G\n"
             L"\n"
             L"# Write a garbage collection log next to the other logs.\n"
             L"#-Xlog:gc:file=" + gcLogPath + L":time,uptime\n"
             L"\n"
-            L"# The 50ms pause target is now a built in, measured on box: it took the worst\n"
-            L"# young collection from 154ms down to 62ms. Lower it further if stalls are still\n"
-            L"# visible, at the cost of collecting more often.\n"
+            L"# Advanced GC tuning is no longer applied by default. Forcing a pause target\n"
+            L"# or a large fixed region size makes G1 commit big virtual ranges, which is\n"
+            L"# what failed on UWP. Only re-enable these if you have measured a stall.\n"
             L"#-XX:MaxGCPauseMillis=20\n"
             L"\n"
             L"# More aggressive alternative, derived from server side flag sets. Only worth\n"
@@ -1262,6 +1356,17 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
             } else {
                 WriteLogF(L"jvm_args.txt applying: %s", arg.c_str());
             }
+            // Existing installations may still carry the old forced G1 sizing.
+            // Do not edit the user's file, but make the risk impossible to miss
+            // in the log and in memory_diagnostic.txt.
+            const std::wstring lowerArg = ToLowerW(arg);
+            if (lowerArg.find(L"-xx:g1heapregionsize=") != std::wstring::npos ||
+                lowerArg.find(L"-xx:g1newsizepercent=") != std::wstring::npos ||
+                lowerArg.find(L"-xx:g1reservepercent=") != std::wstring::npos ||
+                lowerArg.find(L"-xx:maxgcpausemillis=") != std::wstring::npos) {
+                WriteLogF(L"WARNING jvm_args.txt re-enables forced G1 sizing (%s): this can "
+                    L"reintroduce the InsufficientMemory / G1 virtual space mmap failure", arg.c_str());
+            }
             ++applied;
         }
         WriteLogF(L"jvm_args.txt applied %d option(s) from %s", applied, jvmArgsPath.c_str());
@@ -1301,10 +1406,15 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
     }
     fclose(af);
     WriteLog(L"Embedded JVM options written");
-    reportProgress(
-        Tr(L"Starting Java runtime"),
+    // Full JVM argument list + measured memory state, in one file. The crash
+    // ZIP picks this up so a native allocation failure can be diagnosed
+    // without cross-reading java_args.txt, mc_launch.log and hs_err.
+    WriteTextFile(launcherLogDir + L"\\memory_diagnostic.txt",
+        a2w(memory::DescribeDiagnostics(memoryPlan, deviceMemory, vmOptionStorage).c_str()));
+    beginPhase(
+        launchphase::Phase::PreparingJava,
         Tr(L"Loading the embedded JVM."),
-        0.24f);
+        launchphase::kIndeterminate);
 
     HMODULE jvmModule = nullptr;
     if (!PreloadJvm(exeDir, jreDir, packagedJreRelativeDir, nativesDir, &jvmModule)) {
@@ -1346,18 +1456,18 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
         }
     }
     reportProgress(
-        Tr(L"Starting Java runtime"),
+        phaseLabel(launchphase::Phase::PreparingJava),
         Tr(L"Java is online. Preparing loader startup next."),
-        0.38f);
+        launchphase::kIndeterminate);
 
     if (!LoaderPrepareArtifactsAfterJvm(env, loaderCtx, effectiveClassPath, neoForgeStartedWithGameClassPath)) {
         DestroyEmbeddedJvm(vm, env);
         return false;
     }
-    reportProgress(
-        (TrFormat(L"Loading {0}", { loaderLabel })).c_str(),
+    beginPhase(
+        launchphase::Phase::StartingLoader,
         Tr(L"Loader artifacts are ready. Minecraft main is starting next."),
-        0.52f);
+        launchphase::kIndeterminate);
 
     jclass mainClass = env->FindClass(w2a(mainClassPath).c_str());
     if (!mainClass || CheckAndLogJavaException(env, (L"FindClass(" + effectiveMainClass + L")").c_str())) {
@@ -1398,10 +1508,10 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
     }
 
     WriteLogF(L"Invoking %s.main via embedded JVM", effectiveMainClass.c_str());
-    reportProgress(
-        (TrFormat(L"Loading {0}", { loaderLabel })).c_str(),
+    beginPhase(
+        launchphase::Phase::LoadingMinecraft,
         Tr(L"Mods and libraries are starting. The Mojang loading screen appears once graphics initialize."),
-        0.64f);
+        launchphase::kIndeterminate);
     const std::wstring modsetHash = telemetry::ComputeModsetHash(userModsDir);
     WriteTextFile(CrashLaunchMarkerPath(exeDir),
         std::wstring(L"minecraftVersion=") + minecraftVersion + L"\n" +
@@ -1430,6 +1540,7 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
     const bool alwaysDumpThreads = !GetEnvVarString(L"BANDIT_JAVA_THREAD_DUMPS").empty();
     std::thread javaMainWatchdog([
         &javaMainRunning,
+        &firstFrameMs,
         vm,
         effectiveMainClass,
         alwaysDumpThreads,
@@ -1443,6 +1554,9 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
             ++seconds;
             if (!firstFrameSent && ShimPresentedFrames() > presentedFramesAtLaunch) {
                 firstFrameSent = true;
+                // The watchdog samples once a second, so this is a measured
+                // (1 s resolution) proxy for "time to first rendered frame".
+                firstFrameMs.store(GetTickCount64());
                 telemetry::SendFirstFrame();
             }
             if ((seconds % 5) != 0) continue;
@@ -1490,6 +1604,9 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
         LogTextFileTail(stderrLogPath, L"stderr_stream.log");
         WriteLog(L"Embedded JVM failed after startup; terminating host process to avoid JVM/native reuse");
         StopLogTailers();
+        // ExitProcess() does not run destructors, so emit the timings before
+        // the crash ZIP is built (it packs mc_launch.log).
+        finishTimeline();
         CreateCrashReportZip(exeDir, L"Java exception after Minecraft startup");
         // the local crash screen links to the zip written above
         telemetry::ReportSoftCrash(exeDir);

@@ -1,10 +1,15 @@
 #include "mod_defaults.h"
 #include "sodium_family.h"
+#include "mod_index.h"
 
 #include "crash_report.h"
 #include "launcher_common.h"
 
+#include <algorithm>
 #include <cmath>
+#include <functional>
+#include <map>
+#include <mutex>
 #include <sstream>
 #include <vector>
 
@@ -13,9 +18,11 @@
 #include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.Foundation.Collections.h>
 
-static bool ModJarHasFabricId(const std::wstring& jarPath, const wchar_t* modId) {
+// Reads the fabric.mod.json id once. The mod index caches this per JAR so a
+// 150-mod pack no longer opens every ZIP for every lookup during a launch.
+static bool ReadFabricModId(const std::wstring& jarPath, std::string& modId) {
     using namespace winrt::Windows::Data::Json;
-    if (!modId || !*modId) return false;
+    modId.clear();
 
     std::wstring fabricModJson;
     if (!ReadZipTextFile(jarPath, "fabric.mod.json", fabricModJson)) {
@@ -27,10 +34,101 @@ static bool ModJarHasFabricId(const std::wstring& jarPath, const wchar_t* modId)
         if (!root.HasKey(L"id") || root.GetNamedValue(L"id").ValueType() != JsonValueType::String) {
             return false;
         }
-        return root.GetNamedString(L"id") == modId;
+        modId = w2a(root.GetNamedString(L"id").c_str());
+        return !modId.empty();
     } catch (...) {
         return false;
     }
+}
+
+static bool ModJarHasFabricId(const std::wstring& jarPath, const wchar_t* modId) {
+    std::string actual;
+    return modId && *modId && ReadFabricModId(jarPath, actual) && actual == w2a(modId);
+}
+
+// One enumeration + one metadata pass per mods directory per launch. All the
+// lookups below (moonlight, sodium, lambdacontrols, midnightcontrols, distant
+// horizons, controller checks, Sodium-family detection) share this index.
+struct ModIndexState {
+    modindex::Index index;
+    bool ready = false;
+};
+static std::map<std::wstring, ModIndexState> g_modIndexStates;
+// ConfigureKnownModDefaults() can be reached from the launch thread and from a
+// modpack import. One lock covers the whole configure pass so the shared index
+// is never rebuilt while another caller is reading it. No mod class loading,
+// mixin application or mod initialisation is parallelised.
+static std::mutex g_modIndexMutex;
+
+static modindex::Snapshot EnumerateModJars(const std::wstring& modsDir) {
+    modindex::Snapshot snapshot;
+    WIN32_FIND_DATAW fd = {};
+    HANDLE h = FindFirstFileW((modsDir + L"\\*.jar").c_str(), &fd);
+    if (h == INVALID_HANDLE_VALUE) return snapshot;
+    do {
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+        modindex::Stamp stamp;
+        stamp.name = w2a(fd.cFileName);
+        stamp.size = ((unsigned long long)fd.nFileSizeHigh << 32) | fd.nFileSizeLow;
+        stamp.writeHigh = fd.ftLastWriteTime.dwHighDateTime;
+        stamp.writeLow = fd.ftLastWriteTime.dwLowDateTime;
+        snapshot.push_back(stamp);
+    } while (FindNextFileW(h, &fd));
+    FindClose(h);
+    return snapshot;
+}
+
+static void EnsureModIndex(const std::wstring& gameDir, const std::wstring& modsDir,
+                           const std::function<void(size_t, size_t)>& onProgress) {
+    if (modsDir.empty()) return;
+    ModIndexState& state = g_modIndexStates[modsDir];
+    const std::string dirKey = w2a(modsDir);
+    const std::wstring cachePath = gameDir + L"\\config\\bandit-mod-index-" +
+        a2w(modindex::CacheKeyFor(dirKey).c_str()) + L".tsv";
+
+    bool cacheLoaded = state.ready;
+    if (!state.ready) {
+        EnsureDirectoryTree(gameDir + L"\\config");
+        std::wstring cachedText;
+        if (ReadTextFile(cachePath, cachedText)) {
+            cacheLoaded = state.index.Parse(w2a(cachedText));
+        }
+    }
+
+    modindex::Snapshot previous;
+    for (const modindex::Entry& entry : state.index.Entries()) {
+        previous.push_back(entry.stamp);
+    }
+    const modindex::Snapshot current = EnumerateModJars(modsDir);
+    const modindex::Diff diff = modindex::Compare(previous, current);
+    const bool cacheExists = GetFileAttributesW(cachePath.c_str()) != INVALID_FILE_ATTRIBUTES;
+
+    const size_t total = current.size();
+    size_t done = diff.unchanged.size();
+    if (onProgress && total) onProgress(done, total);
+    const unsigned long long zipReads = state.index.Rebuild(current,
+        [&](const std::string& name) -> std::string {
+            ++done;
+            if (onProgress && total) onProgress((std::min)(done, total), total);
+            std::string id;
+            ReadFabricModId(modsDir + L"\\" + a2w(name.c_str()), id);
+            return id;
+        });
+    // Every JAR is accounted for once the index is complete.
+    if (onProgress && total) onProgress(total, total);
+    state.ready = true;
+
+    // Only touch disk when something actually changed (or on the first run /
+    // when the old cache was unreadable). A warm launch does zero extra I/O.
+    const bool writeCache = !cacheLoaded || !cacheExists || diff.ChangedCount() != 0;
+    if (writeCache) {
+        WriteTextFile(cachePath, a2w(state.index.Serialize().c_str()));
+    }
+    WriteLogF(L"Mod index %s: %llu JAR(s), +%llu -%llu ~%llu, %llu ZIP read(s), cache %s",
+        modsDir.c_str(), (unsigned long long)current.size(),
+        (unsigned long long)diff.added.size(), (unsigned long long)diff.removed.size(),
+        (unsigned long long)diff.changed.size(), zipReads,
+        writeCache ? L"written" : L"unchanged");
 }
 
 static bool FindModJarByFabricIdOrName(
@@ -40,6 +138,18 @@ static bool FindModJarByFabricIdOrName(
     std::wstring& jarPath) {
     jarPath.clear();
 
+    auto it = g_modIndexStates.find(modsDir);
+    if (it != g_modIndexStates.end() && it->second.ready) {
+        const std::string name = it->second.index.FindByIdOrName(
+            modId ? w2a(modId) : std::string(),
+            fileNameToken ? w2a(fileNameToken) : std::string());
+        if (name.empty()) return false;
+        jarPath = modsDir + L"\\" + a2w(name.c_str());
+        return true;
+    }
+
+    // Fallback for callers outside ConfigureKnownModDefaults(): keep the old
+    // behaviour instead of failing when no index has been built yet.
     WIN32_FIND_DATAW fd = {};
     HANDLE h = FindFirstFileW((modsDir + L"\\*.jar").c_str(), &fd);
     if (h == INVALID_HANDLE_VALUE) return false;
@@ -434,6 +544,21 @@ static bool SetJsonBoolIfDefault(winrt::Windows::Data::Json::JsonObject& obj, co
 // renderer. Keep one and seed its config before every launch.
 static std::vector<SodiumRendererJar> FindSodiumFamilyRenderers(const std::wstring& userModsDir) {
     std::vector<SodiumRendererJar> found;
+    auto it = g_modIndexStates.find(userModsDir);
+    if (it != g_modIndexStates.end() && it->second.ready) {
+        for (const modindex::Entry& entry : it->second.index.Entries()) {
+            const std::wstring name = a2w(entry.stamp.name.c_str());
+            const SodiumFamily* family = SodiumFamilyForFileName(name.c_str());
+            if (!family) continue;
+            SodiumRendererJar jar;
+            jar.family = family;
+            jar.name = name;
+            jar.path = userModsDir + L"\\" + name;
+            found.push_back(jar);
+        }
+        return found;
+    }
+
     WIN32_FIND_DATAW fd = {};
     HANDLE h = FindFirstFileW((userModsDir + L"\\*.jar").c_str(), &fd);
     if (h == INVALID_HANDLE_VALUE) return found;
@@ -813,7 +938,16 @@ void ConfigureKnownModDefaults(
     const std::wstring& gameDir,
     const std::wstring& userModsDir,
     const std::wstring& minecraftVersion,
-    const std::wstring& bundledModsDir) {
+    const std::wstring& bundledModsDir,
+    const std::function<void(size_t done, size_t total)>& onModIndexProgress) {
+    const std::lock_guard<std::mutex> indexLock(g_modIndexMutex);
+    // Build both indexes once. Every lookup below then runs in memory and a
+    // warm launch performs zero ZIP opens; stamps (size + last write) drive
+    // invalidation, and the cache lives in config/, never inside mods/.
+    EnsureModIndex(gameDir, userModsDir, onModIndexProgress);
+    if (!bundledModsDir.empty() && bundledModsDir != userModsDir) {
+        EnsureModIndex(gameDir, bundledModsDir, std::function<void(size_t, size_t)>());
+    }
     PatchMoonlightPoiMixin(gameDir, userModsDir, minecraftVersion);
     ConfigureSodiumFamilyDefaults(gameDir, userModsDir, minecraftVersion);
     ConfigureDistantHorizonsDefaults(gameDir, userModsDir);

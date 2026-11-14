@@ -429,25 +429,97 @@ Pruebas rápidas si aun así crashea:
 > se confirmó que el AV al entrar al mundo era de Embeddium y no de esta ruta
 > COM/audio; mira la sección de renderizado más arriba.
 
-## Memoria para perfiles con mods (3,5 GiB)
+## Memoria adaptativa y carga de mods (versión estable 2026-11-14)
 
-El heap máximo de la JVM es **3584 MiB = 3,5 GiB** (`-Xmx3584M`), antes era
-`-Xmx3G`. **Java no admite decimales en `-Xmx`**: escribir la cifra con punto
-haría que la JVM rechazara el arranque, así que hay que expresarla en MiB
-enteros. Siguen igual `-Xms512M`, `-XX:MaxDirectMemorySize=512M` y todos los
-ajustes G1. No es un ajuste gráfico.
+> Esta sección **sustituye** a la anterior de 3,5 GiB. Ese `-Xmx3584M` es la
+> configuración con la que se reportó el fallo al salir y volver a entrar a un
+> servidor: `InsufficientMemory / Native memory allocation (mmap) failed to
+> map 301989888 bytes. Error detail: G1 virtual space`.
 
-`jvm_args.txt` se aplica **al final** y gana a los valores incorporados: la
-plantilla incluye `#-Xmx3G` comentado para volver atrás. En `mc_launch.log`
-debe aparecer `JVM heap: -Xmx3584M (3.5 GiB) ...`.
+### Por qué no era «poca RAM»
 
-> **Ojo con el límite de la consola**: el código documenta ~5120 MB de
-> presupuesto de app en Series S en modo dev. Con 3584 MiB de heap más 512 MiB
-> de buffers directos, metaspace y el runtime Mesa/D3D12 se queda cerca. Si con
-> un modpack grande la app se cierra por memoria, descomenta `#-Xmx3G` o baja
-> `-XX:MaxDirectMemorySize`. Cleanroom / 1.12.2 mantiene su propio
-> `-Xmx2560M`; no se han tocado otros targets. Sin verificación en consola
-> todavía, y esto alivia la presión de GC, **no sube el techo de FPS**.
+`301989888 bytes = 9 × 32 MiB`: G1 intentaba confirmar nueve regiones de 32 MiB
+de golpe. Con `-Xmx3584M` la JVM ya había reservado casi todo el presupuesto
+virtual de la app UWP (~5120 MiB en Series S en modo dev). Al reentrar en el
+mundo, las asignaciones nativas de gráficos ya habían crecido, y con
+`G1HeapRegionSize=32M`, `G1NewSizePercent=20` y `G1ReservePercent=20` no quedaba
+espacio para mapear más. El heap Java sólo estaba usando **864 de 3584 MiB**.
+La conclusión es contraria a la intuición: **hay que bajar el techo del heap**,
+dejar margen nativo y dejar que G1 decida su propio tamaño de región.
+
+### Qué hace el launcher ahora
+
+`MC.Xbox/launch/memory_profile.h` calcula el plan a partir de
+`Windows.System.MemoryManager::AppMemoryUsageLimit()` (límite real de la app,
+no RAM de la consola) y `AppMemoryUsage()`. Siempre se aparta una reserva para
+nativa, directa, Mesa/D3D12, LWJGL, metaspace y el launcher; el heap se calcula
+como porcentaje de lo que queda, se redondea a múltiplos de 32 MiB y se limita
+entre 1024 y 2816 MiB. Si WinRT falla (hilo sin `RoInitialize`), se usa un
+fallback conservador de 4096 MiB y se marca `measured=0` en el log.
+
+| Perfil | Reserva | Heap | Directa | `Xms` |
+| --- | --- | --- | --- | --- |
+| `conservative` (**predeterminado**) | 45 % | 60 % del resto | 256 MiB | `= Xmx` (heap fijo) |
+| `balanced` | 38 % | 75 % del resto | 384 MiB | 512 MiB |
+| `performance` | 32 % | 88 % del resto | 512 MiB | 512 MiB |
+
+Con 5120 MiB de presupuesto: **1664M / 2368M / 2816M** de `-Xmx`
+respectivamente. El predeterminado es el conservador porque es el estable.
+
+Se **eliminan** del arranque `-XX:G1HeapRegionSize=32M`,
+`-XX:G1NewSizePercent=20`, `-XX:G1ReservePercent=20`,
+`-XX:MaxGCPauseMillis=50` y `-XX:+UnlockExperimentalVMOptions`. Se mantienen
+`-XX:+UseG1GC`, `-XX:+IgnoreUnrecognizedVMOptions` y
+`-XX:+PerfDisableSharedMem`. No se aplican flags experimentales.
+
+Para elegir perfil: variable `MC_MEMORY_PROFILE`, o una sola palabra en
+`config/bandit-memory-profile.txt` (se puede escribir desde Remote Files, que
+es la forma práctica en consola). Cualquier valor desconocido vuelve al
+conservador.
+
+### Carga de mods
+
+`ConfigureKnownModDefaults()` hacía ~8 recorridos completos de `mods/` por
+lanzamiento y, en cada uno, abría el `fabric.mod.json` de **todos** los JAR
+(≈1200 aperturas ZIP con 150 mods). Ahora:
+
+- Un único índice (`MC.Xbox/mods/mod_index.h`) enumera el directorio una vez y
+  guarda, por JAR, nombre, tamaño, fecha de escritura e id de
+  `fabric.mod.json`.
+- Caché en `config/bandit-mod-index-<hash>.tsv`, **fuera de `mods/`**, con
+  versión `BANDIT-MOD-INDEX-v1`. Un arranque en caliente hace **0 lecturas
+  ZIP**; añadir, quitar o actualizar un JAR relectura **sólo ese JAR**.
+- Todas las búsquedas (Sodium, Moonlight, controladores, Distant Horizons…)
+  se resuelven en memoria. Detección de duplicados por nombre sin operaciones
+  costosas.
+- **No se paraleliza** la carga de clases, mixins ni la inicialización de
+  mods, **no se altera el orden de carga de NeoForge** y no se elimina,
+  modifica ni actualiza ningún archivo ni versión del modpack.
+
+### Progreso, tiempos y diagnóstico
+
+Seis fases traducidas: «Comprobando archivos», «Analizando mods», «Preparando
+dependencias», «Preparando Java», «Iniciando NeoForge» y «Cargando Minecraft».
+Se acabaron los porcentajes falsos 12/24/38/52/64 %: las fases no medibles
+muestran barra indeterminada («Loading...»); la única barra con número es la
+de JARs indexados sobre JARs encontrados. `mc_launch.log` vuelca
+`Launch phase timings (ms): checking_files=... analyzing_mods=... total=...`
+y el tiempo hasta el primer fotograma presentado (resolución 1 s, medida por
+el watchdog).
+
+`logs/current/memory_diagnostic.txt` —dentro del ZIP de crash— incluye límite
+UWP, uso al arrancar, reserva nativa, heap mínimo/máximo, directa, perfil y
+**args JVM completos**. El parser de crashes clasifica heap / nativa /
+directa / espacio virtual / límite UWP / G1 / dependencia, para no confundir
+un `Mixin apply failed` o un mod ausente con un problema de memoria.
+
+> **Instalaciones existentes:** `jvm_args.txt` sigue aplicándose al final. Si
+> contiene un `-Xmx` alto o las flags G1 antiguas **activas**, anulará el plan
+> nuevo; el log escribe un `WARNING` pero el launcher no edita tu archivo.
+> Revisa `mc_launch.log` → `Memory plan:` y `jvm_args.txt applying:`.
+> Cleanroom / 1.12.2 conserva su `-Xmx2560M`. Sin verificación en consola
+> todavía: **no se declara resuelto**. Informe completo en
+> [MEMORY-AND-MOD-LOADING-REPORT.es.md](MEMORY-AND-MOD-LOADING-REPORT.es.md).
 
 ## Optimizaciones del camino caliente (sin cambiar ajustes gráficos)
 

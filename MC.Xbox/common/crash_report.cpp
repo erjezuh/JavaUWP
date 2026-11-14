@@ -320,6 +320,9 @@ bool CreateCrashReportZip(const std::wstring& runtimeRoot, const std::wstring& r
     AddCrashZipFileEntry(entries, currentLogs + L"\\stderr_stream.log", "logs/current/stderr_stream.log");
     AddCrashZipFileEntry(entries, currentLogs + L"\\glfw_uwp.log", "logs/current/glfw_uwp.log");
     AddCrashZipFileEntry(entries, currentLogs + L"\\java_args.txt", "logs/current/java_args.txt");
+    // Measured app memory limit, chosen profile, heap/direct caps and the full
+    // JVM option list, in one file. Essential for "InsufficientMemory" reports.
+    AddCrashZipFileEntry(entries, currentLogs + L"\\memory_diagnostic.txt", "logs/current/memory_diagnostic.txt");
     AddCrashZipFileEntry(entries, currentLogs + L"\\java_classpath_final.txt", "logs/current/java_classpath_final.txt");
     AddCrashZipFileEntry(entries, reportGameDir + L"\\logs\\latest.log", "profile/game/logs/latest.log");
     AddCrashZipFileEntry(entries, reportGameDir + L"\\logs\\debug.log", "profile/game/logs/debug.log");

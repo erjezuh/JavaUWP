@@ -55,19 +55,43 @@ vanilla renderer. The Spanish guide has the full diagnosis:
 
 ## How much RAM does the game get, and can I change it?
 
-The built-in maximum heap is **3584 MiB (3.5 GiB)**, up from 3 GiB, for
-modded profiles. Java does not accept decimal `-Xmx` values, so 3.5 GiB has to
-be written as `-Xmx3584M` — a decimal spelling would stop the JVM before the
-game starts. `-Xms512M`, `-XX:MaxDirectMemorySize=512M` and the G1 settings are
-unchanged. This is a memory change, **not a graphics setting**.
+The heap is **computed per device**, not hard-coded. The launcher reads
+`Windows.System.MemoryManager::AppMemoryUsageLimit()` and reserves a large
+share of that UWP app budget for native memory: Mesa/D3D12, LWJGL, metaspace,
+thread stacks, direct buffers and the launcher itself. Only what remains can
+become Java heap. This is deliberate: the old fixed `-Xmx3584M` produced
+`InsufficientMemory / Native memory allocation (mmap) failed to map ... G1
+virtual space` when re-entering a world, even though only ~864 MiB of the heap
+was in use. **Adding more RAM to the heap makes that failure worse**, because
+the JVM reserves virtual address space that the UWP process does not have.
 
-Options in `jvm_args.txt` are appended last and override the built-ins. The
-seeded template includes a commented `#-Xmx3G` line to roll back if needed.
-Watch `mc_launch.log` for `JVM heap: -Xmx3584M ...`; if the app is killed for
-memory on Series S (roughly a 5120 MB app budget in dev mode), lower the heap
-or `MaxDirectMemorySize` again.
+Three profiles are available, all relative to the measured limit:
 
-Cleanroom / 1.12.2 has its own smaller heap and is deliberately left alone.
+| Profile | When | Behaviour |
+| --- | --- | --- |
+| `conservative` | **default, stable** | Largest native reserve, smallest heap, `Xms == Xmx` so G1 never has to mmap more space mid-game, 256 MiB direct buffers |
+| `balanced` | more headroom for big packs | Medium reserve, `Xms512M`, 384 MiB direct |
+| `performance` | only if you have measured that you need it | Smallest reserve, largest heap, 512 MiB direct |
+
+Select one with `MC_MEMORY_PROFILE=balanced|performance`, or write a single
+word (`conservative`, `balanced`, `performance`) into
+`config/bandit-memory-profile.txt` via Remote Files. Unknown values fall back
+to `conservative`. No experimental VM flags are enabled by default; G1 chooses
+its own region size, young generation and pause target.
+
+`mc_launch.log` contains `Memory plan: profile=... measured=... appLimit=...
+heap=... direct=...` and `logs/current/memory_diagnostic.txt` contains the full
+JVM argument list; both go into the crash ZIP. `jvm_args.txt` is still applied
+last and can override the computed values — but raising `-Xmx` back towards 3G,
+or re-enabling `G1HeapRegionSize`/`G1NewSizePercent`/`G1ReservePercent`/
+`MaxGCPauseMillis`, can bring the original crash back. Active legacy G1 flags
+produce a `WARNING` in the log; the launcher never edits your file.
+
+Cleanroom / 1.12.2 keeps its own `-Xmx2560M` and is deliberately left alone.
+
+See [MEMORY-AND-MOD-LOADING-REPORT.es.md](MEMORY-AND-MOD-LOADING-REPORT.es.md)
+for the full analysis, the recommended JVM options and what has (and has not)
+been tested on a real console.
 
 ## Can the launcher code itself give me more FPS?
 

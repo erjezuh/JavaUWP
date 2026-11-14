@@ -2,6 +2,71 @@
 
 Notable changes to Bandit Launcher. Nightly packages are numbered by build revision rather than by release, so entries here are dated.
 
+## 2026-11-14 — Versión estable: memoria adaptativa y carga de mods indexada
+
+> **Motivo:** con la versión `1.0.24.0` (`-Xmx3584M`) reaparece al salir y volver
+> a entrar a un servidor el error
+> `InsufficientMemory / Native memory allocation (mmap) failed to map
+> 301989888 bytes. Error detail: G1 virtual space`. El heap Java sólo usaba
+> 864 de 3584 MiB: **no era un heap lleno**, sino falta de espacio virtual /
+> nativo dentro del límite UWP. **No se soluciona subiendo la RAM asignada.**
+
+### Changed
+
+- **Perfiles de memoria automáticos** (`MC.Xbox/launch/memory_profile.h`):
+  `ReadAppMemoryBudget()` (`Windows.System.MemoryManager`) mide el límite real
+  de la app y el uso actual; el plan reserva siempre un margen para nativa,
+  buffers directos, gráficos (Mesa/D3D12), LWJGL, metaspace y el launcher, y
+  calcula `-Xmx`/`-Xms`/`MaxDirectMemorySize` **proporcionalmente al
+  dispositivo**, no con cantidades fijas. Tres perfiles: **Conservador**
+  (predeterminado estable), **Equilibrado** y **Alto rendimiento**.
+  Selección con `MC_MEMORY_PROFILE` o con una palabra en
+  `config/bandit-memory-profile.txt` (editable desde Remote Files).
+- **Se retiran los args G1 contraproducentes**: `-XX:G1HeapRegionSize=32M`,
+  `-XX:G1NewSizePercent=20`, `-XX:G1ReservePercent=20`,
+  `-XX:MaxGCPauseMillis=50` y `-XX:+UnlockExperimentalVMOptions`. G1 vuelve a
+  elegir su tamaño de región y su generación joven. El perfil conservador fija
+  `Xms == Xmx` para evitar `mmap` de crecimiento a mitad de partida. Para un
+  presupuesto de 5120 MiB el predeterminado queda en `-Xmx1664M -Xms1664M
+  -XX:MaxDirectMemorySize=256M`, muy por debajo del techo anterior.
+  `Cleanroom/1.12.2` conserva su `-Xmx2560M`.
+- **Índice de metadatos de mods** (`MC.Xbox/mods/mod_index.h`):
+  `ConfigureKnownModDefaults()` abría `fabric.mod.json` de **todos** los JAR en
+  cada una de ~8 búsquedas por lanzamiento. Ahora se enumera `mods/` una vez,
+  se cachea el id por `(nombre, tamaño, fecha de escritura)` y las búsquedas se
+  responden en memoria. Caché en `config/bandit-mod-index-<hash>.tsv`
+  (**fuera de `mods/`**): un lanzamiento en caliente hace **0 lecturas ZIP**;
+  añadir, quitar o actualizar un JAR invalida sólo ese JAR. No se modifica,
+  elimina ni actualiza ningún mod ni versión, y no se toca el orden de carga
+  de NeoForge ni se paralelizan clases, mixins ni inicialización.
+- **Fases reales con tiempos** (`MC.Xbox/launch/launch_phase.h`): seis estados
+  («Comprobando archivos», «Analizando mods», «Preparando dependencias»,
+  «Preparando Java», «Iniciando NeoForge», «Cargando Minecraft»), traducidos,
+  con `mc_launch.log` volcando `Launch phase timings (ms): ... total=...` y el
+  tiempo hasta el primer fotograma presentado. **Se eliminan los porcentajes
+  inventados** 12/24/38/52/64 %: las fases no medibles usan progreso
+  indeterminado (la UI ya dibuja una barra pulsante «Loading...»). El único
+  porcentaje es el real de JARs indexados / JARs encontrados.
+- **Diagnóstico**: `logs/current/memory_diagnostic.txt` (incluido en el ZIP de
+  crash) registra límite UWP medido, uso al arrancar, reserva nativa, heap
+  mínimo/máximo, directa, perfil y **lista completa de args JVM**.
+  `crash_parse.cpp` clasifica el fallo en heap / nativa / directa / espacio
+  virtual / límite UWP / G1 / dependencia, y la pantalla de crash distingue un
+  error de memoria de uno de mods. Un `jvm_args.txt` heredado con flags G1
+  antiguas activas produce un `WARNING` explícito en el log (no se edita el
+  archivo del usuario).
+
+### Tests
+
+`tests/memory_profile_test.cpp`, `tests/launch_phase_test.cpp` y
+`tests/mod_index_test.cpp` (C++ portable, cableados en `tests/run-tests.sh`),
+más las comprobaciones 18/19/20 de `scripts/validate-fork-targets.py`. Sin
+Windows/MSVC/UWP/Xbox en este entorno: **no se han podido ejecutar Minecraft,
+medir tiempos antes/después, probar >100 mods ni repetir entradas/salidas de
+servidor**. Ver `docs/MEMORY-AND-MOD-LOADING-REPORT.es.md` para la lista exacta
+de pruebas realizadas y pendientes. **Sin verificación en consola: no se
+declara resuelto.**
+
 ## 2026-11-02 — Heap de 3,5 GiB para perfiles con mods
 
 ### Changed
@@ -32,6 +97,11 @@ perfiles cargados de mods; no afecta a ningún ajuste gráfico.
 > incorporado) o bajar `-XX:MaxDirectMemorySize`. Sin verificación en consola
 > todavía; tampoco hay garantía de más FPS: esto reduce presión de GC, no
 > cambia el techo gráfico.
+>
+> **Obsoleto desde 2026-11-14:** este `-Xmx3584M` es precisamente la
+> configuración con la que se reportó `InsufficientMemory / G1 virtual space`.
+> La entrada anterior queda como histórico; el comportamiento vigente es el de
+> los perfiles adaptativos descritos arriba.
 
 ## 2026-11-02 — Menos trabajo por frame en el shim GLFW (sin tocar ajustes gráficos)
 
