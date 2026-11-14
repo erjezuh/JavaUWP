@@ -158,41 +158,54 @@ jobs:
             $env:DEFAULT_CONTROLLER_PROVIDER = $row[0].controllerProvider
             $env:MC_VERSION = $row[0].minecraftVersion
           }
-          # hashtable splat: switch parameters must be bound by name, not passed
-          # as positional strings
-          $buildArgs = @{ SkipStopAppProcesses = $true; ReleaseChannel = "nightly-native" }
+          # Run build.ps1 as a child process with redirected streams.
+          # Do NOT pipe it: Windows PowerShell 5.1 turns any native stderr line
+          # (cl.exe prints its banner on stderr) into a terminating error when
+          # $ErrorActionPreference is 'Stop' and the output goes through a pipe,
+          # which killed the build at the first cl.exe call.
+          $psArgs = @(
+            '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', 'build.ps1',
+            '-SkipStopAppProcesses', '-ReleaseChannel', 'nightly-native'
+          )
           if ($env:FAST_BUILD -eq "true") {
             Write-Host "Fast build: skipping per-version manifests and per-version mods"
-            $buildArgs.SkipVersionManifests = $true
-            $buildArgs.SkipVersionCompat = $true
+            $psArgs += @('-SkipVersionManifests', '-SkipVersionCompat')
           }
-          # Capture EVERYTHING: a terminating exception thrown by build.ps1
-          # never reaches the pipeline, so a transcript plus try/catch is the
-          # only way to see the preflight failure on the runner.
-          $log = "$env:RUNNER_TEMP\build.log"
-          function Esc([string]$t) { $t.Replace('%','%25').Replace("`r",'%0D').Replace("`n",'%0A') }
-          Write-Host "GITHUB_RUN_NUMBER=$env:GITHUB_RUN_NUMBER APPX_VERSION=$env:APPX_VERSION"
-          Start-Transcript -Path $log -Force | Out-Null
-          $exit = 0
-          try {
-            .\build.ps1 @buildArgs 2>&1 | ForEach-Object { $_ }
-          } catch {
-            $exit = 1
-            Write-Host "BUILD THREW: $($_.Exception.Message)"
-            Write-Host $_.ScriptStackTrace
-            $detail = Esc "$($_.Exception.Message)`n$($_.ScriptStackTrace)"
-            if ($detail.Length -gt 3000) { $detail = $detail.Substring(0, 3000) }
-            Write-Output "::error title=build.ps1 threw:: $detail"
-          }
-          if ($exit -eq 0 -and $LASTEXITCODE -ne 0) { $exit = $LASTEXITCODE }
-          Write-Host "=== build exit $exit ==="
-          Stop-Transcript | Out-Null
-          if ($exit -ne 0) {
-            $lines = @(Get-Content $log -ErrorAction SilentlyContinue)
-            $tail = Esc (($lines | Select-Object -Last 60) -join "`n")
-            if ($tail.Length -gt 5000) { $tail = $tail.Substring($tail.Length - 5000) }
-            Write-Output "::error title=build tail::$tail"
-            exit $exit
+          $outLog = "$env:RUNNER_TEMP\build.out.log"
+          $errLog = "$env:RUNNER_TEMP\build.err.log"
+          $proc = Start-Process -FilePath "powershell" -ArgumentList $psArgs `
+              -NoNewWindow -PassThru -RedirectStandardOutput $outLog -RedirectStandardError $errLog
+          Wait-Process -Id $proc.Id
+          $code = $proc.ExitCode
+          Write-Host "=== build exit $code ==="
+          Get-Content $outLog -Tail 60
+          if ($code -ne 0) {
+            Get-Content $errLog -Tail 40
+            $lines = @()
+            foreach ($f in @($outLog, $errLog)) {
+              if (Test-Path $f) { $lines += @(Get-Content $f) }
+            }
+            function Esc([string]$t) { $t.Replace('%','%25').Replace("`r",'%0D').Replace("`n",'%0A') }
+            $hits = @()
+            for ($i = 0; $i -lt $lines.Count; $i++) {
+              if ($lines[$i] -match 'error [A-Z]+[0-9]+|fatal error|error LNK|: error ') { $hits += $i }
+            }
+            if ($hits.Count -eq 0) {
+              $tail = Esc (($lines | Select-Object -Last 50) -join "`n")
+              if ($tail.Length -gt 5000) { $tail = $tail.Substring($tail.Length - 5000) }
+              Write-Output "::error title=build failed, no error line matched::$tail"
+            } else {
+              $n = 0
+              foreach ($i in ($hits | Select-Object -First 8)) {
+                $n++
+                $a = [Math]::Max(0, $i - 3)
+                $b = [Math]::Min($lines.Count - 1, $i + 4)
+                $msg = Esc (($lines[$a..$b] -join "`n"))
+                if ($msg.Length -gt 5000) { $msg = $msg.Substring(0, 5000) }
+                Write-Output "::error title=compile error $n::$msg"
+              }
+            }
+            exit $code
           }
 
       - name: Save build cache
@@ -214,9 +227,11 @@ jobs:
         if: ${{ failure() }}
         shell: powershell
         run: |
-          $log = "$env:RUNNER_TEMP\build.log"
-          if (-not (Test-Path $log)) { Write-Output "::error::build.log was never created"; exit 0 }
-          $lines = @(Get-Content $log)
+          $lines = @()
+          foreach ($f in @("$env:RUNNER_TEMP\build.out.log", "$env:RUNNER_TEMP\build.err.log")) {
+            if (Test-Path $f) { $lines += @(Get-Content $f) }
+          }
+          if ($lines.Count -eq 0) { Write-Output "::error::no build output was captured"; exit 0 }
           function Esc([string]$s) { $s.Replace('%','%25').Replace("`r",'%0D').Replace("`n",'%0A') }
           $hits = @()
           for ($i = 0; $i -lt $lines.Count; $i++) {
