@@ -410,7 +410,7 @@ bool WriteJvmMemoryProfileSetting(const std::wstring& id) {
     const std::wstring path = JvmMemoryProfilePath();
     if (path.empty()) return false;
     if (!EnsureDirectoryTree(GetParentDir(path))) return false;
-    const std::wstring saved = WriteTextFile(path, ToLowerW(TrimWhitespace(id)) + L"\n");
+    const bool saved = WriteTextFile(path, ToLowerW(TrimWhitespace(id)) + L"\n");
     if (!saved) {
         WriteLogF(L"jvm memory profile could not be saved at %s", path.c_str());
     }
