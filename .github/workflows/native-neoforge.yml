@@ -24,7 +24,9 @@ on:
         default: false
   push:
     branches:
-      - arena/16fba603-javauwp
+      # Every Arena working branch builds, so a session always gets a compile
+      # check and a downloadable APPX instead of finding out on console.
+      - "arena/**"
     paths:
       - ".github/workflows/native-neoforge.yml"
       - "MC.Xbox/**"
