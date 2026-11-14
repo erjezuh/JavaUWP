@@ -147,12 +147,15 @@ Todo verde en la rama (`All portable checks passed`).
 El workflow `Native NeoForge fork build` compila esta rama con **MSVC 19.51**
 (`/W4`, `/GL`, UWP) y empaqueta el APPX firmado:
 
-- ejecución `43599905491`, commit `6431089`: **"Portable fork checks" success** y
-  **"Build native NeoForge APPX" success** (~14 min con caché tibia).
+- ejecución final `43601228167`, commit `da43a59`: **"Portable fork checks"
+  success** y **"Build native NeoForge APPX" success**. La compilación completa
+  en frío del commit anterior (`43599905491`, `6431089`) tardó ~14 min; la
+  recompilación posterior con caché tibia, ~4,5 min.
 - artefacto publicado en el Release `nightly-native`:
-  `BanditLauncherNative-neoforge.appx` (**429 MiB**), su `.sha256` y el `.cer`,
-  subidos a las 13:42 UTC del 2026-11-14.
-- el paquete se sella como `1.0.<número de ejecución>.0` (aquí `1.0.31.0`):
+  `BanditLauncherNative-neoforge.appx` (**429 MiB**, 450 228 936 bytes), su
+  `.sha256` y el `.cer`, subidos a las 13:48 UTC del 2026-11-14.
+- el paquete se sella como `1.0.<número de ejecución>.0` (`1.0.33.0` en la
+  última):
   `build.ps1` usa `GITHUB_RUN_NUMBER` como tercer campo para que cada nightly
   actualice en el sitio. La versión del código/manifest es **1.0.25.0**.
 
@@ -227,7 +230,7 @@ el Release `nightly-native`.
 
 Versión: **1.0.25.0** (`MC.Xbox/Package.appxmanifest`), que sustituye a
 1.0.24.0. El paquete que produce CI se sella como `1.0.<ejecución>.0`
-(`1.0.31.0` en la ejecución `43599905491`) para que la consola actualice en el
+(`1.0.33.0` en la ejecución `43601228167`) para que la consola actualice en el
 sitio en lugar de rechazar la instalación.
 
 ## 6. Limitaciones conocidas
