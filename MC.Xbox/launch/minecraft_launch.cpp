@@ -6,6 +6,7 @@
 #include "launch_internal.h"
 #include "loader.h"
 #include "loader_common.h"
+#include "jvm_memory.h"
 #include "launch_diagnostics.h"
 #include "neoforge.h"
 #include "launcher_common.h"
@@ -398,6 +399,63 @@ static std::wstring FileUriFromPath(const std::wstring& path) {
     return uri;
 }
 
+// Wall clock for the launch: every phase is timed once and written to
+// logs/current/launch_timings.txt, so "why does this take so long" can be
+// answered from a log instead of a stopwatch on a phone.
+class LaunchClock {
+public:
+    LaunchClock() : started_(GetTickCount64()), last_(started_) {}
+
+    void Mark(const wchar_t* name) {
+        const unsigned long long now = GetTickCount64();
+        const unsigned long long delta = now - last_;
+        last_ = now;
+        Phase phase;
+        phase.name = name;
+        phase.ms = delta;
+        phases_.push_back(phase);
+        WriteLogF(L"launch phase %s: %llu ms (total %llu ms)", name, delta, now - started_);
+    }
+
+    unsigned long long Elapsed() const { return GetTickCount64() - started_; }
+
+    void WriteReport(const std::wstring& launcherLogDir) const {
+        if (launcherLogDir.empty()) return;
+        std::wstring text = L"# Bandit Launcher launch timings\n";
+        text += L"# One row per phase, in the order they ran.\n";
+        unsigned long long total = 0;
+        for (const Phase& phase : phases_) {
+            text += phase.name + L": " + std::to_wstring(phase.ms) + L" ms\n";
+            total += phase.ms;
+        }
+        text += L"total: " + std::to_wstring(total) + L" ms\n";
+        WriteTextFile(launcherLogDir + L"\\launch_timings.txt", text);
+    }
+
+private:
+    struct Phase {
+        std::wstring name;
+        unsigned long long ms = 0;
+    };
+    unsigned long long started_;
+    unsigned long long last_;
+    std::vector<Phase> phases_;
+};
+
+static int CountModJars(const std::wstring& modsDir) {
+    if (modsDir.empty()) return 0;
+    WIN32_FIND_DATAW fd = {};
+    HANDLE h = FindFirstFileExW(
+        (modsDir + L"\\*.jar").c_str(), FindExInfoBasic, &fd, FindExSearchNameMatch, nullptr, 0);
+    if (h == INVALID_HANDLE_VALUE) return 0;
+    int count = 0;
+    do {
+        if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) ++count;
+    } while (FindNextFileW(h, &fd));
+    FindClose(h);
+    return count;
+}
+
 static bool IsJvmMemoryOption(const std::wstring& arg) {
     const std::wstring trimmed = TrimWhitespace(arg);
     if (trimmed.empty()) return false;
@@ -406,7 +464,11 @@ static bool IsJvmMemoryOption(const std::wstring& arg) {
         lower.rfind(L"-xms", 0) == 0 ||
         lower.rfind(L"-xx:maxram", 0) == 0 ||
         lower.rfind(L"-xx:initialram", 0) == 0 ||
-        lower.rfind(L"-xx:heap", 0) == 0;
+        lower.rfind(L"-xx:heap", 0) == 0 ||
+        lower.rfind(L"-xx:maxdirectmemorysize", 0) == 0 ||
+        lower.rfind(L"-xx:maxmetaspacesize", 0) == 0 ||
+        lower.rfind(L"-xx:reservedcodecachesize", 0) == 0 ||
+        lower.rfind(L"-xx:compressedclassspacesize", 0) == 0;
 }
 
 void CollectManifestLibraryJars(
@@ -845,6 +907,8 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
     const LaunchAuthConfig& authConfig,
     LaunchProgressCallback progress)
 {
+    LaunchClock clock;
+
     const auto reportProgress = [&](const wchar_t* status, const wchar_t* detail, float value) {
         if (progress) {
             progress(status, detail, value);
@@ -961,7 +1025,12 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
     if (earlyBlockedRemoved > 0) {
         WriteLogF(L"Removed %d blocked mod(s) from active profile before configuring launch", earlyBlockedRemoved);
     }
+    reportProgress(
+        Tr(L"Analysing mods"),
+        Tr(L"Reading the mod folder and reusing the cached metadata for jars that did not change."),
+        0.16f);
     ConfigureKnownModDefaults(gameDir, userModsDir, minecraftVersion, bundledModsDir);
+    clock.Mark(L"mods and defaults");
     if (SetCurrentDirectoryW(gameDir.c_str())) {
         WriteLogF(L"Process current directory set to gameDir: %s", gameDir.c_str());
     } else {
@@ -989,6 +1058,7 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
         LogTailerConfig{ xboxCompatLogPath, L"xbox_compat.log" }
     };
     LogTailerGuard logTailers(StartLogTailers(tailerConfigs));
+    clock.Mark(L"logs and streams");
 
     FILE* af = nullptr;
     _wfopen_s(&af, argsPath.c_str(), L"w");
@@ -1027,29 +1097,67 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
     effectiveClassPath = loaderSetup.effectiveClassPath;
     const bool neoForgeStartedWithGameClassPath = loaderSetup.neoForgeStartedWithGameClassPath;
 
-    std::vector<std::string> vmOptionStorage;
-    vmOptionStorage.reserve(64);
-    // 5120 MB app budget on Series S dev mode. 3584M = 3.5 GiB for modded
-    // profiles; Java rejects decimal -Xmx values, so it must be spelled in MiB.
-    // Together with 512M direct buffers, metaspace and the Mesa/D3D12 runtime
-    // this is close to the budget: jvm_args.txt can lower it again if the app
-    // is killed for memory on a smaller console.
-    vmOptionStorage.push_back("-Xmx3584M");
-    vmOptionStorage.push_back("-Xms512M");
-    vmOptionStorage.push_back("-XX:MaxDirectMemorySize=512M");
+    // ------------------------------------------------------------------
+    // Memory plan
+    // ------------------------------------------------------------------
+    // The host process owns ONE app memory budget: launcher, Direct2D,
+    // Mesa/D3D12, LWJGL, JNA and the JVM all draw from it. The old build spent
+    // 3584 MB of it on the heap and left metaspace, the code cache and the
+    // compressed class space unlimited, which is how a modded pack ended up
+    // aborting with "Native memory allocation (mmap) failed ... G1 virtual
+    // space" while the Java heap was still only a quarter full. The plan below
+    // derives the heap from the budget Windows reports, bounds every native
+    // consumer and keeps a safety margin.
+    unsigned long long budgetMb = 0;
+    unsigned long long usedMb = 0;
+    bool budgetRead = ReadAppMemoryBudget(budgetMb, usedMb);
+    bool memoryApartmentOpened = false;
+    if (!budgetRead) {
+        // ReadAppMemoryBudget needs an apartment on the calling thread. The
+        // launch runs on a worker, so open one just for this read.
+        const HRESULT hr = RoInitialize(RO_INIT_MULTITHREADED);
+        memoryApartmentOpened = SUCCEEDED(hr);
+        if (memoryApartmentOpened) budgetRead = ReadAppMemoryBudget(budgetMb, usedMb);
+        if (!budgetRead) {
+            WriteLog(L"App memory budget unavailable; the memory plan falls back to a default");
+        }
+    }
 
-    // ignoreUnrecognized is JNI_FALSE, so a typo in jvm_args.txt would stop it booting
-    vmOptionStorage.push_back("-XX:+IgnoreUnrecognizedVMOptions");
-    vmOptionStorage.push_back("-XX:+UnlockExperimentalVMOptions");
-    vmOptionStorage.push_back("-XX:+UseG1GC");
-    // the 200ms default target lets young gen reach 2.2G before collecting
-    vmOptionStorage.push_back("-XX:MaxGCPauseMillis=50");
-    vmOptionStorage.push_back("-XX:G1NewSizePercent=20");
-    vmOptionStorage.push_back("-XX:G1ReservePercent=20");
-    vmOptionStorage.push_back("-XX:G1HeapRegionSize=32M");
-    // hsperfdata is mmapped and rewritten every collection, on console storage that is a frame hitch
-    vmOptionStorage.push_back("-XX:+PerfDisableSharedMem");
-    WriteLog(L"JVM heap: -Xmx3584M (3.5 GiB) -Xms512M -XX:MaxDirectMemorySize=512M, G1 at 50ms pause target");
+    jvmmem::Inputs memoryInputs;
+    memoryInputs.appLimitMb = budgetRead ? budgetMb : 0ull;
+    memoryInputs.baselineMb = budgetRead ? usedMb : 0ull;
+    memoryInputs.physicalMb = PhysicalMemoryMb();
+    memoryInputs.modJarCount = CountModJars(userModsDir);
+    bool profileRecognised = false;
+    memoryInputs.profile = jvmmem::ParseProfile(ReadJvmMemoryProfileSetting(), &profileRecognised);
+    if (!profileRecognised) {
+        WriteLog(L"No memory profile saved yet; using the balanced default");
+    }
+    const jvmmem::Plan memoryPlan = jvmmem::ComputePlan(memoryInputs);
+
+    WriteLog(L"JVM memory plan:");
+    WriteLogF(L"  profile %s, app budget %llu MB %s, used before JVM %llu MB, physical %llu MB",
+        jvmmem::ProfileLabel(memoryPlan.profile),
+        memoryPlan.budgetMb,
+        memoryPlan.budgetKnown ? L"(reported)" : L"(fallback)",
+        memoryPlan.baselineMb,
+        memoryInputs.physicalMb);
+    WriteLogF(L"  heap -Xmx%dM -Xms%dM, direct %d MB, metaspace %d MB, code cache %d MB, class space %d MB",
+        memoryPlan.heapMaxMb, memoryPlan.heapMinMb, memoryPlan.directMb,
+        memoryPlan.metaspaceMb, memoryPlan.codeCacheMb, memoryPlan.classSpaceMb);
+    WriteLogF(L"  native outside the heap %d MB, graphics reserve %d MB, expected peak %llu MB, headroom %llu MB",
+        memoryPlan.jvmNativeMb, memoryPlan.graphicsReserveMb,
+        memoryPlan.expectedPeakMb, memoryPlan.headroomMb);
+    WriteLogF(L"  %s", a2w(jvmmem::PlanSummary(memoryPlan).c_str()).c_str());
+    if (!memoryPlan.fits) {
+        WriteLog(L"  WARNING: the expected peak exceeds the app budget; the launcher or the JVM may be killed");
+    }
+    if (memoryApartmentOpened) {
+        RoUninitialize();
+        memoryApartmentOpened = false;
+    }
+
+    std::vector<std::string> vmOptionStorage = jvmmem::BuildArgs(memoryPlan);
     vmOptionStorage.push_back("--enable-native-access=ALL-UNNAMED");
     vmOptionStorage.push_back("--add-opens=jdk.zipfs/jdk.nio.zipfs=ALL-UNNAMED");
     const std::wstring selectedJavaBasePatchName =
@@ -1190,41 +1298,55 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
     if (GetFileAttributesW(jvmArgsPath.c_str()) == INVALID_FILE_ATTRIBUTES) {
         // resolved here because the template has no way to know where LocalState landed
         const std::wstring gcLogPath = fwd(launcherLogDir) + L"/gc.log";
+        const std::wstring heapArg = L"-Xmx" + std::to_wstring(memoryPlan.heapMaxMb) + L"M";
+        const std::wstring initialArg = L"-Xms" + std::to_wstring(memoryPlan.heapMinMb) + L"M";
+        const std::wstring directArg = L"-XX:MaxDirectMemorySize=" + std::to_wstring(memoryPlan.directMb) + L"M";
+        const std::wstring metaspaceArg = L"-XX:MaxMetaspaceSize=" + std::to_wstring(memoryPlan.metaspaceMb) + L"M";
+        const std::wstring codeCacheArg = L"-XX:ReservedCodeCacheSize=" + std::to_wstring(memoryPlan.codeCacheMb) + L"M";
+        const std::wstring classSpaceArg = L"-XX:CompressedClassSpaceSize=" + std::to_wstring(memoryPlan.classSpaceMb) + L"M";
         const std::wstring tpl =
             L"# Bandit Launcher JVM options\n"
             L"# One option per line. Lines starting with # are ignored.\n"
             L"#\n"
             L"# These are appended after the launcher's own options, so anything set here\n"
-            L"# overrides the built in value. The built ins are:\n"
-            L"#   -Xmx3584M (3.5 GiB) -Xms512M -XX:MaxDirectMemorySize=512M\n"
-            L"#   -XX:+UseG1GC -XX:+PerfDisableSharedMem\n"
-            L"#   -XX:MaxGCPauseMillis=50 -XX:G1NewSizePercent=20\n"
-            L"#   -XX:G1ReservePercent=20 -XX:G1HeapRegionSize=32M\n"
+            L"# overrides the built in value. The built ins are derived at launch from the\n"
+            L"# memory budget Windows reports, so they follow the console and the\n"
+            L"# Settings -> Memory profile choice. For this launch they were:\n"
+            L"#   " + heapArg + L"  " + initialArg + L"  " + directArg + L"\n" +
+            L"#   " + metaspaceArg + L"  " + codeCacheArg + L"  " + classSpaceArg + L"\n" +
+            L"#   -XX:+UseG1GC -XX:MaxGCPauseMillis=" + std::to_wstring(memoryPlan.maxGcPauseMs) + L"\n" +
+            L"#   -XX:G1NewSizePercent=20 -XX:G1ReservePercent=" + std::to_wstring(memoryPlan.g1ReservePercent) + L"\n" +
+            L"#   -XX:+PerfDisableSharedMem -XX:-AlwaysPreTouch\n"
+            L"#\n"
+            L"# The heap is NOT raised by default any more. A heap that takes almost the\n"
+            L"# whole app budget is what produced \"Native memory allocation (mmap) failed\n"
+            L"# ... G1 virtual space\": the JVM reserves that space outside the Java heap\n"
+            L"# for metaspace, the code cache, the compressed class space and direct\n"
+            L"# buffers. If the console needs more heap for a very large pack, raise it one\n"
+            L"# step at a time and watch mc_launch.log for the headroom line.\n"
             L"#\n"
             L"# Unrecognised options are ignored rather than failing the launch, so a typo\n"
             L"# here will not stop the game starting. Check mc_launch.log for lines reading\n"
             L"# \"jvm_args.txt applying:\" to confirm what was actually picked up.\n"
             L"\n"
-            L"# Series S has a ~5120 MB app budget. If the app is killed for memory\n"
-            L"# with a large modpack, uncomment this to return to the old 3 GiB heap.\n"
-            L"#-Xmx3G\n"
+            L"# If the app is closed for memory, lower the heap instead of raising it.\n"
+            L"#-Xmx2048M\n"
+            L"\n"
+            L"# If Minecraft reports \"OutOfMemoryError: Java heap space\" with a big pack,\n"
+            L"# raise the heap one step and keep an eye on native headroom.\n"
+            L"#-Xmx2816M\n"
             L"\n"
             L"# Write a garbage collection log next to the other logs.\n"
             L"#-Xlog:gc:file=" + gcLogPath + L":time,uptime\n"
             L"\n"
-            L"# The 50ms pause target is now a built in, measured on box: it took the worst\n"
-            L"# young collection from 154ms down to 62ms. Lower it further if stalls are still\n"
+            L"# The 50ms pause target is a built in: it took the worst young collection\n"
+            L"# from 154ms down to 62ms on console. Lower it further if stalls are still\n"
             L"# visible, at the cost of collecting more often.\n"
             L"#-XX:MaxGCPauseMillis=20\n"
             L"\n"
-            L"# More aggressive alternative, derived from server side flag sets. Only worth\n"
-            L"# trying if the built ins are not enough and you want to push further.\n"
-            L"#-XX:G1NewSizePercent=30\n"
-            L"#-XX:G1MaxNewSizePercent=40\n"
-            L"#-XX:G1HeapRegionSize=8M\n"
-            L"#-XX:MaxGCPauseMillis=37\n"
-            L"#-XX:+ParallelRefProcEnabled\n"
-            L"#-XX:+DisableExplicitGC\n"
+            L"# A larger metaspace cap, for packs with several hundred jars. This is native\n"
+            L"# memory: it comes out of the same budget as the heap.\n"
+            L"#-XX:MaxMetaspaceSize=512M\n"
             L"\n"
             L"# Cap concurrent marking to one thread if half second mark cycles are stealing\n"
             L"# cores from the render thread. 8 cores here, minus render, server and glthread.\n"
@@ -1269,6 +1391,15 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
         WriteLogF(L"jvm_args.txt not present at %s, using built in options only", jvmArgsPath.c_str());
     }
 
+    clock.Mark(L"jvm arguments");
+
+    // The exact option list, so a post-mortem does not have to guess which heap
+    // and which native caps the JVM was actually given.
+    WriteLogF(L"JVM options in effect (%llu):", static_cast<unsigned long long>(vmOptionStorage.size()));
+    for (size_t i = 0; i < vmOptionStorage.size(); ++i) {
+        WriteLogF(L"  [%02llu] %s", static_cast<unsigned long long>(i), vmOptionStorage[i].c_str());
+    }
+
     std::vector<std::string> appArgs = {
         "--username", authConfig.username,
         "--version", w2a(launchVersion),
@@ -1306,10 +1437,13 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
         Tr(L"Loading the embedded JVM."),
         0.24f);
 
+    clock.Mark(L"args written");
+
     HMODULE jvmModule = nullptr;
     if (!PreloadJvm(exeDir, jreDir, packagedJreRelativeDir, nativesDir, &jvmModule)) {
         return false;
     }
+    clock.Mark(L"jvm preload");
 
     auto createJavaVm = reinterpret_cast<JNI_CreateJavaVM_t>(GetProcAddress(jvmModule, "JNI_CreateJavaVM"));
     if (!createJavaVm) {
@@ -1337,6 +1471,7 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
         return false;
     }
     g_embeddedJvmUsed = true;
+    clock.Mark(L"jvm create");
     {
         // App.cpp reads this before the heap exists, so that one says nothing about headroom
         unsigned long long limitMb = 0;
@@ -1354,6 +1489,7 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
         DestroyEmbeddedJvm(vm, env);
         return false;
     }
+    clock.Mark(L"loader artifacts");
     reportProgress(
         (TrFormat(L"Loading {0}", { loaderLabel })).c_str(),
         Tr(L"Loader artifacts are ready. Minecraft main is starting next."),
@@ -1412,7 +1548,10 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
         L"launcherBuild=" + telemetry::LauncherBuild() + L"\n" +
         L"loader=" + loader + L"\n" +
         L"loaderVersion=" + loaderVersion + L"\n" +
-        L"modsetHash=" + modsetHash + L"\n");
+        L"modsetHash=" + modsetHash + L"\n" +
+        L"jvmProfile=" + a2w(jvmmem::LimitsFor(memoryPlan.profile).id) + L"\n" +
+        L"jvmHeapMb=" + std::to_wstring(memoryPlan.heapMaxMb) + L"\n" +
+        L"jvmPlan=" + a2w(jvmmem::PlanSummary(memoryPlan).c_str()) + L"\n");
     DeleteFileW(LaunchSuspendedMarkerPath(exeDir).c_str());
 
     telemetry::LaunchContext telemetryContext;
@@ -1444,6 +1583,7 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
             if (!firstFrameSent && ShimPresentedFrames() > presentedFramesAtLaunch) {
                 firstFrameSent = true;
                 telemetry::SendFirstFrame();
+                WriteLogF(L"first frame presented after %u s", seconds);
             }
             if ((seconds % 5) != 0) continue;
             if (javaMainRunning.load()) {
@@ -1467,6 +1607,11 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
             RoUninitialize();
         }
     });
+
+    clock.Mark(L"handing over to main");
+    // Written before the call on purpose: if the game dies during start the
+    // timings are already on disk.
+    clock.WriteReport(launcherLogDir);
 
     env->CallStaticVoidMethod(mainClass, mainMethod, argv);
     javaMainRunning.store(false);

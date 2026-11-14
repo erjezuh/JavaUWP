@@ -672,5 +672,18 @@
   "Game mouse sensitivity": "Game mouse sensitivity",
   "Mouse look in game. Minecraft sensitivity still applies.": "Mouse look in game. Minecraft sensitivity still applies.",
   "Mouse sensitivity saved.": "Mouse sensitivity saved.",
-  "Mouse sensitivity could not be saved.": "Mouse sensitivity could not be saved."
+  "Mouse sensitivity could not be saved.": "Mouse sensitivity could not be saved.",
+  "Analysing mods": "Analizando mods",
+  "Reading the mod folder and reusing the cached metadata for jars that did not change.": "Leyendo la carpeta de mods y reutilizando los metadatos guardados de los archivos que no han cambiado.",
+  "Performance": "Rendimiento",
+  "Memory profile": "Perfil de memoria",
+  "Minecraft ran out of native memory, not Java heap ({0}).\nRaising the heap makes this likelier. Use Settings > Memory profile > Conservative, or lower -Xmx in jvm_args.txt.": "Minecraft se quedó sin memoria nativa, no sin heap de Java ({0}).\nSubir el heap lo hace más probable. Usa Ajustes > Perfil de memoria > Conservador, o baja -Xmx en jvm_args.txt.",
+  "Heap configured at that launch: {0} MB.": "Heap configurado en ese arranque: {0} MB.",
+  "Conservative": "Conservador",
+  "Balanced": "Equilibrado",
+  "Smallest heap, most native headroom. Use it if the game still closes without a message.": "El heap más pequeño y el mayor margen para memoria nativa. Úsalo si el juego sigue cerrándose sin mensaje.",
+  "Largest heap the console budget allows. Leaves less room for native memory.": "El mayor heap que permite el presupuesto de la consola. Deja menos espacio para memoria nativa.",
+  "Fits a 100-150 mod pack and keeps a safety margin for native memory.": "Cabe un modpack de 100-150 mods y mantiene un margen para memoria nativa.",
+  "Memory profile saved. It applies the next time Minecraft starts.": "Perfil de memoria guardado. Se aplica la próxima vez que arranque Minecraft.",
+  "The memory profile could not be saved.": "No se pudo guardar el perfil de memoria."
 }

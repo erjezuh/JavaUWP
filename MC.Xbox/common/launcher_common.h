@@ -41,6 +41,17 @@ int CompareVersionNumbers(const std::string& lhs, const std::string& rhs);
 // calling thread must have RoInitialize'd
 bool ReadAppMemoryBudget(unsigned long long& limitMb, unsigned long long& usedMb);
 
+// Total physical RAM in MiB, for the launch log and the fallback budget.
+unsigned long long PhysicalMemoryMb();
+
+// JVM memory profile chosen in Settings ("conservative" / "balanced" /
+// "performance"). Empty when the user never picked one.
+std::wstring ReadJvmMemoryProfileSetting();
+bool WriteJvmMemoryProfileSetting(const std::wstring& id);
+
+// Reads one text entry out of a jar. The file is mapped instead of copied: a
+// 150 jar profile used to pull every archive through the app's commit budget,
+// and this process shares that budget with the JVM.
 bool ReadZipTextFile(const std::wstring& zipPath, const char* entryName, std::wstring& out);
 
 std::wstring AppStateDir(const std::wstring& runtimeRoot);

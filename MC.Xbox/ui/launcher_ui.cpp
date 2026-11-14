@@ -7,6 +7,7 @@
 #include "auth_screen.h"
 #include "launcher_mouse.h"
 #include "i18n.h"
+#include "jvm_memory.h"
 #include "launcher_common.h"
 #include "minecraft_auth.h"
 #include "minecraft_launch.h"
@@ -280,6 +281,28 @@ static std::wstring CrashSuspectLine(const telemetry::CrashRecord& record) {
         }
         line += L"\n" + std::wstring(Tr(L"Open Remote Files on the main menu to read it on a phone or PC."));
         return line;
+    }
+    // Native memory failures need a different answer than a Java heap one. The
+    // record keeps the hs_err header and the "Error detail:" line, which is
+    // enough to tell a failed G1 region mmap from a full metaspace or a code
+    // cache that ran out - and to say that a bigger heap would make it worse.
+    {
+        const std::string haystack =
+            w2a(record.exception) + " " + w2a(record.message) + " " + w2a(record.phase);
+        const jvmmem::FailureKind failure = jvmmem::ClassifyHsErr(haystack);
+        if (jvmmem::IsNativeFailure(failure)) {
+            const std::wstring detail = record.message.empty() ? record.exception : record.message;
+            std::wstring line = TrFormat(
+                L"Minecraft ran out of native memory, not Java heap ({0}).\n"
+                L"Raising the heap makes this likelier. Use Settings > Memory profile > Conservative, "
+                L"or lower -Xmx in jvm_args.txt.",
+                { detail });
+            if (record.heapMaxMb > 0) {
+                line += L"\n" + std::wstring(TrFormat(L"Heap configured at that launch: {0} MB.",
+                    { std::to_wstring(record.heapMaxMb) }));
+            }
+            return line;
+        }
     }
     if (record.exception.find(L"heap_exhausted") != std::wstring::npos) {
         return TrFormat(L"This pack ran out of memory ({0}).\n"
@@ -625,8 +648,35 @@ static void ShowChangelogScreen(
     WriteLog(L"Changelog closed");
 }
 
+// The profile names and descriptions live in jvm_memory.h so the planner and
+// the UI cannot drift apart, but they are listed here inside Tr() so the
+// translation scanner can see them.
+static const wchar_t* MemoryProfileLabel(jvmmem::Profile profile) {
+    switch (profile) {
+    case jvmmem::Profile::Conservative:
+        return Tr(L"Conservative");
+    case jvmmem::Profile::Performance:
+        return Tr(L"Performance");
+    case jvmmem::Profile::Balanced:
+    default:
+        return Tr(L"Balanced");
+    }
+}
+
+static const wchar_t* MemoryProfileDetail(jvmmem::Profile profile) {
+    switch (profile) {
+    case jvmmem::Profile::Conservative:
+        return Tr(L"Smallest heap, most native headroom. Use it if the game still closes without a message.");
+    case jvmmem::Profile::Performance:
+        return Tr(L"Largest heap the console budget allows. Leaves less room for native memory.");
+    case jvmmem::Profile::Balanced:
+    default:
+        return Tr(L"Fits a 100-150 mod pack and keeps a safety margin for native memory.");
+    }
+}
+
 static void ShowSettingsPage(ICoreWindow* window, AuthScreenRenderer* renderer, AuthUiState& state) {
-    constexpr int kSettingsRows = 7;
+    constexpr int kSettingsRows = 8;
     WriteLog(L"Settings page opened");
     const std::wstring previousStatus = state.status;
     const std::wstring previousDetail = state.detail;
@@ -647,6 +697,13 @@ static void ShowSettingsPage(ICoreWindow* window, AuthScreenRenderer* renderer, 
     state.settingsModSource = modsource::Current();
     state.settingsCurseForgeKeyHint = modsource::CurseForgeKeyHint();
     state.settingsUpdateCheckOn = updates::Enabled();
+    {
+        bool recognised = false;
+        const jvmmem::Profile saved = jvmmem::ParseProfile(ReadJvmMemoryProfileSetting(), &recognised);
+        const jvmmem::Profile active = recognised ? saved : jvmmem::Profile::Balanced;
+        state.settingsMemoryProfile = MemoryProfileLabel(active);
+        state.settingsMemoryDetail = MemoryProfileDetail(active);
+    }
     for (const i18n::Language& language : i18n::Languages()) {
         if (language.code == i18n::CurrentCode()) state.settingsLanguageName = language.name;
     }
@@ -782,6 +839,22 @@ static void ShowSettingsPage(ICoreWindow* window, AuthScreenRenderer* renderer, 
                 }
             } else {
                 state.settingsNote = Tr(L"The update setting could not be saved.");
+            }
+        } else if (pressed == 7) {
+            bool recognised = false;
+            const jvmmem::Profile current = jvmmem::ParseProfile(
+                ReadJvmMemoryProfileSetting(), &recognised);
+            const jvmmem::Profile next = current == jvmmem::Profile::Conservative
+                ? jvmmem::Profile::Balanced
+                : (current == jvmmem::Profile::Balanced
+                    ? jvmmem::Profile::Performance
+                    : jvmmem::Profile::Conservative);
+            if (WriteJvmMemoryProfileSetting(a2w(jvmmem::LimitsFor(next).id))) {
+                state.settingsMemoryProfile = MemoryProfileLabel(next);
+                state.settingsMemoryDetail = MemoryProfileDetail(next);
+                state.settingsNote = Tr(L"Memory profile saved. It applies the next time Minecraft starts.");
+            } else {
+                state.settingsNote = Tr(L"The memory profile could not be saved.");
             }
         } else if (pressed == 6) {
             const std::vector<i18n::Language> languages = i18n::Languages();

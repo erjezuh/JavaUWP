@@ -952,6 +952,9 @@ public:
                 state.settingsUpdateCheckOn ? TR_NOOP(L"On") : TR_NOOP(L"Off"));
             drawSettingsRow(6, TR_NOOP(L"Language"), TR_NOOP(L"Anything that is not translated yet stays in English."),
                 state.settingsLanguageName.c_str(), 240.0f);
+            drawSection(TR_NOOP(L"Performance"));
+            drawSettingsRow(7, TR_NOOP(L"Memory profile"), state.settingsMemoryDetail.c_str(),
+                state.settingsMemoryProfile.c_str(), 200.0f);
 
             DrawText(
                 state.settingsConfigured

@@ -477,27 +477,63 @@ def main() -> int:
     if "p_eglSwapInterval(g_eglDisplay, i)" not in glfw_shim:
         errors.append("glfwSwapInterval no longer honours the value requested by the game")
 
-    # 18. Modded profiles get a 3.5 GiB heap. HotSpot rejects decimal -Xmx
-    # values ("-Xmx3.5G" stops the JVM before the game starts), so the value
-    # must be a whole number of MiB. Keep the log, the seeded jvm_args.txt
-    # template and the documented rollback in sync, and leave other targets
-    # (Cleanroom/1.12.2) alone.
+    # 18. The JVM heap is derived from the app memory budget, not hardcoded.
+    # The old build pinned -Xmx3584M and left metaspace, the code cache and the
+    # compressed class space unlimited; on a 5120 MB Series S budget that is how
+    # a modded pack aborted with "Native memory allocation (mmap) failed ...
+    # G1 virtual space". Keep the plan in charge of -Xmx and of every native cap.
     launch_cpp = read("MC.Xbox/launch/minecraft_launch.cpp")
     cleanroom_cpp = read("MC.Xbox/launch/loaders/cleanroom.cpp")
-    if 'vmOptionStorage.push_back("-Xmx3584M");' not in launch_cpp:
-        errors.append("minecraft_launch.cpp no longer sets the 3.5 GiB (-Xmx3584M) heap")
-    for needle in ("JVM heap: -Xmx3584M (3.5 GiB)", "#   -Xmx3584M (3.5 GiB)"):
+    jvm_memory = read("MC.Xbox/launch/jvm_memory.h")
+
+    if "jvmmem::BuildArgs(memoryPlan)" not in launch_cpp:
+        errors.append("minecraft_launch.cpp no longer builds its JVM memory flags from jvmmem::BuildArgs")
+    for needle in ("jvmmem::ComputePlan(memoryInputs)",
+                   "JVM memory plan:",
+                   "JVM options in effect",
+                   "PhysicalMemoryMb()",
+                   "ReadJvmMemoryProfileSetting()"):
         if needle not in launch_cpp:
-            errors.append(f"minecraft_launch.cpp log/template is out of sync with the heap ({needle})")
-    if "#-Xmx3G" not in launch_cpp:
-        errors.append("jvm_args.txt template lost the documented rollback to 3 GiB")
+            errors.append(f"minecraft_launch.cpp lost the memory plan diagnostic ({needle})")
+
+    # No hardcoded heap or native cap may creep back into the launcher.
     for number, line in enumerate(launch_cpp.splitlines(), 1):
         active = line.strip()
-        if active.startswith("//") or active.startswith('L"#') or active.startswith("#"):
+        if active.startswith("//") or active.startswith('L"#'):
             continue
-        if "-Xmx3G" in active:
-            errors.append(f"minecraft_launch.cpp line {number} still has an active -Xmx3G reference")
+        # A flag composed with a value from the plan is exactly what we want; only
+        # a literal value is a regression.
+        if "to_wstring" in active:
+            continue
+        for flag in ('"-Xmx', '"-Xms', '"-XX:MaxMetaspaceSize=', '"-XX:MaxDirectMemorySize=',
+                     '"-XX:ReservedCodeCacheSize=', '"-XX:CompressedClassSpaceSize='):
+            if flag in active:
+                errors.append(
+                    f"minecraft_launch.cpp line {number} hardcodes {flag.strip(chr(34))}; "
+                    "the value must come from the memory plan")
+
+    # Every native consumer the JVM reserves is bounded, and the profiles are
+    # ordered so Conservative really is the safe one.
+    for needle in ("-XX:MaxMetaspaceSize=", "-XX:ReservedCodeCacheSize=",
+                   "-XX:CompressedClassSpaceSize=", "-XX:MaxDirectMemorySize="):
+        if needle not in jvm_memory:
+            errors.append(f"jvm_memory.h no longer bounds {needle}")
+    if '"-XX:G1HeapRegionSize' in jvm_memory or "push_back(\"-XX:G1HeapRegionSize" in jvm_memory:
+        errors.append("jvm_memory.h forces G1HeapRegionSize again; small regions are the point")
+    for needle in ("G1 virtual space", "Conservative", "Performance"):
+        if needle not in jvm_memory:
+            errors.append(f"jvm_memory.h lost {needle}")
+    conservative = re.search(r"kConservative = \{[^}]*?2048, 1536", jvm_memory)
+    balanced = re.search(r"kBalanced = \{[^}]*?2816, 2048", jvm_memory)
+    if not conservative or not balanced:
+        errors.append("jvm_memory.h profile caps changed; Conservative must be the smallest heap")
+
+    if 'vmOptions.push_back("-Xmx2560M");' not in cleanroom_cpp:
+        errors.append("Cleanroom/1.12.2 heap changed; other targets must stay untouched")
+
+    # A decimal -Xmx stops the JVM before the game starts.
     for rel in ("MC.Xbox/launch/minecraft_launch.cpp",
+                "MC.Xbox/launch/jvm_memory.h",
                 "MC.Xbox/launch/loaders/cleanroom.cpp",
                 "CHANGELOG.md", "docs/FAQ.md", "docs/ARCHITECTURE.md",
                 "docs/FORK-NATIVE-NEOFORGE.es.md"):
@@ -505,8 +541,39 @@ def main() -> int:
             errors.append(
                 f"{rel} contains a decimal -Xmx value ({match.group(0)}); "
                 "Java only accepts a whole number")
-    if 'vmOptions.push_back("-Xmx2560M");' not in cleanroom_cpp:
-        errors.append("Cleanroom/1.12.2 heap changed; other targets must stay untouched")
+
+    # 19. Mod metadata is cached and read once per launch.
+    mod_defaults_cpp = read("MC.Xbox/mods/mod_defaults.cpp")
+    mod_index_h = read("MC.Xbox/mods/mod_index.h")
+    for needle in ("modindex::LookupMod", "modindex::Merge", "modindex::Serialize", "mod-index.tsv"):
+        if needle not in mod_defaults_cpp:
+            errors.append(f"mod_defaults.cpp no longer uses the mod index ({needle})")
+    if "ModJarHasFabricId" in mod_defaults_cpp:
+        errors.append("mod_defaults.cpp went back to opening every jar for a lookup")
+    for needle in ("writeTime", "LookupSource::Probe", "DuplicateIds"):
+        if needle not in mod_index_h:
+            errors.append(f"mod_index.h lost {needle}")
+
+    # 20. Jar metadata is mapped, not copied into the app's commit charge.
+    launcher_common_cpp = read("MC.Xbox/common/launcher_common.cpp")
+    zip_section = launcher_common_cpp[launcher_common_cpp.index("bool ReadZipTextFile("):]
+    zip_section = zip_section[:zip_section.find("\n}\n")]
+    if "MapViewOfFile" not in zip_section or "CreateFileMappingW" not in zip_section:
+        errors.append("ReadZipTextFile copies whole jars into memory again; map them instead")
+    if "istreambuf_iterator" in zip_section:
+        errors.append("ReadZipTextFile reads the whole archive into a vector again")
+
+    # 21. The launch phases are timed and the plan is stored with the crash marker.
+    if "LaunchClock" not in launch_cpp or "launch_timings.txt" not in launch_cpp:
+        errors.append("minecraft_launch.cpp no longer records per-phase launch timings")
+    if "jvmPlan=" not in launch_cpp or "jvmProfile=" not in launch_cpp:
+        errors.append("the crash marker no longer records the JVM memory plan")
+
+    # 22. The portable tests cover the two new modules.
+    run_tests = read("tests/run-tests.sh")
+    for needle in ("tests/jvm_memory_test.cpp", "tests/mod_index_test.cpp"):
+        if needle not in run_tests:
+            errors.append(f"{needle} is not wired into tests/run-tests.sh")
 
     for warning in warnings:
         print(f"WARN  {warning}")

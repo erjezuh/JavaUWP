@@ -55,19 +55,50 @@ vanilla renderer. The Spanish guide has the full diagnosis:
 
 ## How much RAM does the game get, and can I change it?
 
-The built-in maximum heap is **3584 MiB (3.5 GiB)**, up from 3 GiB, for
-modded profiles. Java does not accept decimal `-Xmx` values, so 3.5 GiB has to
-be written as `-Xmx3584M` — a decimal spelling would stop the JVM before the
-game starts. `-Xms512M`, `-XX:MaxDirectMemorySize=512M` and the G1 settings are
-unchanged. This is a memory change, **not a graphics setting**.
+The heap is **not a fixed number any more**. At every launch the launcher asks
+Windows how much memory the app is allowed (roughly a 5120 MB budget on a
+Series S in Developer Mode), subtracts what the launcher and the graphics
+runtime already use, subtracts the memory the JVM reserves *outside* the Java
+heap, and gives the rest to the heap, rounded down and capped per profile:
 
-Options in `jvm_args.txt` are appended last and override the built-ins. The
-seeded template includes a commented `#-Xmx3G` line to roll back if needed.
-Watch `mc_launch.log` for `JVM heap: -Xmx3584M ...`; if the app is killed for
-memory on Series S (roughly a 5120 MB app budget in dev mode), lower the heap
-or `MaxDirectMemorySize` again.
+| Profile | Heap ceiling | Native caps | When to use it |
+| --- | --- | --- | --- |
+| Conservative | 2048 MB | metaspace 384 MB, code cache 160 MB, class space 192 MB, direct 192 MB | The game closes with no message, or the console kills the app. |
+| Balanced (default) | 2816 MB | metaspace 448 MB, code cache 192 MB, class space 256 MB, direct 256 MB | Normal use with a 100-150 mod pack. |
+| Performance | 3072 MB | metaspace 448 MB, code cache 192 MB, class space 256 MB, direct 256 MB | Only if the balance above still runs out of *Java* heap. |
 
-Cleanroom / 1.12.2 has its own smaller heap and is deliberately left alone.
+Change it in **Settings → Memory profile**; it applies on the next launch. The
+heap itself is capped at the profile ceiling, so on a 5120 MB budget Balanced
+lands around 2816 MB and Performance around 2880 MB — the budget, not the
+profile name, is the real limit.
+
+The launcher writes the whole decision to `logs/current/mc_launch.log`:
+
+```
+JVM memory plan:
+  profile balanced, app budget 5120 MB (reported), used before JVM 342 MB, physical 10240 MB
+  heap -Xmx2816M -Xms512M, direct 256 MB, metaspace 448 MB, code cache 192 MB, class space 256 MB
+  native outside the heap 1312 MB, graphics reserve 320 MB, expected peak 4798 MB, headroom 322 MB
+```
+
+`jvm_args.txt` is still appended last and still wins, but it is no longer the
+recommended way to change the heap: the `#-Xmx2048M` line in the seeded
+template shows the syntax, and `#-XX:MaxMetaspaceSize=512M` raises the
+metaspace cap for very large packs.
+
+Cleanroom / 1.12.2 keeps its own `-Xmx2560M` and is deliberately left alone.
+
+### Why did it crash with "Native memory allocation (mmap) failed ... G1 virtual space"?
+
+Because the heap used to be pinned at 3584 MB while metaspace, the code cache
+and the compressed class space were unlimited, so the JVM's *native* side
+competed with the launcher, Mesa and D3D12 for the same budget. The old build
+also forced `-XX:G1HeapRegionSize=32M`, which makes G1 commit nine regions —
+288 MiB — in a single `mmap`. That is the allocation that failed in the field,
+and it is why the region size is now left to HotSpot (2-4 MB here).
+
+The crash screen now names the resource that ran out. If it says **native
+memory**, a bigger heap makes it worse: pick Conservative.
 
 ## Can the launcher code itself give me more FPS?
 

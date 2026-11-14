@@ -28,6 +28,18 @@ g++ -std=c++17 -Wall -Wextra -Werror -pedantic \
 /tmp/perf_cache_test
 
 echo
+echo "== JVM memory plan (C++) =="
+g++ -std=c++17 -Wall -Wextra -Werror -pedantic \
+    -o /tmp/jvm_memory_test tests/jvm_memory_test.cpp
+/tmp/jvm_memory_test
+
+echo
+echo "== Mod index cache (C++) =="
+g++ -std=c++17 -Wall -Wextra -Werror -pedantic \
+    -o /tmp/mod_index_test tests/mod_index_test.cpp
+/tmp/mod_index_test
+
+echo
 echo "== Ole32/COM UWP shim contract (C++) =="
 g++ -std=c++17 -Wall -Wextra -Werror -pedantic \
     -o /tmp/ole32_shim_test tests/ole32_shim_test.cpp

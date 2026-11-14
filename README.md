@@ -68,6 +68,12 @@ Use the **Mods** page to manage profiles and install content. Start **Remote Fil
 - Controlify bundled by default (with YACL) for controller support on the default NeoForge 1.21.1 target.
 - Profile backups and restore options, including undoing the last deleted profile.
 - Remote Files for managing profiles and worlds through a browser on the local network.
+- Automatic JVM memory plan with three profiles (Conservative, Balanced,
+  Performance) derived from the app budget Windows reports, so the heap stops
+  competing with metaspace, the code cache and the graphics runtime. See
+  [`docs/MEMORY-AND-STARTUP.es.md`](docs/MEMORY-AND-STARTUP.es.md).
+- Persistent mod metadata index, so a launch no longer opens every jar to look
+  up a mod id.
 - Download repair, current and previous run logs, and crash report ZIPs.
 - Optional crash and usage reporting, controlled from launcher Settings.
 

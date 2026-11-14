@@ -199,6 +199,15 @@ ParsedCrash ParseHsErr(const std::string& text) {
         }
         if (parsed.message.empty() && trimmed.find("failed to map") != std::string::npos) {
             parsed.message = trimmed;
+        } else if (trimmed.find("Error detail:") != std::string::npos &&
+                   parsed.message.find("Error detail:") == std::string::npos) {
+            // "# Error detail: G1 virtual space" is what tells a failed region
+            // mmap apart from a full metaspace, so it must not be dropped.
+            if (parsed.message.empty()) {
+                parsed.message = trimmed;
+            } else {
+                parsed.message += " " + trimmed;
+            }
         }
     }
     if (parsed.outerClass.empty()) return ParsedCrash();

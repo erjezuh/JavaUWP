@@ -126,4 +126,7 @@ struct AuthUiState {
     std::wstring settingsNote;
     ModSource settingsModSource = ModSource::Modrinth;
     std::wstring settingsCurseForgeKeyHint;
+    // Displayed label of the saved JVM memory profile (Settings row 7).
+    std::wstring settingsMemoryProfile = L"Balanced";
+    std::wstring settingsMemoryDetail;
 };

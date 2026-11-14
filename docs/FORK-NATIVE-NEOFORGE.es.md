@@ -429,27 +429,59 @@ Pruebas rápidas si aun así crashea:
 > se confirmó que el AV al entrar al mundo era de Embeddium y no de esta ruta
 > COM/audio; mira la sección de renderizado más arriba.
 
-## Memoria para perfiles con mods (3,5 GiB)
+## Memoria: plan automático, perfiles y el fallo `G1 virtual space`
 
-El heap máximo de la JVM es **3584 MiB = 3,5 GiB** (`-Xmx3584M`), antes era
-`-Xmx3G`. **Java no admite decimales en `-Xmx`**: escribir la cifra con punto
-haría que la JVM rechazara el arranque, así que hay que expresarla en MiB
-enteros. Siguen igual `-Xms512M`, `-XX:MaxDirectMemorySize=512M` y todos los
-ajustes G1. No es un ajuste gráfico.
+**El heap ya no es un número fijo.** En cada arranque el launcher lee el
+presupuesto de memoria que Windows da a la app (unos 5120 MB en Series S en
+modo dev), mide lo que ya usan el launcher y el runtime gráfico, resta lo que la
+JVM reserva **fuera** del heap Java y entrega el resto al heap, redondeado a
+64 MB y con un margen de seguridad.
 
-`jvm_args.txt` se aplica **al final** y gana a los valores incorporados: la
-plantilla incluye `#-Xmx3G` comentado para volver atrás. En `mc_launch.log`
-debe aparecer `JVM heap: -Xmx3584M (3.5 GiB) ...`.
+| Perfil | Techo de heap | Topes nativos | Cuándo usarlo |
+| --- | --- | --- | --- |
+| Conservador | 2048 MB | metaspace 384 MB, code cache 160 MB, class space 192 MB, directa 192 MB | El juego se cierra sin mensaje o la consola mata la app. |
+| Equilibrado (por defecto) | 2816 MB | metaspace 448 MB, code cache 192 MB, class space 256 MB, directa 256 MB | Uso normal con 100-150 mods. |
+| Rendimiento | 3072 MB | metaspace 448 MB, code cache 192 MB, class space 256 MB, directa 256 MB | Sólo si aún falta heap **Java**. |
 
-> **Ojo con el límite de la consola**: el código documenta ~5120 MB de
-> presupuesto de app en Series S en modo dev. Con 3584 MiB de heap más 512 MiB
-> de buffers directos, metaspace y el runtime Mesa/D3D12 se queda cerca. Si con
-> un modpack grande la app se cierra por memoria, descomenta `#-Xmx3G` o baja
-> `-XX:MaxDirectMemorySize`. Cleanroom / 1.12.2 mantiene su propio
-> `-Xmx2560M`; no se han tocado otros targets. Sin verificación en consola
-> todavía, y esto alivia la presión de GC, **no sube el techo de FPS**.
+Se cambia en **Ajustes → Perfil de memoria** y se aplica en el siguiente
+arranque. En `logs/current/mc_launch.log` queda la decisión completa:
 
-## Optimizaciones del camino caliente (sin cambiar ajustes gráficos)
+```
+JVM memory plan:
+  profile balanced, app budget 5120 MB (reported), used before JVM 342 MB, physical 10240 MB
+  heap -Xmx2816M -Xms512M, direct 256 MB, metaspace 448 MB, code cache 192 MB, class space 256 MB
+  native outside the heap 1312 MB, graphics reserve 320 MB, expected peak 4798 MB, headroom 322 MB
+  profile=balanced budget=5120M baseline=342M heap=2816M/512M ... headroom=322M notes=mods=142
+```
+
+Seguido de `JVM options in effect [...]`, la lista exacta que recibe la JVM.
+
+### Por qué fallaba `Native memory allocation (mmap) failed ... G1 virtual space`
+
+El build anterior fijaba `-Xmx3584M` y dejaba **sin límite** el metaspace, la
+caché de código y el *compressed class space*: el lado nativo de la JVM
+competía con el launcher, Mesa y D3D12 por el mismo presupuesto. Además forzaba
+`-XX:G1HeapRegionSize=32M`, y con regiones de 32 MB G1 confirma regiones de
+nueve en nueve: **301989888 bytes = 288 MiB de un solo `mmap`**, exactamente el
+tamaño que falló. Ahora:
+
+- `-Xmx/-Xms` salen del plan, no de una constante.
+- `-XX:MaxMetaspaceSize`, `-XX:ReservedCodeCacheSize` y
+  `-XX:CompressedClassSpaceSize` acotan lo nativo.
+- `-XX:G1ReservePercent` vuelve a 10 (el 20 anterior recortaba el heap útil sin
+  dar nada a cambio) y **no se fuerza** `G1HeapRegionSize`.
+- `-XX:-AlwaysPreTouch` explícito: nunca confirmar los 3,5 GB de golpe.
+- `-Xms512M` se mantiene pequeño por el mismo motivo.
+
+La pantalla de crash ahora distingue el fallo nativo del heap Java y dice qué
+tocar. Si dice **memoria nativa**, subir el heap empeora el problema.
+
+> **Sin verificar en consola**: los valores y el modelo salen de la memoria
+> reportada por el sistema y de la documentación de HotSpot; falta medir en un
+> Series S/S con un modpack real de 100-150 mods. Ver
+> [`MEMORY-AND-STARTUP.es.md`](MEMORY-AND-STARTUP.es.md).
+
+## Optimizaciones del camino caliente (sin cambiar ajustes gráficos)## Optimizaciones del camino caliente (sin cambiar ajustes gráficos)
 
 El techo de FPS en esta plataforma lo marcan **VSync, la resolución del
 framebuffer y la capa Mesa → D3D12** (traducción de shaders SPIR-V → DXIL y

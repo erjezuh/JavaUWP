@@ -1,5 +1,67 @@
 # Changelog
 
+## 2026-11-14 — Plan de memoria, arranque de mods más rápido y diagnóstico de memoria nativa (1.0.25.0)
+
+### Fixed
+
+El informe `InsufficientMemory` / `Native memory allocation (mmap) failed to map
+301989888 bytes. Error detail: G1 virtual space` tenía tres causas en la
+configuración del launcher, no en la consola:
+
+- El heap estaba fijado en **`-Xmx3584M`** aunque el presupuesto de la app sea
+  uno solo y compartido con el launcher, Direct2D, Mesa/D3D12, LWJGL y JNA.
+- `MaxMetaspaceSize`, `ReservedCodeCacheSize` y `CompressedClassSpaceSize`
+  iban **sin límite** (HotSpot reserva 1 GB de class space por defecto).
+- **`-XX:G1HeapRegionSize=32M`** hacía que G1 confirmara 9 regiones de una vez:
+  9 × 32 MiB = 301989888 bytes, exactamente el `mmap` que falló.
+
+### Changed
+
+- `MC.Xbox/launch/jvm_memory.h` (nuevo, portable) calcula el heap en cada
+  arranque: presupuesto reportado por Windows − uso actual del host − reserva
+  gráfica − nativo de la JVM − margen, redondeado a 64 MB y limitado por perfil.
+  Perfiles `conservative` (2048 MB), `balanced` (2816 MB, por defecto) y
+  `performance` (3072 MB); el resultado real lo manda el presupuesto.
+- Todos los consumidores nativos quedan acotados: metaspace 384/448 MB, code
+  cache 160/192 MB, class space 192/256 MB, directa 192/256 MB.
+  `G1ReservePercent` vuelve a 10, se añade `-XX:-AlwaysPreTouch` y **se quita**
+  `G1HeapRegionSize` para que HotSpot elija 2–4 MB.
+- `mc_launch.log` registra el plan completo y la lista de opciones en vigor; el
+  marcador de crash guarda `jvmProfile`, `jvmHeapMb` y `jvmPlan`.
+- La pantalla de crash distingue un fallo de **memoria nativa** de uno de heap
+  Java y dice qué tocar (subir el heap empeora el primero). `crash_parse.cpp`
+  conserva la línea `# Error detail:`, que antes se perdía.
+- Nuevo ajuste **Ajustes → Perfil de memoria**, aplicado en el arranque
+  siguiente.
+
+### Performance
+
+- **Índice de mods persistente** (`MC.Xbox/mods/mod_index.h`, `mod-index.tsv`):
+  una sola pasada por directorio y caché por tamaño + fecha de modificación.
+  Las seis rutas que abrían todos los JAR para resolver un mod por su
+  `fabric.mod.json` ahora resuelven primero por nombre de archivo, después por
+  id cacheado y sólo sondean JARs nuevos. En un perfil normal no se abre
+  **ningún** JAR.
+- `ReadZipTextFile` mapea el archivo en lugar de leerlo entero a memoria, así
+  que un sondeo ya no mete el JAR completo en el *commit* de la app.
+- Se avisa en el log si dos JAR declaran el mismo id (sin borrar nada).
+- Nuevas fases medidas (`LaunchClock`) y `logs/current/launch_timings.txt` con
+  una fila por fase, más `first frame presented after N s`.
+
+### Tests
+
+- `tests/jvm_memory_test.cpp` y `tests/mod_index_test.cpp`, cableados en
+  `tests/run-tests.sh`.
+- Comprobaciones 18–22 de `scripts/validate-fork-targets.py`: nada de heap fijo
+  en el código, todos los topes nativos presentes, sin `G1HeapRegionSize`, índice
+  de mods en uso, lectura de JAR mapeada y tests registrados.
+
+> **Sin verificación en consola todavía.** No hay UWP, MSVC ni Series S en el
+> entorno de desarrollo: el APPX se compila en CI y falta medir con un modpack
+> real de 100–150 mods y repetir entradas/salidas de servidor. Detalles,
+> metodología y limitaciones en
+> [`docs/MEMORY-AND-STARTUP.es.md`](docs/MEMORY-AND-STARTUP.es.md).
+
 Notable changes to Bandit Launcher. Nightly packages are numbered by build revision rather than by release, so entries here are dated.
 
 ## 2026-11-02 — Heap de 3,5 GiB para perfiles con mods

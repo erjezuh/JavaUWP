@@ -381,30 +381,94 @@ int CompareVersionNumbers(const std::string& lhs, const std::string& rhs) {
     return 0;
 }
 
+unsigned long long PhysicalMemoryMb() {
+    MEMORYSTATUSEX status = {};
+    status.dwLength = sizeof(status);
+    if (!GlobalMemoryStatusEx(&status)) return 0;
+    return static_cast<unsigned long long>(status.ullTotalPhys) / (1024ull * 1024ull);
+}
+
+namespace {
+
+std::wstring JvmMemoryProfilePath() {
+    const std::wstring localDir = GetLocalStateDir();
+    if (localDir.empty()) return std::wstring();
+    return localDir + L"\\jvm-memory\\profile.txt";
+}
+
+} // namespace
+
+std::wstring ReadJvmMemoryProfileSetting() {
+    const std::wstring path = JvmMemoryProfilePath();
+    if (path.empty()) return std::wstring();
+    std::wstring text;
+    if (!ReadTextFile(path, text)) return std::wstring();
+    return ToLowerW(TrimWhitespace(StripNewlines(text)));
+}
+
+bool WriteJvmMemoryProfileSetting(const std::wstring& id) {
+    const std::wstring path = JvmMemoryProfilePath();
+    if (path.empty()) return false;
+    if (!EnsureDirectoryTree(GetParentDir(path))) return false;
+    const std::wstring saved = WriteTextFile(path, ToLowerW(TrimWhitespace(id)) + L"\n");
+    if (!saved) {
+        WriteLogF(L"jvm memory profile could not be saved at %s", path.c_str());
+    }
+    return saved;
+}
+
 bool ReadZipTextFile(const std::wstring& zipPath, const char* entryName, std::wstring& out) {
     out.clear();
-    std::ifstream in(zipPath, std::ios::binary);
-    if (!in) return false;
-    std::vector<unsigned char> bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-    if (bytes.empty()) return false;
+    if (!entryName || !*entryName) return false;
 
-    mz_zip_archive zip{};
-    if (!mz_zip_reader_init_mem(&zip, bytes.data(), bytes.size(), 0)) return false;
-    const int idx = mz_zip_reader_locate_file(&zip, entryName, nullptr, 0);
-    if (idx < 0) {
-        mz_zip_reader_end(&zip);
+    // Map the archive read-only. The previous implementation read the whole jar
+    // into a std::vector first, so every metadata probe added the full jar size
+    // to the app's commit charge - the same 5120 MB the JVM heap comes out of.
+    // With a mapping only the pages miniz actually touches are resident.
+    HANDLE file = CreateFile2(
+        zipPath.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, OPEN_EXISTING, nullptr);
+    if (file == INVALID_HANDLE_VALUE) return false;
+
+    LARGE_INTEGER size = {};
+    constexpr long long kMaxMappedJar = 512ll * 1024ll * 1024ll;
+    if (!GetFileSizeEx(file, &size) || size.QuadPart <= 0 || size.QuadPart > kMaxMappedJar) {
+        CloseHandle(file);
         return false;
     }
 
-    size_t outSize = 0;
-    void* p = mz_zip_reader_extract_to_heap(&zip, static_cast<mz_uint>(idx), &outSize, 0);
-    mz_zip_reader_end(&zip);
-    if (!p) return false;
+    HANDLE mapping = CreateFileMappingW(file, nullptr, PAGE_READONLY, 0, 0, nullptr);
+    if (!mapping) {
+        CloseHandle(file);
+        return false;
+    }
+    void* view = MapViewOfFile(mapping, FILE_MAP_READ, 0, 0, 0);
+    if (!view) {
+        CloseHandle(mapping);
+        CloseHandle(file);
+        return false;
+    }
 
-    std::string text(static_cast<const char*>(p), static_cast<const char*>(p) + outSize);
-    mz_free(p);
-    out = a2w(text.c_str());
-    return true;
+    bool ok = false;
+    mz_zip_archive zip{};
+    if (mz_zip_reader_init_mem(&zip, view, static_cast<size_t>(size.QuadPart), 0)) {
+        const int idx = mz_zip_reader_locate_file(&zip, entryName, nullptr, 0);
+        if (idx >= 0) {
+            size_t outSize = 0;
+            void* p = mz_zip_reader_extract_to_heap(&zip, static_cast<mz_uint>(idx), &outSize, 0);
+            if (p) {
+                std::string text(static_cast<const char*>(p), static_cast<const char*>(p) + outSize);
+                mz_free(p);
+                out = a2w(text.c_str());
+                ok = true;
+            }
+        }
+        mz_zip_reader_end(&zip);
+    }
+
+    UnmapViewOfFile(view);
+    CloseHandle(mapping);
+    CloseHandle(file);
+    return ok;
 }
 
 std::wstring AppStateDir(const std::wstring& runtimeRoot) {

@@ -1,4 +1,5 @@
 #include "mod_defaults.h"
+#include "mod_index.h"
 #include "sodium_family.h"
 
 #include "crash_report.h"
@@ -6,6 +7,7 @@
 
 #include <cmath>
 #include <sstream>
+#include <utility>
 #include <vector>
 
 #include <winrt/base.h>
@@ -13,59 +15,175 @@
 #include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.Foundation.Collections.h>
 
-static bool ModJarHasFabricId(const std::wstring& jarPath, const wchar_t* modId) {
-    using namespace winrt::Windows::Data::Json;
-    if (!modId || !*modId) return false;
+// One directory scan per launch feeds every lookup below. File names, sizes and
+// write times come from the directory entry, so a jar is only opened when its
+// mod id is genuinely unknown; the answer is cached in mod-index.tsv and reused
+// while (size, write time) still match.
+namespace {
 
-    std::wstring fabricModJson;
-    if (!ReadZipTextFile(jarPath, "fabric.mod.json", fabricModJson)) {
-        return false;
+modindex::Entries g_modIndex;
+std::wstring g_modIndexDir;
+std::wstring g_modIndexPath;
+bool g_modIndexLoaded = false;
+bool g_modIndexDirty = false;
+
+unsigned long long FileSizeOf(const WIN32_FIND_DATAW& fd) {
+    return (static_cast<unsigned long long>(fd.nFileSizeHigh) << 32) |
+        static_cast<unsigned long long>(fd.nFileSizeLow);
+}
+
+unsigned long long WriteTimeOf(const WIN32_FIND_DATAW& fd) {
+    return (static_cast<unsigned long long>(fd.ftLastWriteTime.dwHighDateTime) << 32) |
+        static_cast<unsigned long long>(fd.ftLastWriteTime.dwLowDateTime);
+}
+
+void ScanModsDir(const std::wstring& modsDir, modindex::Entries& out) {
+    out.clear();
+    if (modsDir.empty()) return;
+    WIN32_FIND_DATAW fd = {};
+    const std::wstring pattern = modsDir + L"\\*.jar";
+    // The large fetch cuts syscalls on a 150 jar folder, but fall back to the
+    // plain call if the container rejects it: an empty index would silently
+    // disable the renderer and controller defaults below.
+    HANDLE h = FindFirstFileExW(
+        pattern.c_str(), FindExInfoBasic, &fd, FindExSearchNameMatch, nullptr, FIND_FIRST_EX_LARGE_FETCH);
+    if (h == INVALID_HANDLE_VALUE) {
+        h = FindFirstFileExW(
+            pattern.c_str(), FindExInfoBasic, &fd, FindExSearchNameMatch, nullptr, 0);
+    }
+    if (h == INVALID_HANDLE_VALUE) return;
+    do {
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+        modindex::Entry entry;
+        entry.name = w2a(fd.cFileName);
+        entry.size = FileSizeOf(fd);
+        entry.writeTime = WriteTimeOf(fd);
+        out.push_back(std::move(entry));
+    } while (FindNextFileW(h, &fd));
+    FindClose(h);
+}
+
+// The cache lives next to the game directory, per profile, and is rewritten only
+// when something actually changed.
+std::wstring ModIndexPathFor(const std::wstring& modsDir) {
+    const std::wstring gameDir = GetParentDir(modsDir);
+    if (gameDir.empty()) return std::wstring();
+    return gameDir + L"\\mod-index.tsv";
+}
+
+void SaveModIndex() {
+    if (!g_modIndexDirty || g_modIndexPath.empty()) return;
+    const std::wstring serialized = a2w(modindex::Serialize(g_modIndex).c_str());
+    if (WriteTextFile(g_modIndexPath, serialized)) {
+        g_modIndexDirty = false;
+        WriteLogF(L"Mod index saved: %llu jar(s) at %s",
+            static_cast<unsigned long long>(g_modIndex.size()), g_modIndexPath.c_str());
+    } else {
+        WriteLogF(L"Mod index could not be saved at %s err=%u", g_modIndexPath.c_str(), GetLastError());
+    }
+}
+
+void EnsureModIndex(const std::wstring& modsDir) {
+    if (g_modIndexLoaded && g_modIndexDir == modsDir) return;
+    g_modIndexLoaded = true;
+    g_modIndexDir = modsDir;
+    g_modIndexPath = ModIndexPathFor(modsDir);
+    g_modIndex.clear();
+
+    if (modsDir.empty()) return;
+    const unsigned long long startedAt = GetTickCount64();
+
+    modindex::Entries scanned;
+    ScanModsDir(modsDir, scanned);
+
+    modindex::Entries cached;
+    if (!g_modIndexPath.empty()) {
+        std::wstring cacheText;
+        if (ReadTextFile(g_modIndexPath, cacheText)) {
+            if (!modindex::Parse(w2a(cacheText), cached)) {
+                WriteLogF(L"Mod index at %s was unreadable, rebuilding it", g_modIndexPath.c_str());
+            }
+        }
     }
 
+    g_modIndex = modindex::Merge(cached, scanned);
+    size_t reused = 0;
+    for (const modindex::Entry& entry : g_modIndex) {
+        if (entry.probed) ++reused;
+    }
+    g_modIndexDirty = reused != g_modIndex.size();
+    WriteLogF(L"Mod index: %llu jar(s), %llu known id(s), %llu ms",
+        static_cast<unsigned long long>(g_modIndex.size()),
+        static_cast<unsigned long long>(reused),
+        GetTickCount64() - startedAt);
+}
+
+std::wstring ModJarPath(const std::wstring& modsDir, const modindex::Entry& entry) {
+    return modsDir + L"\\" + a2w(entry.name.c_str());
+}
+
+// Reads the fabric mod id, which is the only thing the lookups below need.
+bool ModJarFabricId(const std::wstring& jarPath, std::string& id) {
+    using namespace winrt::Windows::Data::Json;
+    id.clear();
+    std::wstring fabricModJson;
+    if (!ReadZipTextFile(jarPath, "fabric.mod.json", fabricModJson)) return false;
     try {
         JsonObject root = JsonObject::Parse(winrt::hstring(fabricModJson.c_str()));
         if (!root.HasKey(L"id") || root.GetNamedValue(L"id").ValueType() != JsonValueType::String) {
             return false;
         }
-        return root.GetNamedString(L"id") == modId;
+        id = w2a(root.GetNamedString(L"id").c_str());
+        return true;
     } catch (...) {
         return false;
     }
 }
 
+} // namespace
+
+// Resolution order: file name match, then the cached mod id, then probing jars
+// that were never read. The old implementation opened every jar first and only
+// fell back to the file name, which cost one full archive read per jar per
+// lookup - five times per launch on a fresh profile.
 static bool FindModJarByFabricIdOrName(
     const std::wstring& modsDir,
     const wchar_t* modId,
     const wchar_t* fileNameToken,
     std::wstring& jarPath) {
     jarPath.clear();
+    if (modsDir.empty()) return false;
+    EnsureModIndex(modsDir);
+    if (g_modIndex.empty()) return false;
 
-    WIN32_FIND_DATAW fd = {};
-    HANDLE h = FindFirstFileW((modsDir + L"\\*.jar").c_str(), &fd);
-    if (h == INVALID_HANDLE_VALUE) return false;
+    const std::string wanted = (modId && *modId) ? w2a(modId) : std::string();
+    const std::string token = (fileNameToken && *fileNameToken) ? w2a(fileNameToken) : std::string();
 
-    std::wstring fallback;
-    do {
-        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
-        const std::wstring path = modsDir + L"\\" + fd.cFileName;
-        if (ModJarHasFabricId(path, modId)) {
-            jarPath = path;
-            FindClose(h);
+    const size_t probeLimit = g_modIndex.size() + 1;
+    for (size_t attempt = 0; attempt < probeLimit; ++attempt) {
+        const modindex::Lookup found = modindex::LookupMod(g_modIndex, wanted, token);
+        if (found.source == modindex::LookupSource::NotFound || found.index < 0) return false;
+        if (found.source != modindex::LookupSource::Probe) {
+            jarPath = ModJarPath(modsDir, g_modIndex[static_cast<size_t>(found.index)]);
+            if (found.source == modindex::LookupSource::FabricIdCache) {
+                WriteLogF(L"Mod id %s resolved from the index: %s",
+                    modId ? modId : L"", GetFileName(jarPath).c_str());
+            }
             return true;
         }
 
-        if (fallback.empty() && fileNameToken && *fileNameToken) {
-            const std::wstring lowerName = ToLowerW(fd.cFileName);
-            if (lowerName.find(fileNameToken) != std::wstring::npos) {
-                fallback = path;
-            }
+        // Probe exactly one jar, then let the same lookup run again.
+        modindex::Entry& entry = g_modIndex[static_cast<size_t>(found.index)];
+        const std::wstring path = ModJarPath(modsDir, entry);
+        std::string id;
+        ModJarFabricId(path, id);
+        entry.fabricId = id;
+        entry.probed = true;
+        g_modIndexDirty = true;
+        if (!wanted.empty() && modindex::LowerAscii(id) == modindex::LowerAscii(wanted)) {
+            jarPath = path;
+            return true;
         }
-    } while (FindNextFileW(h, &fd));
-    FindClose(h);
-
-    if (!fallback.empty()) {
-        jarPath = fallback;
-        return true;
     }
     return false;
 }
@@ -814,6 +932,13 @@ void ConfigureKnownModDefaults(
     const std::wstring& userModsDir,
     const std::wstring& minecraftVersion,
     const std::wstring& bundledModsDir) {
+    // One scan, then every lookup below is served from it.
+    EnsureModIndex(userModsDir);
+    for (const std::string& duplicate : modindex::DuplicateIds(g_modIndex)) {
+        WriteLogF(L"Two jars declare the same mod id (%s); the game will pick one. "
+                  L"Remove the one you do not want.", a2w(duplicate.c_str()).c_str());
+    }
+
     PatchMoonlightPoiMixin(gameDir, userModsDir, minecraftVersion);
     ConfigureSodiumFamilyDefaults(gameDir, userModsDir, minecraftVersion);
     ConfigureDistantHorizonsDefaults(gameDir, userModsDir);
@@ -826,4 +951,6 @@ void ConfigureKnownModDefaults(
         DirectoryHasBanditController(bundledModsDir);
     SetEnvironmentVariableW(L"MC_LEGACY_CONTROLLER_MOD", legacyControllerMod ? L"1" : L"0");
     WriteLogF(L"Legacy controller mod input mode: %s", legacyControllerMod ? L"enabled" : L"disabled");
+    // Persist whatever the lookups had to read, so the next launch opens nothing.
+    SaveModIndex();
 }
