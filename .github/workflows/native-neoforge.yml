@@ -166,11 +166,34 @@ jobs:
             $buildArgs.SkipVersionManifests = $true
             $buildArgs.SkipVersionCompat = $true
           }
-          # Tee the whole build output: when a compile fails, the runner log
-          # lives on a blob that is not always reachable, so the failure step
-          # below commits the tail into the branch instead.
-          .\build.ps1 @buildArgs 2>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\build.log"
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # Capture EVERYTHING: a terminating exception thrown by build.ps1
+          # never reaches the pipeline, so a transcript plus try/catch is the
+          # only way to see the preflight failure on the runner.
+          $log = "$env:RUNNER_TEMP\build.log"
+          function Esc([string]$t) { $t.Replace('%','%25').Replace("`r",'%0D').Replace("`n",'%0A') }
+          Write-Host "GITHUB_RUN_NUMBER=$env:GITHUB_RUN_NUMBER APPX_VERSION=$env:APPX_VERSION"
+          Start-Transcript -Path $log -Force | Out-Null
+          $exit = 0
+          try {
+            .\build.ps1 @buildArgs 2>&1 | ForEach-Object { $_ }
+          } catch {
+            $exit = 1
+            Write-Host "BUILD THREW: $($_.Exception.Message)"
+            Write-Host $_.ScriptStackTrace
+            $detail = Esc "$($_.Exception.Message)`n$($_.ScriptStackTrace)"
+            if ($detail.Length -gt 3000) { $detail = $detail.Substring(0, 3000) }
+            Write-Output "::error title=build.ps1 threw:: $detail"
+          }
+          if ($exit -eq 0 -and $LASTEXITCODE -ne 0) { $exit = $LASTEXITCODE }
+          Write-Host "=== build exit $exit ==="
+          Stop-Transcript | Out-Null
+          if ($exit -ne 0) {
+            $lines = @(Get-Content $log -ErrorAction SilentlyContinue)
+            $tail = Esc (($lines | Select-Object -Last 60) -join "`n")
+            if ($tail.Length -gt 5000) { $tail = $tail.Substring($tail.Length - 5000) }
+            Write-Output "::error title=build tail::$tail"
+            exit $exit
+          }
 
       - name: Save build cache
         if: ${{ !cancelled() }}
