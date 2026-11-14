@@ -185,22 +185,44 @@ jobs:
           key: native-appx-${{ runner.os }}-${{ github.sha }}
 
       - name: Publish the build log on failure
-        # Keeps a failing compile readable from the repository itself: the tail of
-        # build.log lands in docs/ci/last-build-failure.log on the same branch.
+        # The runner log lives on a blob that is not always reachable, and the
+        # commit below is a nice-to-have. The annotations are the reliable
+        # channel: they surface through the check-run API.
         if: ${{ failure() }}
         shell: powershell
         run: |
           $log = "$env:RUNNER_TEMP\build.log"
-          if (-not (Test-Path $log)) { Write-Host "no build log to publish"; exit 0 }
+          if (-not (Test-Path $log)) { Write-Output "::error::build.log was never created"; exit 0 }
+          $lines = @(Get-Content $log)
+          function Esc([string]$s) { $s.Replace('%','%25').Replace("`r",'%0D').Replace("`n",'%0A') }
+          $hits = @()
+          for ($i = 0; $i -lt $lines.Count; $i++) {
+            if ($lines[$i] -match 'error [A-Z]+[0-9]+|fatal error|: error ' ) { $hits += $i }
+          }
+          if ($hits.Count -eq 0) {
+            $tail = Esc (($lines | Select-Object -Last 80) -join "`n")
+            if ($tail.Length -gt 5500) { $tail = $tail.Substring($tail.Length - 5500) }
+            Write-Output "::error title=build failed, no error line matched::$tail"
+          } else {
+            $n = 0
+            foreach ($i in ($hits | Select-Object -First 8)) {
+              $n++
+              $start = [Math]::Max(0, $i - 3)
+              $end = [Math]::Min($lines.Count - 1, $i + 4)
+              $msg = Esc (($lines[$start..$end] -join "`n"))
+              if ($msg.Length -gt 5500) { $msg = $msg.Substring(0, 5500) }
+              Write-Output "::error title=compile error $n::$msg"
+            }
+          }
+          # Keep a copy in the branch when the push is permitted.
           New-Item -ItemType Directory -Force docs/ci | Out-Null
-          Get-Content $log -Tail 400 | Set-Content docs/ci/last-build-failure.log -Encoding utf8
-          git add -f docs/ci/last-build-failure.log
-          if (git diff --cached --quiet) { exit 0 }
+          ($lines | Select-Object -Last 400) | Set-Content docs/ci/last-build-failure.log -Encoding utf8
+          git add -f docs/ci/last-build-failure.log 2>$null
           git -c user.name="github-actions[bot]" `
               -c user.email="41898282+github-actions[bot]@users.noreply.github.com" `
-              commit -m "CI: build failure log from run $env:GITHUB_RUN_ID"
-          git pull --rebase origin "$env:GITHUB_REF_NAME"
-          git push origin "HEAD:$env:GITHUB_REF_NAME"
+              commit -m "CI: build failure log from run $env:GITHUB_RUN_ID" 2>$null
+          git pull --rebase origin "$env:GITHUB_REF_NAME" 2>$null
+          git push origin "HEAD:$env:GITHUB_REF_NAME" 2>$null
 
       - name: Stage native release assets
         shell: powershell
