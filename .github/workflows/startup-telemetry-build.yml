@@ -75,7 +75,7 @@ jobs:
 
       - name: Build APPX (validation only)
         shell: powershell
-        run: .\\build.ps1 -SkipStopAppProcesses -ReleaseChannel nightly -AppxVersion 1.0.0.1
+        run: .\\build.ps1 -SkipStopAppProcesses -McVersion 1.21.1 -ReleaseChannel nightly -AppxVersion 1.0.0.2
 
       - name: Upload compiled APPX
         uses: actions/upload-artifact@v6
