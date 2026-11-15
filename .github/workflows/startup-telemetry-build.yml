@@ -9,7 +9,6 @@ on:
       - "MC.Xbox/**"
       - "glfw_shim/**"
       - "compat_mod/**"
-      - "controller_mod/**"
       - "mouse_support/**"
       - "patch/**"
       - "scripts/**"
@@ -71,7 +70,7 @@ jobs:
 
       - name: Prepare build cache
         shell: powershell
-        run: .\\scripts\\setup.ps1
+        run: .\\scripts\\setup.ps1 -MinecraftVersion 1.21.1 -FabricLoaderVersion 0.19.5
 
       - name: Build APPX (validation only)
         shell: powershell
