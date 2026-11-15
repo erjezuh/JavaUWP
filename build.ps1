@@ -433,12 +433,6 @@ if (-not (Test-Path $shimDll)) { throw "GLFW shim DLL missing after build: $shim
 Write-Host "=== Building Xbox compatibility mod ==="
 & (Join-Path $root "compat_mod\build_compat_mod.ps1")
 
-Write-Host "=== Building default Fabric controller mod ==="
-& (Join-Path $root "controller_mod\fabric\build_fabric_controller_mod.ps1") `
-    -MinecraftVersion $ProjectConfig.MinecraftVersion `
-    -LoaderVersion $ProjectConfig.FabricLoaderVersion `
-    -OutputDir (Join-Path $gameDir "mods")
-
 Write-Host "=== Assembling PackageContent ==="
 Remove-Item -Recurse -Force $pkg -ErrorAction SilentlyContinue
 Ensure-Dir (Join-Path $pkg "Assets")
@@ -609,24 +603,6 @@ $fabricTargets = @($manifestTargets | Where-Object { $_.loader -eq "fabric" })
 $forgeTargets = @($manifestTargets | Where-Object { $_.loader -eq "forge" })
 $neoForgeTargets = @($manifestTargets | Where-Object { $_.loader -eq "neoforge" })
 $cleanroomTargets = @($manifestTargets | Where-Object { $_.loader -eq "cleanroom" })
-function Test-ForgeControllerTarget {
-    param([Parameter(Mandatory = $true)]$Target)
-
-    return $Target.loader -eq "forge" -and $Target.controllerProvider -eq "forge"
-}
-
-function Test-FabricControllerTarget {
-    param([Parameter(Mandatory = $true)]$Target)
-
-    return $Target.loader -eq "fabric" -and $Target.controllerProvider -eq "fabric"
-}
-
-function Test-NeoForgeControllerTarget {
-    param([Parameter(Mandatory = $true)]$Target)
-
-    return $Target.loader -eq "neoforge" -and $Target.controllerProvider -eq "neoforge"
-}
-
 $fabricLoaderVersions = @($ProjectConfig.FabricLoaderVersion) + @($fabricTargets | ForEach-Object { $_.loaderVersion }) |
     Where-Object { $_ } |
     Select-Object -Unique
@@ -643,13 +619,12 @@ foreach ($loaderVersion in $fabricLoaderVersions) {
 if ($fabricLoaderVersions -contains "0.14.25") {
     Ensure-TinyRemapperJar -TinyRemapperVersion "0.8.2"
 }
-# Bundled mods (compat mod, optionally diagnostics) live under runtime\bundled-mods.
-# App.cpp copies them into LocalState\game\mods on launch.
-foreach ($name in @("banditvault-xbox-compat-1.0.0.jar", "banditvault-fabric-controller-1.0.0.jar")) {
-    $source = Join-Path $gameDir "mods\$name"
-    if (-not (Test-JarComplete $source)) { throw "Required bundled mod missing or incomplete $source" }
-    Copy-Item -LiteralPath $source -Destination (Join-Path $pkg "runtime\bundled-mods\$name") -Force
-}
+# Only the Xbox compatibility mod is bundled; no Controller Mod is built or packaged.
+# App.cpp copies this launcher-owned mod into LocalState\game\mods on launch.
+$compatModName = "banditvault-xbox-compat-1.0.0.jar"
+$compatModSource = Join-Path $gameDir "mods\$compatModName"
+if (-not (Test-JarComplete $compatModSource)) { throw "Required bundled mod missing or incomplete $compatModSource" }
+Copy-Item -LiteralPath $compatModSource -Destination (Join-Path $pkg "runtime\bundled-mods\$compatModName") -Force
 
 Write-Host "Copying natives..."
 Copy-Item (Join-Path $nativesSourceDir "*.dll") (Join-Path $pkg "natives\")
@@ -737,9 +712,7 @@ $manifestsDir = Join-Path $pkg "runtime\manifests"
 Ensure-Dir $manifestsDir
 $defaultTargetId = "$($ProjectConfig.MinecraftVersion)-fabric-$($ProjectConfig.FabricLoaderVersion)"
 Ensure-Dir (Join-Path $pkg "runtime\version-mods\$defaultTargetId")
-foreach ($name in @("banditvault-xbox-compat-1.0.0.jar", "banditvault-fabric-controller-1.0.0.jar")) {
-    Copy-Item (Join-Path $pkg "runtime\bundled-mods\$name") (Join-Path $pkg "runtime\version-mods\$defaultTargetId\$name") -Force
-}
+Copy-Item (Join-Path $pkg "runtime\bundled-mods\banditvault-xbox-compat-1.0.0.jar") (Join-Path $pkg "runtime\version-mods\$defaultTargetId\banditvault-xbox-compat-1.0.0.jar") -Force
 Copy-Item -Force $defaultDownloadManifest (Join-Path $manifestsDir "$defaultTargetId.tsv")
 Write-Host "Default per-version manifest: $defaultTargetId.tsv"
 
@@ -783,38 +756,10 @@ if (-not $SkipVersionCompat) {
             Add-BuildFailure -Stage "Compat mod" -Target $targetId -Reason $_.Exception.Message
             if (Test-Path $outDir) { Remove-Item -Recurse -Force $outDir }
         }
-        if (Test-FabricControllerTarget -Target $row) {
-            Write-Host "Building per-version Fabric controller mod: $targetId"
-            try {
-                & (Join-Path $root "controller_mod\fabric\build_fabric_controller_mod.ps1") `
-                    -MinecraftVersion $row.minecraftVersion `
-                    -LoaderVersion $lv `
-                    -OutputDir $outDir
-            } catch {
-                Add-BuildFailure -Stage "Fabric controller mod" -Target $targetId -Reason $_.Exception.Message
-            }
-        } else {
-            Write-Host "Skipping per-version Fabric controller mod for ${targetId}: no bundled controller provider for this target"
-        }
     }
     foreach ($row in $forgeTargets) {
         $lv = $row.loaderVersion
         $targetId = "$($row.minecraftVersion)-forge-$lv"
-        if (-not (Test-ForgeControllerTarget -Target $row)) {
-            Write-Host "Skipping per-version forge controller mod for ${targetId}: no bundled controller provider for this target"
-            continue
-        }
-        $outDir = Join-Path $versionModsRoot $targetId
-        Write-Host "Building per-version forge controller mod: $targetId"
-        try {
-            & (Join-Path $root "controller_mod\forge\build_forge_controller_mod.ps1") `
-                -MinecraftVersion $row.minecraftVersion `
-                -ForgeVersion "$($row.minecraftVersion)-$lv" `
-                -OutputDir $outDir
-        } catch {
-            Add-BuildFailure -Stage "Forge controller mod" -Target $targetId -Reason $_.Exception.Message
-            if (Test-Path $outDir) { Remove-Item -Recurse -Force $outDir }
-        }
     }
     foreach ($row in $cleanroomTargets) {
         $lv = $row.loaderVersion
@@ -826,40 +771,10 @@ if (-not $SkipVersionCompat) {
         } catch {
             Add-BuildFailure -Stage "Cleanroom UWP patch" -Target $targetId -Reason $_.Exception.Message
         }
-        if ($row.controllerProvider -ne "cleanroom") {
-            Write-Host "Skipping per-version Cleanroom controller mod for ${targetId}: no bundled controller provider for this target"
-            continue
-        }
-        $outDir = Join-Path $versionModsRoot $targetId
-        Write-Host "Building per-version Cleanroom controller mod: $targetId"
-        try {
-            & (Join-Path $root "controller_mod\cleanroom\build_cleanroom_controller_mod.ps1") `
-                -MinecraftVersion $row.minecraftVersion `
-                -CleanroomVersion $lv `
-                -OutputDir $outDir
-        } catch {
-            Add-BuildFailure -Stage "Cleanroom controller mod" -Target $targetId -Reason $_.Exception.Message
-            if (Test-Path $outDir) { Remove-Item -Recurse -Force $outDir }
-        }
     }
     foreach ($row in $neoForgeTargets) {
         $lv = $row.loaderVersion
         $targetId = "$($row.minecraftVersion)-neoforge-$lv"
-        if (-not (Test-NeoForgeControllerTarget -Target $row)) {
-            Write-Host "Skipping per-version NeoForge controller mod for ${targetId}: no bundled controller provider for this target"
-            continue
-        }
-        $outDir = Join-Path $versionModsRoot $targetId
-        Write-Host "Building per-version NeoForge controller mod: $targetId"
-        try {
-            & (Join-Path $root "controller_mod\neoforge\build_neoforge_controller_mod.ps1") `
-                -MinecraftVersion $row.minecraftVersion `
-                -NeoForgeVersion $lv `
-                -OutputDir $outDir
-        } catch {
-            Add-BuildFailure -Stage "NeoForge controller mod" -Target $targetId -Reason $_.Exception.Message
-            if (Test-Path $outDir) { Remove-Item -Recurse -Force $outDir }
-        }
     }
 } else {
     Write-Host "Skipping per-version compat mods (-SkipVersionCompat)"
