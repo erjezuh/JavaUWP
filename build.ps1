@@ -757,10 +757,6 @@ if (-not $SkipVersionCompat) {
             if (Test-Path $outDir) { Remove-Item -Recurse -Force $outDir }
         }
     }
-    foreach ($row in $forgeTargets) {
-        $lv = $row.loaderVersion
-        $targetId = "$($row.minecraftVersion)-forge-$lv"
-    }
     foreach ($row in $cleanroomTargets) {
         $lv = $row.loaderVersion
         $targetId = "$($row.minecraftVersion)-cleanroom-$lv"
@@ -771,10 +767,6 @@ if (-not $SkipVersionCompat) {
         } catch {
             Add-BuildFailure -Stage "Cleanroom UWP patch" -Target $targetId -Reason $_.Exception.Message
         }
-    }
-    foreach ($row in $neoForgeTargets) {
-        $lv = $row.loaderVersion
-        $targetId = "$($row.minecraftVersion)-neoforge-$lv"
     }
 } else {
     Write-Host "Skipping per-version compat mods (-SkipVersionCompat)"
