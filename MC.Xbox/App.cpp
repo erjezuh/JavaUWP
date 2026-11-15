@@ -627,6 +627,7 @@ public:
             continue;
         }
 
+        telemetry::StartupTraceMark("local_runtime_seed_check_begin");
         if (exeDir != packageDir && !IsLocalRuntimeSeedCurrent(packageDir, exeDir)) {
             AuthScreenRenderer prepRendererInstance;
             AuthScreenRenderer* prepRenderer = nullptr;
@@ -656,6 +657,7 @@ public:
         } else if (exeDir != packageDir) {
             WriteLog(L"LocalState runtime seed is current; skipping copy");
         }
+        telemetry::StartupTraceMark("local_runtime_seed_check_complete");
 
         EnsureProfilesInitialized(exeDir);
         const LaunchTarget launchTarget = ResolveProfileTarget(exeDir, GetProfileById(exeDir, GetActiveProfileId(exeDir)));
