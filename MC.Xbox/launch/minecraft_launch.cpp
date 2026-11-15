@@ -1347,7 +1347,6 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
     }
 
     WriteLogF(L"Invoking %s.main via embedded JVM", effectiveMainClass.c_str());
-    telemetry::StartupTraceMark("minecraft_main_invoke_begin");
     reportProgress(
         (TrFormat(L"Loading {0}", { loaderLabel })).c_str(),
         Tr(L"Mods and libraries are starting. The Mojang loading screen appears once graphics initialize."),
@@ -1418,8 +1417,9 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
         }
     });
 
+    telemetry::StartupTraceMark("minecraft_main_call_begin");
     env->CallStaticVoidMethod(mainClass, mainMethod, argv);
-    telemetry::StartupTraceMark("minecraft_main_invoke_return");
+    telemetry::StartupTraceMark("minecraft_main_call_return");
     javaMainRunning.store(false);
     if (javaMainWatchdog.joinable()) {
         javaMainWatchdog.join();
