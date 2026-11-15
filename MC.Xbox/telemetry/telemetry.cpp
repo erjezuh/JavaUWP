@@ -47,6 +47,11 @@ std::atomic<bool> g_suspendQueued{ false };
 std::atomic<bool> g_firstFrameSent{ false };
 std::atomic<int> g_phase{ kPhaseLauncher };
 std::atomic<unsigned long long> g_launchStartedAt{ 0 };
+std::mutex g_startupTraceMutex;
+std::wstring g_startupTracePath;
+LARGE_INTEGER g_startupTraceStartQpc = {};
+LARGE_INTEGER g_startupTraceQpcFrequency = {};
+
 
 const char* PhaseName() {
     switch (g_phase.load()) {
@@ -87,6 +92,46 @@ std::wstring TelemetryDir() {
     const std::wstring localDir = GetLocalStateDir();
     if (localDir.empty()) return std::wstring();
     return localDir + L"\\telemetry";
+}
+
+unsigned long long UnixMilliseconds() {
+    FILETIME ft = {};
+    GetSystemTimeAsFileTime(&ft);
+    ULARGE_INTEGER value = {};
+    value.LowPart = ft.dwLowDateTime;
+    value.HighPart = ft.dwHighDateTime;
+    constexpr unsigned long long kWindowsToUnixEpochMs = 11644473600000ull;
+    return (value.QuadPart / 10000ull) - kWindowsToUnixEpochMs;
+}
+
+void AppendStartupTraceLocked(const char* eventName) {
+    if (g_startupTracePath.empty() ||
+        g_startupTraceQpcFrequency.QuadPart <= 0 ||
+        g_startupTraceStartQpc.QuadPart <= 0) {
+        return;
+    }
+
+    LARGE_INTEGER now = {};
+    if (!QueryPerformanceCounter(&now)) return;
+
+    const LONGLONG elapsedTicks = now.QuadPart - g_startupTraceStartQpc.QuadPart;
+    const unsigned long long elapsedUs = elapsedTicks > 0
+        ? static_cast<unsigned long long>(
+            (static_cast<long double>(elapsedTicks) * 1000000.0L) /
+            static_cast<long double>(g_startupTraceQpcFrequency.QuadPart))
+        : 0ull;
+
+    const std::string line = std::string(eventName ? eventName : "unknown") + "," +
+        std::to_string(elapsedUs) + "," + std::to_string(UnixMilliseconds()) + "\r\n";
+
+    HANDLE file = CreateFileW(g_startupTracePath.c_str(), FILE_APPEND_DATA,
+        FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_ALWAYS,
+        FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) return;
+
+    DWORD written = 0;
+    WriteFile(file, line.data(), static_cast<DWORD>(line.size()), &written, nullptr);
+    CloseHandle(file);
 }
 
 void ClearCrashStreak() {
@@ -582,6 +627,50 @@ std::wstring ComputeModsetHash(const std::wstring& modsDir) {
     return a2w(crashfp::Sha256Hex16(joined).c_str());
 }
 
+void StartupTraceBegin() {
+    std::lock_guard<std::mutex> lock(g_startupTraceMutex);
+
+    const std::wstring dir = TelemetryDir();
+    if (dir.empty() || !EnsureDirectoryTree(dir)) {
+        g_startupTracePath.clear();
+        return;
+    }
+
+    const std::string id = NewGuidString();
+    if (id.empty()) {
+        g_startupTracePath.clear();
+        return;
+    }
+
+    g_startupTracePath = dir + L"\\startup_" + a2w(id.c_str()) + L".csv";
+    g_startupTraceStartQpc = {};
+    g_startupTraceQpcFrequency = {};
+    if (!QueryPerformanceFrequency(&g_startupTraceQpcFrequency) ||
+        !QueryPerformanceCounter(&g_startupTraceStartQpc)) {
+        g_startupTracePath.clear();
+        return;
+    }
+
+    HANDLE file = CreateFileW(g_startupTracePath.c_str(), GENERIC_WRITE,
+        FILE_SHARE_READ, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) {
+        g_startupTracePath.clear();
+        return;
+    }
+
+    static constexpr char kHeader[] = "event,elapsed_us,unix_ms\\r\\n";
+    DWORD written = 0;
+    WriteFile(file, kHeader, static_cast<DWORD>(sizeof(kHeader) - 1), &written, nullptr);
+    CloseHandle(file);
+
+    AppendStartupTraceLocked("run_embedded_minecraft_begin");
+}
+
+void StartupTraceMark(const char* eventName) {
+    std::lock_guard<std::mutex> lock(g_startupTraceMutex);
+    AppendStartupTraceLocked(eventName);
+}
+
 void BeginLaunch(const LaunchContext& context) {
     {
         std::lock_guard<std::mutex> lock(g_mutex);
@@ -598,6 +687,7 @@ void BeginLaunch(const LaunchContext& context) {
 }
 
 void EndLaunch() {
+    StartupTraceMark("launch_end");
     g_launchActive.store(false);
     g_launchStartedAt.store(0);
     g_phase.store(kPhaseLauncher);
@@ -610,10 +700,12 @@ void SendLaunch() {
 
 void SendFirstFrame() {
     if (g_firstFrameSent.exchange(true)) return;
+    StartupTraceMark("first_frame");
     SendAsync("first_frame", 0);
 }
 
 void SendPlayable() {
+    StartupTraceMark("playable_marker_detected");
     ClearCrashStreak();
     SendFirstFrame();
     g_phase.store(kPhaseIngame);
