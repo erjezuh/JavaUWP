@@ -132,14 +132,11 @@ void AppendStartupTraceLocked(const char* eventName) {
     const std::string line = std::string(eventName ? eventName : "unknown") + "," +
         std::to_string(elapsedUs) + "," + std::to_string(UnixMilliseconds()) + "\r\n";
 
-    HANDLE file = CreateFileW(g_startupTracePath.c_str(), FILE_APPEND_DATA,
-        FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_ALWAYS,
-        FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (file == INVALID_HANDLE_VALUE) return;
+    FILE* file = nullptr;
+    if (_wfopen_s(&file, g_startupTracePath.c_str(), L"ab") != 0 || !file) return;
 
-    DWORD written = 0;
-    WriteFile(file, line.data(), static_cast<DWORD>(line.size()), &written, nullptr);
-    CloseHandle(file);
+    fwrite(line.data(), 1, line.size(), file);
+    fclose(file);
 }
 
 void ClearCrashStreak() {
@@ -659,17 +656,15 @@ void StartupTraceBegin() {
         return;
     }
 
-    HANDLE file = CreateFileW(g_startupTracePath.c_str(), GENERIC_WRITE,
-        FILE_SHARE_READ, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (file == INVALID_HANDLE_VALUE) {
+    FILE* file = nullptr;
+    if (_wfopen_s(&file, g_startupTracePath.c_str(), L"wb") != 0 || !file) {
         g_startupTracePath.clear();
         return;
     }
 
     static constexpr char kHeader[] = "event,elapsed_us,unix_ms\r\n";
-    DWORD written = 0;
-    WriteFile(file, kHeader, static_cast<DWORD>(sizeof(kHeader) - 1), &written, nullptr);
-    CloseHandle(file);
+    fwrite(kHeader, 1, sizeof(kHeader) - 1, file);
+    fclose(file);
 
     AppendStartupTraceLocked("launch_requested");
 }
