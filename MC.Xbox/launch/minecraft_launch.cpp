@@ -832,8 +832,7 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
         return false;
     }
 
-    telemetry::StartupTraceBegin();
-    telemetry::StartupTraceMark("launch_guard_passed");
+    telemetry::StartupTraceMark("embedded_minecraft_prepare_begin");
 
     const LoaderId loaderId = ParseLoaderId(loader);
     std::wstring loaderLabel = L"Minecraft";
