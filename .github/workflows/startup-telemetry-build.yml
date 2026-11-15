@@ -72,21 +72,23 @@ jobs:
         shell: powershell
         run: .\\scripts\\setup.ps1 -MinecraftVersion 1.21.1 -FabricLoaderVersion 0.19.5
 
-      - name: Build APPX
+      - name: Build APPX (upgrade version)
         shell: powershell
-        run: .\\build.ps1 -SkipStopAppProcesses -McVersion 1.21.1 -ReleaseChannel nightly -AppxVersion 1.0.0.2
+        run: .\\build.ps1 -SkipStopAppProcesses -McVersion 1.21.1 -ReleaseChannel nightly -AppxVersion 1.0.32.0
 
       - name: Publish APPX as a direct GitHub Release asset
         uses: softprops/action-gh-release@v2
         with:
           tag_name: startup-telemetry-${{ github.run_id }}
-          name: BanditLauncher startup telemetry #${{ github.run_number }}
+          name: BanditLauncher startup telemetry 1.0.32.0 #${{ github.run_number }}
           body: |
-            Xbox APPX build from branch `feature/startup-telemetry`.
+            Xbox APPX build from branch feature/startup-telemetry.
+
+            Package version: 1.0.32.0 (upgrade over 1.0.31.0).
 
             Commit: ${{ github.sha }}
 
-            Download the `.appx` asset below directly. It is not wrapped in a GitHub Actions artifact ZIP.
+            Download the APPX asset below directly.
           files: output/*.appx
           fail_on_unmatched_files: true
           prerelease: true
