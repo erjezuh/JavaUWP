@@ -20,7 +20,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -72,14 +72,23 @@ jobs:
         shell: powershell
         run: .\\scripts\\setup.ps1 -MinecraftVersion 1.21.1 -FabricLoaderVersion 0.19.5
 
-      - name: Build APPX (validation only)
+      - name: Build APPX
         shell: powershell
         run: .\\build.ps1 -SkipStopAppProcesses -McVersion 1.21.1 -ReleaseChannel nightly -AppxVersion 1.0.0.2
 
-      - name: Upload compiled APPX
-        uses: actions/upload-artifact@v6
+      - name: Publish APPX as a direct GitHub Release asset
+        uses: softprops/action-gh-release@v2
         with:
-          name: BanditLauncher-startup-telemetry
-          path: output/*.appx
-          if-no-files-found: error
-          retention-days: 14
+          tag_name: startup-telemetry-${{ github.run_id }}
+          name: BanditLauncher startup telemetry #${{ github.run_number }}
+          body: |
+            Xbox APPX build from branch `feature/startup-telemetry`.
+
+            Commit: ${{ github.sha }}
+
+            Download the `.appx` asset below directly. It is not wrapped in a GitHub Actions artifact ZIP.
+          files: output/*.appx
+          fail_on_unmatched_files: true
+          prerelease: true
+          make_latest: false
+          generate_release_notes: false
