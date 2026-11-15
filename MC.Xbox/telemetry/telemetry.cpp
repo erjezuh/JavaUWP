@@ -663,7 +663,7 @@ void StartupTraceBegin() {
     WriteFile(file, kHeader, static_cast<DWORD>(sizeof(kHeader) - 1), &written, nullptr);
     CloseHandle(file);
 
-    AppendStartupTraceLocked("run_embedded_minecraft_begin");
+    AppendStartupTraceLocked("launch_requested");
 }
 
 void StartupTraceMark(const char* eventName) {
