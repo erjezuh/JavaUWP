@@ -564,6 +564,8 @@ public:
             const MainMenuAction menuAction = ShowMainMenu(g_authWindow.Get(), authConfig, exeDir);
             if (menuAction == MainMenuAction::Play) {
                 if (RemoteFileImportRunning()) continue;
+                telemetry::StartupTraceBegin();
+                telemetry::StartupTraceMark("play_menu_confirmed");
                 break;
             }
             if (menuAction == MainMenuAction::RepairDownloads) {
@@ -658,6 +660,7 @@ public:
         EnsureProfilesInitialized(exeDir);
         const LaunchTarget launchTarget = ResolveProfileTarget(exeDir, GetProfileById(exeDir, GetActiveProfileId(exeDir)));
         const MinecraftVersionInfo versionInfo = ResolveVersionInfo(packageDir, exeDir, launchTarget);
+        telemetry::StartupTraceMark("profile_and_version_resolved");
         WriteLogF(L"Launch target=%s manifest=%s assetIndex=%s launchVersion=%s mainClass=%s loaderJar=%s bundledMods=%s supported=%d",
             versionInfo.targetId.c_str(),
             versionInfo.manifestPath.empty() ? L"(none)" : versionInfo.manifestPath.c_str(),
@@ -686,6 +689,7 @@ public:
                 Tr(L"Validating Minecraft downloads"),
                 0.0f);
 
+            telemetry::StartupTraceMark("runtime_download_check_begin");
             int downloadAttempt = 0;
             bool downloadCancelled = false;
             std::wstring lastDownloadStatus, lastDownloadDetail;
@@ -705,6 +709,7 @@ public:
                         RenderPreparationProgress(downloadRenderer, downloadState, status, detail, progress);
                     },
                     downloadOptions)) {
+                    telemetry::StartupTraceMark("runtime_downloads_ready");
                     break;
                 }
 
@@ -820,6 +825,7 @@ public:
         preLaunchCtx.packagedLibrariesDir = packagedLibrariesDir;
         preLaunchCtx.versionInfo = versionInfo;
         LoaderBeforeLaunch(preLaunchCtx);
+        telemetry::StartupTraceMark("loader_before_launch_complete");
 
         const bool legacyOpenGlContext = CompareVersionNumbers(w2a(minecraftVersion), "1.17") < 0;
         SetEnvironmentVariableW(L"MC_LEGACY_OPENGL_CONTEXT", legacyOpenGlContext ? L"1" : L"0");
@@ -838,6 +844,7 @@ public:
             if (i > 0) cp += L";";
             cp += fwd(jars[i]);
         }
+        telemetry::StartupTraceMark("manifest_classpath_assembled");
         WriteLog(L"Launching embedded JVM");
         const std::vector<std::wstring> launchLogPaths = {
             g_logDir + L"\\mc_launch.log",
@@ -865,6 +872,7 @@ public:
             authConfigReady = ResolveLaunchAuthConfig(g_authWindow.Get(), authConfig);
             if (!authConfigReady) continue;
         }
+        telemetry::StartupTraceMark("embedded_launch_task_begin");
         g_minecraftRunning.store(true);
         const bool jvmSpentBeforeLaunch = EmbeddedJvmAlreadyUsed();
         const std::wstring effLaunchVersion = versionInfo.launchVersion.empty() ? a2w(kFabricLaunchVersion) : versionInfo.launchVersion;
@@ -906,6 +914,7 @@ public:
                     authConfig,
                     progress);
             });
+        telemetry::StartupTraceMark("embedded_launch_task_returned");
         if (!launched) {
             g_minecraftRunning.store(false);
             WriteLog(L"Embedded JVM launch failed");
