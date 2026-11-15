@@ -832,6 +832,9 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
         return false;
     }
 
+    telemetry::StartupTraceBegin();
+    telemetry::StartupTraceMark("launch_guard_passed");
+
     const LoaderId loaderId = ParseLoaderId(loader);
     std::wstring loaderLabel = L"Minecraft";
     if (loaderId == LoaderId::Fabric) {
@@ -931,6 +934,7 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
         WriteLogF(L"Removed %d blocked mod(s) from active profile before configuring launch", earlyBlockedRemoved);
     }
     ConfigureKnownModDefaults(gameDir, userModsDir, minecraftVersion, bundledModsDir);
+    telemetry::StartupTraceMark("game_directories_mods_and_defaults_ready");
     if (SetCurrentDirectoryW(gameDir.c_str())) {
         WriteLogF(L"Process current directory set to gameDir: %s", gameDir.c_str());
     } else {
@@ -992,7 +996,9 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
 
     std::wstring effectiveClassPath = classPath;
     LoaderJvmSetupResult loaderSetup;
+    telemetry::StartupTraceMark("classpath_prepare_begin");
     LoaderAdjustClasspath(loaderCtx, effectiveClassPath, loaderSetup);
+    telemetry::StartupTraceMark("classpath_prepare_complete");
     effectiveClassPath = loaderSetup.effectiveClassPath;
     const bool neoForgeStartedWithGameClassPath = loaderSetup.neoForgeStartedWithGameClassPath;
 
@@ -1234,6 +1240,7 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
         fprintf(af, "%s\n", launchdiag::DiagnosticMinecraftAppArg(appArgs, i).c_str());
     }
     fclose(af);
+    telemetry::StartupTraceMark("jvm_options_and_app_args_ready");
     WriteLog(L"Embedded JVM options written");
     reportProgress(
         Tr(L"Starting Java runtime"),
@@ -1241,9 +1248,12 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
         0.24f);
 
     HMODULE jvmModule = nullptr;
+    telemetry::StartupTraceMark("jvm_preload_begin");
     if (!PreloadJvm(exeDir, jreDir, packagedJreRelativeDir, nativesDir, &jvmModule)) {
+        telemetry::StartupTraceMark("jvm_preload_failed");
         return false;
     }
+    telemetry::StartupTraceMark("jvm_preload_complete");
 
     auto createJavaVm = reinterpret_cast<JNI_CreateJavaVM_t>(GetProcAddress(jvmModule, "JNI_CreateJavaVM"));
     if (!createJavaVm) {
@@ -1265,7 +1275,9 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
 
     JavaVM* vm = nullptr;
     JNIEnv* env = nullptr;
+    telemetry::StartupTraceMark("jni_create_begin");
     const jint createResult = createJavaVm(&vm, reinterpret_cast<void**>(&env), &vmArgs);
+    telemetry::StartupTraceMark("jni_create_complete");
     WriteLogF(L"JNI_CreateJavaVM => %d", createResult);
     if (createResult != JNI_OK || !vm || !env) {
         return false;
@@ -1284,10 +1296,13 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
         Tr(L"Java is online. Preparing loader startup next."),
         0.38f);
 
+    telemetry::StartupTraceMark("loader_artifacts_prepare_begin");
     if (!LoaderPrepareArtifactsAfterJvm(env, loaderCtx, effectiveClassPath, neoForgeStartedWithGameClassPath)) {
+        telemetry::StartupTraceMark("loader_artifacts_prepare_failed");
         DestroyEmbeddedJvm(vm, env);
         return false;
     }
+    telemetry::StartupTraceMark("loader_artifacts_prepare_complete");
     reportProgress(
         (TrFormat(L"Loading {0}", { loaderLabel })).c_str(),
         Tr(L"Loader artifacts are ready. Minecraft main is starting next."),
@@ -1332,6 +1347,7 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
     }
 
     WriteLogF(L"Invoking %s.main via embedded JVM", effectiveMainClass.c_str());
+    telemetry::StartupTraceMark("minecraft_main_invoke_begin");
     reportProgress(
         (TrFormat(L"Loading {0}", { loaderLabel })).c_str(),
         Tr(L"Mods and libraries are starting. The Mojang loading screen appears once graphics initialize."),
@@ -1403,6 +1419,7 @@ bool RunEmbeddedMinecraft(const std::wstring& exeDir,
     });
 
     env->CallStaticVoidMethod(mainClass, mainMethod, argv);
+    telemetry::StartupTraceMark("minecraft_main_invoke_return");
     javaMainRunning.store(false);
     if (javaMainWatchdog.joinable()) {
         javaMainWatchdog.join();
