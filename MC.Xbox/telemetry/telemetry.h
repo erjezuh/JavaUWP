@@ -60,6 +60,9 @@ std::wstring EndpointUrl();
 std::wstring LauncherBuild();
 std::wstring ComputeModsetHash(const std::wstring& modsDir);
 
+void StartupTraceBegin();
+void StartupTraceMark(const char* eventName);
+
 void BeginLaunch(const LaunchContext& context);
 void EndLaunch();
 
