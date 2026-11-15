@@ -46,9 +46,6 @@ try {
             Require-Entry "runtime\libraries\net\fabricmc\fabric-loader\$($target.loaderVersion)\fabric-loader-$($target.loaderVersion).jar"
             Require-Entry "runtime\version-mods\$id\banditvault-xbox-compat-1.0.0.jar"
         }
-        if ($target.controllerProvider -ne 'none') {
-            Require-Entry "runtime\version-mods\$id\banditvault-$($target.controllerProvider)-controller-1.0.0.jar"
-        }
         $runtimeDir = switch ($target.javaRuntime) { 'java17' { 'jre17' } 'java21' { 'jre21' } 'legacy' { 'jre8' } default { 'jre' } }
         Require-Entry "$runtimeDir\bin\server\jvm.dll"
         $suffix = switch ($runtimeDir) { 'jre17' { '-17' } 'jre21' { '-21' } 'jre8' { '-8' } default { '' } }
