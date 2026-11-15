@@ -658,7 +658,7 @@ void StartupTraceBegin() {
         return;
     }
 
-    static constexpr char kHeader[] = "event,elapsed_us,unix_ms\\r\\n";
+    static constexpr char kHeader[] = "event,elapsed_us,unix_ms\r\n";
     DWORD written = 0;
     WriteFile(file, kHeader, static_cast<DWORD>(sizeof(kHeader) - 1), &written, nullptr);
     CloseHandle(file);
