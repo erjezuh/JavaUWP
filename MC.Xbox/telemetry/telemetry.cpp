@@ -684,6 +684,7 @@ void BeginLaunch(const LaunchContext& context) {
     g_firstFrameSent.store(false);
     g_phase.store(kPhaseJvmInit);
     g_launchActive.store(true);
+    StartupTraceMark("launch_session_started");
 }
 
 void EndLaunch() {
@@ -694,6 +695,7 @@ void EndLaunch() {
 }
 
 void SendLaunch() {
+    StartupTraceMark("launch_beacon_requested");
     g_phase.store(kPhaseModLoad);
     SendAsync("launch", 0);
 }
